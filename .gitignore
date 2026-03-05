@@ -1,3 +1,7 @@
+target/
+node_modules/
+dist/
 .claude-octopus/
 .claude/
 .DS_Store
+*.db

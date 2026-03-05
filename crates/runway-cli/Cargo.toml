@@ -1,0 +1,14 @@
+[package]
+name = "runway-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "runway"
+path = "src/main.rs"
+
+[dependencies]
+runway-core = { path = "../runway-core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }

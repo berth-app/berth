@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package runway;
+
+// Agent service — communication between Runway app and remote agents.
+// Phase 1: defined but not implemented (direct runway-core calls for local execution).
+// Phase 3: agent runs this as a gRPC server.
+
+service AgentService {
+  // Execute a project on the agent
+  rpc Execute(ExecuteRequest) returns (stream ExecuteResponse);
+
+  // Get agent and project status
+  rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Stream logs from a running project
+  rpc StreamLogs(LogStreamRequest) returns (stream LogStreamResponse);
+
+  // Stop a running project
+  rpc Stop(StopRequest) returns (StopResponse);
+
+  // Health check
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ExecuteRequest {
+  string project_id = 1;
+  string runtime = 2;
+  string entrypoint = 3;
+  bytes code = 4; // For paste-and-deploy: inline code
+  string working_dir = 5;
+}
+
+message ExecuteResponse {
+  string stream = 1; // "stdout" or "stderr"
+  string text = 2;
+  string timestamp = 3;
+}
+
+message StatusRequest {
+  string project_id = 1; // Empty = agent-level status
+}
+
+message StatusResponse {
+  string agent_id = 1;
+  string status = 2; // "idle", "running", "error"
+  double cpu_usage = 3;
+  uint64 memory_bytes = 4;
+  repeated ProjectStatus projects = 5;
+}
+
+message ProjectStatus {
+  string project_id = 1;
+  string status = 2;
+  int32 pid = 3;
+  string started_at = 4;
+}
+
+message LogStreamRequest {
+  string project_id = 1;
+  bool follow = 2;
+  int32 tail_lines = 3; // 0 = all
+}
+
+message LogStreamResponse {
+  string stream = 1;
+  string text = 2;
+  string timestamp = 3;
+}
+
+message StopRequest {
+  string project_id = 1;
+}
+
+message StopResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string agent_version = 1;
+  string status = 2;
+  uint64 uptime_seconds = 3;
+}
