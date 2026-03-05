@@ -1,0 +1,75 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0004-4000-8000-000000000001"
+  title: "Freemium Model with Zero Infrastructure Cost"
+  domain: "business"
+  intent: "Define a pricing model that enables rapid user acquisition while maintaining high margins through a zero-infrastructure-cost architecture"
+  related_decisions:
+    - id: "b1c2d3e4-0003-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "Product positioning determines target personas and value tiers"
+
+context:
+  constraints:
+    - description: "Bootstrapped — cannot subsidize free users with VC money"
+      source: "budget"
+      negotiable: false
+    - description: "Must compete with free/open-source tools (Rundeck OSS, Ansible)"
+      source: "competitive"
+      negotiable: false
+    - description: "Developers are price-sensitive and expect generous free tiers"
+      source: "market"
+      negotiable: false
+  objectives:
+    - description: "5,000 free users in Year 1"
+      priority: "must_have"
+      measurable: true
+    - description: "Path to $100K ARR within 2 years"
+      priority: "should_have"
+      measurable: true
+    - description: "Zero marginal cost per free user"
+      priority: "must_have"
+      measurable: true
+  environment:
+    organizational: "Solo founder, bootstrapped"
+    temporal: "Comparable pricing: PagerDuty Process Automation $125/user/mo (enterprise). Tower $69/yr (indie). ngrok freemium + pay-as-you-go."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 75
+  phase_notes: "Pricing model designed but not validated with real users. Confidence will increase after beta feedback."
+
+reasoning:
+  patterns_applied:
+    - comparative
+    - cost_benefit
+  notes: "Modeled after ngrok's architecture: lightweight agent on user's infra, you provide the control plane. Key insight: never host user workloads = near-zero marginal cost = sustainable freemium."
+
+synthesis:
+  decision: "Three-tier freemium model with zero infrastructure cost. Free (local execution, 3 projects, 1 agent), Pro $12/month (unlimited projects, 10 agents, cloud deploy), Team $25/user/month (unlimited agents, RBAC, shared runbooks)."
+  rationale: "The zero-infra model (code runs on user's Mac/VPS/AWS, never on our servers) makes freemium sustainable without VC funding. Natural conversion trigger: local execution is free, remote deployment requires Pro. Price undercuts PagerDuty by 10x while providing the 'premium indie tool' signal at $12/mo (similar to Tower, Dash, Bear). Revenue projections: Year 1 $72K, Year 2 $420K, Year 3 $1.5M."
+  follow_ups:
+    - action: "Validate pricing with beta users (willingness to pay survey)"
+      owner: "founder"
+    - action: "Implement license key or subscription system before Phase 4 launch"
+      owner: "founder"
+  alternatives:
+    - decision: "One-time purchase ($49-99)"
+      rationale_against: "No recurring revenue. Cannot fund ongoing development. Developer tools need continuous updates."
+      conditions_for_reconsideration: "If subscription fatigue becomes a major barrier to adoption during beta."
+    - decision: "Pure open-source with paid support/enterprise"
+      rationale_against: "Solo founder cannot provide enterprise support. Open-source commoditizes the product before it has a moat."
+      conditions_for_reconsideration: "If a large company forks Runway and out-markets it, open-source may be the defensive play."
+
+meta:
+  created_at: "2026-03-05T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "market_research"
+  tags:
+    - "business"
+    - "pricing"
+    - "freemium"

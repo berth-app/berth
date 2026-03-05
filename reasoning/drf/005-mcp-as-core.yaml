@@ -1,0 +1,96 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0005-4000-8000-000000000001"
+  title: "MCP Server as Core Feature, Not Add-On"
+  domain: "architecture"
+  intent: "Ensure that AI coding agents (Claude Code, Codex, etc.) can programmatically deploy, monitor, and manage code through Runway with the same capabilities as the GUI"
+  related_decisions:
+    - id: "b1c2d3e4-0001-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "Tauri's Rust backend enables embedding MCP server natively"
+    - id: "b1c2d3e4-0003-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "AI-code deployment positioning requires AI-controllable product"
+
+context:
+  constraints:
+    - description: "MCP is the standard protocol for AI tool integration (adopted by Claude Code, Cursor, etc.)"
+      source: "technical"
+      negotiable: false
+    - description: "CLI must mirror every MCP tool — human and AI parity"
+      source: "design_philosophy"
+      negotiable: false
+    - description: "Must ship in Phase 2 (Month 3), before remote agents"
+      source: "roadmap"
+      negotiable: true
+  objectives:
+    - description: "Claude Code can deploy a script to any configured target via MCP end-to-end"
+      priority: "must_have"
+      measurable: true
+    - description: "MCP server exposes all 12 core tools (list, deploy, stop, restart, logs, etc.)"
+      priority: "must_have"
+      measurable: true
+    - description: "Zero-config integration via .mcp.json"
+      priority: "must_have"
+      measurable: true
+    - description: "Differentiate from every competitor — none offer MCP-based deployment control"
+      priority: "must_have"
+      measurable: false
+  environment:
+    technical: "MCP protocol uses JSON-RPC over stdio (primary) or HTTP. Claude Code supports MCP natively via .mcp.json config. Tauri's Rust backend can embed both transports using tokio."
+    organizational: "Solo founder. MCP is the strongest differentiator — must be prioritized over polish features."
+    temporal: "March 2026. MCP adoption accelerating. GitHub Agent HQ just launched. Being the first deployment tool with MCP integration creates a first-mover advantage."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 90
+  phase_notes: "This was a unanimous decision. The entire product thesis depends on AI agents being able to control Runway."
+
+reasoning:
+  patterns_applied:
+    - deliberative
+    - risk_based
+  notes: "The MCP server is not a nice-to-have. It is the product's moat. No deployment tool today offers MCP integration. Claude Code users who discover they can deploy via their AI agent will never go back to manual deployment."
+
+interventions:
+  - id: "int-mcp-001"
+    type: "insight"
+    content: "Clayton Christensen (business panel): 'Make the agent protocol the moat, not the UI. If someone builds a browser extension that does Paste & Deploy, your macOS moat evaporates.'"
+    source: "Business panel analysis"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Elevated MCP from Phase 3 to Phase 2 in roadmap. Protocol = moat."
+
+assumptions:
+  - description: "MCP will remain the dominant AI tool integration protocol through 2027"
+    validated: false
+    confidence: 70
+    source: "MCP adopted by Claude Code, Cursor, and growing ecosystem. Anthropic-backed standard."
+  - description: "Implementing MCP server in Rust is a manageable effort (1-2 weeks for core tools)"
+    validated: false
+    confidence: 75
+    source: "MCP is thin JSON-RPC protocol with small surface area: ~12 methods"
+
+synthesis:
+  decision: "The MCP server is a core feature that ships in Phase 2 (Month 3) alongside the CLI. It exposes 12 tools via stdio and HTTP transports, implemented in Rust using axum and tokio::io. The GUI, CLI, and MCP server all share the same runway-core engine — no feature disparity between human and AI interfaces."
+  rationale: "MCP integration is the product's strongest differentiator. No deployment tool today offers it. Shipping it early (Phase 2) ensures: (1) AI agents can control Runway before competitors notice, (2) the protocol becomes the moat per Christensen's advice, (3) dogfooding with Claude Code validates the deployment workflow end-to-end."
+  follow_ups:
+    - action: "Define protobuf and MCP tool schemas in runway-core"
+      owner: "founder"
+    - action: "Create .mcp.json template for Claude Code integration"
+      owner: "founder"
+    - action: "Write integration test: Claude Code deploys a Python script via MCP"
+      owner: "founder"
+
+meta:
+  created_at: "2026-03-05T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "strategic_analysis"
+  tags:
+    - "mcp"
+    - "architecture"
+    - "ai"
+    - "moat"

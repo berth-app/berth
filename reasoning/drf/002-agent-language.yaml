@@ -1,0 +1,88 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0002-4000-8000-000000000001"
+  title: "Use Rust for Agent (Shared Codebase with App Backend)"
+  domain: "architecture"
+  intent: "Select the agent language that minimizes maintenance burden for a solo founder while maximizing code sharing with the app backend"
+  related_decisions:
+    - id: "b1c2d3e4-0001-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "Tauri framework selection means app backend is already Rust"
+
+context:
+  constraints:
+    - description: "Solo founder cannot maintain two backend languages"
+      source: "technical"
+      negotiable: false
+    - description: "Agent must compile to a single static binary with no runtime dependencies"
+      source: "technical"
+      negotiable: false
+    - description: "Agent must run on Linux (x86_64, arm64) and macOS (arm64)"
+      source: "technical"
+      negotiable: false
+    - description: "Agent must communicate via gRPC with mTLS"
+      source: "technical"
+      negotiable: false
+  objectives:
+    - description: "Share gRPC service definitions and models between app and agent"
+      priority: "must_have"
+      measurable: true
+    - description: "Agent binary under 15MB"
+      priority: "should_have"
+      measurable: true
+    - description: "Agent idle memory under 20MB"
+      priority: "should_have"
+      measurable: true
+
+cognitive_state:
+  phase: "decision"
+  confidence: 90
+  phase_notes: "Once Tauri (Rust backend) was chosen, Rust for the agent became the obvious choice. Go was the original plan but maintaining Go + Rust is unnecessary overhead for a solo founder."
+
+reasoning:
+  patterns_applied:
+    - deliberative
+    - cost_benefit
+  notes: "The framework decision (DRF-001) made this decision almost automatic. With Rust already chosen for the app backend, using Rust for the agent enables a shared crate (runway-core) for protobuf definitions, gRPC service implementations, runtime detection, and project models."
+
+assumptions:
+  - description: "Rust cross-compilation to Linux targets is straightforward with cross or cargo-zigbuild"
+    validated: true
+    confidence: 85
+    source: "Rust cross-compilation ecosystem is mature as of 2026"
+  - description: "A single Rust binary can serve as both local agent and remote agent"
+    validated: false
+    confidence: 80
+    source: "Architectural assumption — same binary, different config flags"
+
+unresolved_tensions:
+  - description: "Go would produce a slightly smaller binary and has faster compilation times"
+    impact: "low"
+    mitigation: "Rust binary size manageable with strip + LTO. Compilation time offset by shared crate reducing total code."
+    accepted_by: "founder"
+
+synthesis:
+  decision: "Build the Runway agent in Rust, sharing a core crate (runway-core) with the Tauri app backend"
+  rationale: "With the app backend already in Rust (DRF-001), using Rust for the agent eliminates a second language from the project. The shared runway-core crate means protobuf definitions, gRPC services, runtime detection, and project models are written once. For a solo founder, one language across the entire backend surface dramatically reduces cognitive load and maintenance."
+  follow_ups:
+    - action: "Define runway-core crate with shared types and gRPC service definitions"
+      owner: "founder"
+    - action: "Set up cross-compilation CI for Linux x86_64 and arm64"
+      owner: "founder"
+  alternatives:
+    - decision: "Use Go for the agent (original plan)"
+      rationale_against: "Would require maintaining two backend languages (Rust for app, Go for agent). No shared code for protobuf definitions or business logic. Adds cognitive overhead for a solo founder."
+      conditions_for_reconsideration: "If the Rust agent proves too complex to cross-compile, or if a Go-specific library is needed that has no Rust equivalent."
+
+meta:
+  created_at: "2026-03-05T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "framework_decision_consequence"
+  tags:
+    - "agent"
+    - "rust"
+    - "architecture"

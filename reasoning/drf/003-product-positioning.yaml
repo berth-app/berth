@@ -1,0 +1,90 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0003-4000-8000-000000000001"
+  title: "Position as Deployment Control Plane for AI-Generated Code"
+  domain: "product"
+  intent: "Define the product positioning that captures the largest addressable market while maintaining a focused MVP"
+  related_decisions:
+    - id: "b1c2d3e4-0004-4000-8000-000000000001"
+      relationship: "informs"
+      description: "Positioning drives the business model and pricing"
+
+context:
+  constraints:
+    - description: "Must differentiate from existing deployment platforms (Vercel, Railway, Render)"
+      source: "competitive"
+      negotiable: false
+    - description: "Must be broader than 'Rundeck for Mac' to capture AI-era developers"
+      source: "market"
+      negotiable: false
+  objectives:
+    - description: "Capture developers who generate code with AI tools and need to deploy it"
+      priority: "must_have"
+      measurable: false
+    - description: "Natural viral moment in a 30-second demo video"
+      priority: "must_have"
+      measurable: false
+    - description: "5,000 free users in Year 1"
+      priority: "should_have"
+      measurable: true
+  environment:
+    technical: "GitHub Agent HQ launched Feb 2026 with Claude + Codex. Railway: 2M developers, 10M deployments/month. Agentic traffic up 6,900% YoY."
+    organizational: "Solo founder, bootstrapped"
+    temporal: "AI code generation is exploding in early 2026. 12-18 month window to establish category."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 85
+  phase_notes: "Evolution from initial 'Rundeck for Mac' concept through two research iterations. Business panel scored 7.2/10."
+
+reasoning:
+  patterns_applied:
+    - deliberative
+    - risk_based
+  notes: "The positioning evolved through three stages: (1) Rundeck alternative for Mac, (2) Mac-native operations tool with remote agents, (3) Deployment control plane for AI-generated code. Each iteration broadened the TAM while keeping the core Mac-native value."
+
+interventions:
+  - id: "int-pos-001"
+    type: "insight"
+    content: "The gap is not 'Rundeck on Mac' — it's 'I just generated code with AI, where do I run it?' Vercel is for websites. Railway is containers. Nobody does 'paste code, pick target, it's running.'"
+    source: "Market research"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Shifted positioning from DevOps tool to AI-era deployment tool"
+  - id: "int-pos-002"
+    type: "insight"
+    content: "Bots/crawlers/agents are not websites. They're long-running, compute-heavy, always-on. Free tiers can't handle them. Users need to deploy to their OWN infrastructure."
+    source: "Market research"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Established the 'zero-infra' model — deploy to user's compute, not ours"
+  - id: "int-pos-003"
+    type: "insight"
+    content: "Seth Godin (business panel): 'The vibe coders are already a tribe. Name them. The 30-second Paste & Deploy demo will go viral.'"
+    source: "Business panel analysis"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Confirmed 'vibe coders' as primary persona and Paste & Deploy as the killer feature"
+
+synthesis:
+  decision: "Position Runway as 'the Mac-native control plane for deploying and managing code that AI wrote for you' — targeting developers who generate code with Claude Code, Codex, Cursor and need to run it somewhere"
+  rationale: "This positioning captures a massive and growing audience (every developer using AI code generation), differentiates from website-focused platforms (Vercel/Netlify) and container-focused platforms (Railway), and creates a natural viral moment (the Paste & Deploy flow). The 'zero-infra' model where code runs on user's own compute is the key business insight."
+  alternatives:
+    - decision: "Position as 'Rundeck for Mac' (narrow DevOps tool)"
+      rationale_against: "Too small a market. DevOps engineers who want a Mac-native Rundeck is a niche within a niche. Business panel scored this as 'cautious go' only."
+      conditions_for_reconsideration: "If the broader positioning fails to find product-market fit, could narrow to DevOps-specific use case."
+    - decision: "Position as a general-purpose deployment platform (compete with Railway/Render)"
+      rationale_against: "Cannot compete with well-funded platforms on features. The Mac-native + AI-code-import angle is the differentiator."
+      conditions_for_reconsideration: "If Runway raises funding and can expand engineering team."
+
+meta:
+  created_at: "2026-03-05T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+    - name: "Business panel (Christensen, Porter, Kim/Mauborgne, Taleb, Godin, Drucker)"
+      role: "reviewer"
+  source: "market_research_and_business_panel"
+  tags:
+    - "product"
+    - "positioning"
+    - "strategy"

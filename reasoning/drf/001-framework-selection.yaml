@@ -1,0 +1,173 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0001-4000-8000-000000000001"
+  title: "Adopt Tauri 2.0 with React + Rust for Desktop App"
+  domain: "architecture"
+  intent: "Select a desktop framework that delivers a native-feeling macOS experience while preserving cross-platform expansion path and maximizing solo founder velocity"
+  related_decisions:
+    - id: "b1c2d3e4-0002-4000-8000-000000000001"
+      relationship: "enables"
+      description: "Tauri's Rust backend enables shared code with agent (DRF-002)"
+    - id: "b1c2d3e4-0005-4000-8000-000000000001"
+      relationship: "enables"
+      description: "Rust backend naturally embeds MCP server (DRF-005)"
+
+context:
+  constraints:
+    - description: "Solo founder — must maximize development velocity with one person"
+      source: "technical"
+      negotiable: false
+    - description: "6-month timeline to public MVP"
+      source: "business"
+      negotiable: true
+    - description: "Must feel native on macOS — aesthetic is the product's identity"
+      source: "design_philosophy"
+      negotiable: false
+    - description: "Must communicate with agent via gRPC streaming"
+      source: "technical"
+      negotiable: false
+    - description: "Must embed MCP server (stdio + HTTP) for AI agent control"
+      source: "technical"
+      negotiable: false
+    - description: "Cross-platform (Windows/Linux) needed by Phase 5 (Month 7+)"
+      source: "business"
+      negotiable: true
+  objectives:
+    - description: "Binary size under 20MB"
+      priority: "should_have"
+      measurable: true
+    - description: "Idle memory under 100MB"
+      priority: "should_have"
+      measurable: true
+    - description: "Hot reload for UI development"
+      priority: "must_have"
+      measurable: true
+    - description: "Native menu bar, notifications, Keychain integration"
+      priority: "must_have"
+      measurable: true
+    - description: "Cross-platform expansion without full rewrite"
+      priority: "must_have"
+      measurable: true
+  environment:
+    technical: "macOS-first desktop app. Needs gRPC client (tonic), HTTP server (axum for MCP), terminal emulator (xterm.js), and system integrations (Keychain, tray, notifications)."
+    organizational: "Solo founder, bootstrapped. Web frontend experience (React/TypeScript). Learning Rust."
+    temporal: "March 2026. Tauri 2.0 stable. AI code generation tools (Claude Code, Codex, Cursor) exploding. 12-18 month window to establish category."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 80
+  phase_notes: "Decided via structured 3-round AI debate with three perspectives (technical, market, UX). Tauri won 2-1 over SwiftUI."
+
+reasoning:
+  patterns_applied:
+    - comparative
+    - risk_based
+    - deliberative
+  notes: "Three-way comparison: Tauri vs SwiftUI vs Electron. Evaluated across 8 dimensions: native feel, solo dev velocity, gRPC integration, cross-platform path, memory footprint, binary size, market narrative, and viral demo potential. Structured as AI debate with three distinct expert perspectives."
+
+interventions:
+  - id: "int-fw-001"
+    type: "insight"
+    content: "Codex (technical): Rust's tonic is gold-standard gRPC. Swift's grpc-swift is less mature. Tauri's Rust backend handles gRPC, MCP, and credentials with correctness guarantees."
+    source: "AI debate — Codex perspective"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Strongest technical argument for Tauri over SwiftUI"
+  - id: "int-fw-002"
+    type: "insight"
+    content: "Gemini (market): Every comparable company (ngrok, Railway, Tailscale) is cross-platform. SwiftUI is a dead end at Phase 5. Tauri + Rust narrative performs well on Hacker News."
+    source: "AI debate — Gemini perspective"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "SwiftUI's cross-platform dead end is a structural business risk"
+  - id: "int-fw-003"
+    type: "challenge"
+    content: "Claude (UX): Native scroll physics, SF Pro rendering, frosted glass materials — developers detect the difference in 2 seconds. The screenshot test: SwiftUI reads as 'premium Mac software', Tauri reads as 'well-designed web app in a window'."
+    source: "AI debate — Claude perspective"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Valid concern. Mitigation: invest heavily in CSS polish, system fonts, vibrancy effects. Accept 85% of native quality."
+  - id: "int-fw-004"
+    type: "insight"
+    content: "Electron eliminated: adds 200MB+ binary, 200MB+ RAM idle. Target users already run Cursor + VS Code + Docker (all Chromium). Another Electron app = RAM complaints Day 1."
+    source: "AI debate — all perspectives"
+    timestamp: "2026-03-05T00:00:00Z"
+    impact: "Electron ruled out unanimously"
+
+assumptions:
+  - description: "Tauri 2.0 ecosystem is mature enough for production desktop apps"
+    validated: false
+    confidence: 75
+    source: "Tauri 2.0 stable release, growing adoption in 2025-2026"
+  - description: "Web frontend (React) can achieve 85%+ of native macOS aesthetic quality"
+    validated: false
+    confidence: 65
+    source: "Linear (Electron) demonstrates near-native feel is achievable with investment"
+  - description: "Rust learning curve is manageable for a solo dev within Month 1"
+    validated: false
+    confidence: 60
+    source: "Codex debate argument — 'Rust tax in Month 1 pays dividends for remaining 5 months'"
+  - description: "Solo founder has stronger web frontend skills than SwiftUI skills"
+    validated: true
+    confidence: 90
+    source: "Founder assessment"
+
+unresolved_tensions:
+  - description: "Tauri's WKWebView scroll physics don't perfectly match native macOS momentum scrolling"
+    impact: "medium"
+    mitigation: "Use CSS scroll-behavior tuning, test extensively on log viewer. Accept imperfection."
+    accepted_by: "founder"
+  - description: "Rust learning curve may slow Month 1-2 development"
+    impact: "medium"
+    mitigation: "Focus Month 1 on React frontend (familiar). Introduce Rust backend incrementally. Prototype in simpler form first."
+    accepted_by: "founder"
+  - description: "Tauri plugin ecosystem is younger than Electron's"
+    impact: "low"
+    mitigation: "Core needs (tray, notifications, updater) have stable Tauri plugins. Custom integrations via Rust are straightforward."
+    accepted_by: "founder"
+
+synthesis:
+  decision: "Build Runway with Tauri 2.0, using React 19 + TypeScript + shadcn/ui for the frontend and Rust (tokio + tonic + axum) for the backend"
+  rationale: "Tauri provides the best balance of native macOS feel (~85% of SwiftUI quality), solo dev velocity (web frontend skills transfer), backend correctness (Rust for gRPC/MCP/credentials), resource efficiency (~8MB binary, ~40MB RAM), and cross-platform path (same codebase for Phase 5). The market narrative ('Rust-powered deployment control plane') is strongest for developer tooling in 2026."
+  follow_ups:
+    - action: "Set up Tauri 2.0 project scaffold with React + TypeScript"
+      owner: "founder"
+    - action: "Create CSS design tokens matching macOS system colors and materials"
+      owner: "founder"
+    - action: "Implement basic Rust backend with tonic gRPC client stub"
+      owner: "founder"
+    - action: "Validate xterm.js integration in Tauri WebView for log viewer"
+      owner: "founder"
+  alternatives:
+    - decision: "Build with SwiftUI (native macOS)"
+      rationale_against: "SwiftUI produces the best native feel but is a cross-platform dead end. All UI code is throwaway at Phase 5. grpc-swift is less mature than tonic. Server-side Swift (NIO) is awkward in desktop context for MCP server. Limits addressable market to macOS."
+      conditions_for_reconsideration: "If cross-platform is abandoned entirely and Runway commits to Mac-only permanently. Or if Runway reaches sufficient scale (Year 2+) to justify a separate native SwiftUI Mac app alongside Tauri for other platforms."
+    - decision: "Build with Electron (Chromium-based)"
+      rationale_against: "200MB+ binary, 200MB+ RAM idle. Target users already run multiple Chromium apps. Poor market narrative for developer tools in 2026. No technical advantage over Tauri for this use case."
+      conditions_for_reconsideration: "Not recommended under any foreseeable conditions."
+
+context_validation:
+  context_refs:
+    - context_id: "a1b2c3d4-0002-4000-8000-000000000001"
+      context_name: "Solo Founder Constraints"
+      validation_status: aligned
+      advisory_notes: "Tauri's web frontend leverages existing skills. Rust backend has learning curve but correctness payoff."
+    - context_id: "a1b2c3d4-0004-4000-8000-000000000001"
+      context_name: "Design Philosophy"
+      validation_status: acknowledged
+      advisory_notes: "Tauri achieves ~85% of native aesthetic. Requires deliberate CSS investment to close gap. Philosophy says 'aesthetic IS the product' — tension acknowledged."
+
+meta:
+  created_at: "2026-03-05T00:00:00Z"
+  updated_at: "2026-03-05T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+    - name: "AI debate panel (Codex, Gemini, Claude)"
+      role: "reviewer"
+  source: "structured_ai_debate"
+  tags:
+    - "framework"
+    - "architecture"
+    - "tauri"
+    - "react"
+    - "rust"

@@ -1,0 +1,230 @@
+crf_version: "0.1.0"
+
+entity:
+  id: "a1b2c3d4-0001-4000-8000-000000000001"
+  type: organization
+  name: "Runway"
+  description: "Mac-native deployment control plane for AI-generated code. Solo founder project targeting developers who generate code with Claude Code, Codex, Cursor and need somewhere to run it."
+
+  attributes:
+    org_type: startup
+    size: solo
+    headcount: 1
+    stage: pre-product
+    industry: "Developer Tools / DevOps"
+    target_launch: "2026-09"
+
+  relationships:
+    - target_id: "a1b2c3d4-0002-4000-8000-000000000001"
+      type: constrained_by
+      description: "Solo founder resource constraints"
+    - target_id: "a1b2c3d4-0003-4000-8000-000000000001"
+      type: owns
+      description: "Technical architecture"
+    - target_id: "a1b2c3d4-0004-4000-8000-000000000001"
+      type: constrained_by
+      description: "Design philosophy constraints"
+
+  provenance:
+    source: "manual"
+    created_at: "2026-03-05T00:00:00Z"
+    created_by: "founder"
+
+  tags:
+    - "project"
+    - "root"
+
+---
+crf_version: "0.1.0"
+
+entity:
+  id: "a1b2c3d4-0002-4000-8000-000000000001"
+  type: fact
+  name: "Solo Founder Constraints"
+  description: "Single developer building the entire product. All technical and business decisions must account for limited bandwidth."
+
+  attributes:
+    fact_type: constraint
+    value:
+      team_size: 1
+      timeline_months: 6
+      budget: "bootstrapped"
+      available_hours_per_week: 40
+    confidence: 100
+    verified: true
+
+  relationships:
+    - target_id: "a1b2c3d4-0001-4000-8000-000000000001"
+      type: constrains
+      description: "Limits scope, tech choices, and parallelism"
+
+  provenance:
+    source: "manual"
+    created_at: "2026-03-05T00:00:00Z"
+    created_by: "founder"
+
+  tags:
+    - "constraint"
+    - "team"
+
+---
+crf_version: "0.1.0"
+
+entity:
+  id: "a1b2c3d4-0003-4000-8000-000000000001"
+  type: system
+  name: "Runway Technical Architecture"
+  description: "Tauri 2.0 desktop app with Rust backend, React frontend, Rust agent, and MCP server"
+
+  attributes:
+    system_type: product
+    status: planning
+    technology_stack:
+      - "Tauri 2.0"
+      - "React 19"
+      - "TypeScript"
+      - "Rust"
+      - "tokio"
+      - "tonic (gRPC)"
+      - "axum (HTTP)"
+      - "SQLite"
+      - "xterm.js"
+      - "shadcn/ui"
+      - "Tailwind CSS"
+    hosting: "User's own infrastructure (zero-infra model)"
+    min_platform: "macOS 13 (Ventura)"
+
+  relationships:
+    - target_id: "a1b2c3d4-0001-4000-8000-000000000001"
+      type: owned_by
+      description: "Core product architecture"
+    - target_id: "a1b2c3d4-0002-4000-8000-000000000001"
+      type: constrained_by
+      description: "Solo founder limits scope and tech complexity"
+    - target_id: "a1b2c3d4-0004-4000-8000-000000000001"
+      type: constrained_by
+      description: "Must meet aesthetic and simplicity standards"
+
+  provenance:
+    source: "manual"
+    created_at: "2026-03-05T00:00:00Z"
+    created_by: "founder"
+
+  tags:
+    - "architecture"
+    - "technical"
+
+---
+crf_version: "0.1.0"
+
+entity:
+  id: "a1b2c3d4-0004-4000-8000-000000000001"
+  type: policy
+  name: "Design Philosophy"
+  description: "Aesthetic is not decoration — it IS the product. Simplicity as architecture. AI-controllable by design."
+
+  attributes:
+    policy_type: design
+    enforcement: mandatory
+    principles:
+      - "Every screen has ONE primary action"
+      - "Progressive disclosure — show less by default"
+      - "Zero accounts for local use"
+      - "Configuration is optional — sensible defaults"
+      - "MCP server is a core feature, not an add-on"
+      - "CLI commands mirror every MCP tool (human and AI parity)"
+      - "One app, one agent binary — not a suite or platform"
+
+  relationships:
+    - target_id: "a1b2c3d4-0003-4000-8000-000000000001"
+      type: constrains
+      description: "All technical decisions must respect design philosophy"
+
+  provenance:
+    source: "manual"
+    created_at: "2026-03-05T00:00:00Z"
+    created_by: "founder"
+
+  tags:
+    - "design"
+    - "philosophy"
+    - "policy"
+
+---
+crf_version: "0.1.0"
+
+entity:
+  id: "a1b2c3d4-0005-4000-8000-000000000001"
+  type: fact
+  name: "Market Context — AI Code Deployment Gap"
+  description: "AI code generation is exploding but deployment remains manual. No tool exists that lets you paste AI-generated code and deploy it to your own infrastructure from a native Mac app."
+
+  attributes:
+    fact_type: market
+    value:
+      devops_market_2025: "$14.4B"
+      devops_market_2032: "$72.8B"
+      devops_cagr: "26%"
+      serverless_market_2025: "$17.8B"
+      agentic_traffic_growth_yoy: "6900%"
+      bot_traffic_share: "52%"
+      comparable_ngrok_arr: "$26.7M"
+      comparable_railway_funding: "$100M Series B"
+      comparable_tailscale_valuation: "$1.5B"
+      rundeck_acquisition_price: "$100M"
+      pagerduty_process_automation_price: "$125/user/month"
+    confidence: 85
+    verified: true
+    verified_at: "2026-03-05T00:00:00Z"
+    source_reference: "PRODUCT_VISION.md — research conducted March 2026"
+
+  relationships:
+    - target_id: "a1b2c3d4-0001-4000-8000-000000000001"
+      type: constrains
+      description: "Market opportunity and competitive landscape inform product positioning"
+
+  provenance:
+    source: "web_research"
+    created_at: "2026-03-05T00:00:00Z"
+    created_by: "founder"
+
+  tags:
+    - "market"
+    - "research"
+    - "competitors"
+
+---
+crf_version: "0.1.0"
+
+entity:
+  id: "a1b2c3d4-0006-4000-8000-000000000001"
+  type: fact
+  name: "Business Model — Zero Infrastructure"
+  description: "Runway never hosts user workloads. All code runs on the user's own compute (Mac, VPS, AWS, Cloudflare). Like Terraform: control plane, not data plane."
+
+  attributes:
+    fact_type: business_model
+    value:
+      model: "freemium"
+      free_tier: "Local execution, 3 projects, 1 agent"
+      pro_tier: "$12/month — unlimited projects, 10 agents, cloud deploy"
+      team_tier: "$25/user/month — unlimited agents, RBAC, shared runbooks"
+      infrastructure_cost: "zero — runs on user's compute"
+      distribution: "Direct download + Homebrew cask (primary), App Store optional"
+    confidence: 75
+    verified: false
+
+  relationships:
+    - target_id: "a1b2c3d4-0001-4000-8000-000000000001"
+      type: owned_by
+      description: "Core business model"
+
+  provenance:
+    source: "manual"
+    created_at: "2026-03-05T00:00:00Z"
+    created_by: "founder"
+
+  tags:
+    - "business"
+    - "pricing"
+    - "model"
