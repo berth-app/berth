@@ -144,10 +144,10 @@ runway agent install ubuntu@my-server.com
 - [x] Tauri app scaffold with React: project list, detail view, code import
 - [x] runway-core (Rust): project model, runtime detection (Python, Node, Go, shell)
 - [x] Local execution: Run/Stop via Tauri commands, ProcessRegistry, log streaming via events
-- [ ] Local agent communication: Unix socket, basic gRPC service via tonic
+- [x] Local agent communication: gRPC service via tonic on localhost:50051
 - [x] "Paste & Deploy" flow: paste code → save to disk → detect runtime → run
-- [ ] xterm.js log viewer: plain text viewer works, xterm.js upgrade pending
-- [ ] Basic monitoring: process status, last run time
+- [x] xterm.js log viewer: ANSI color support, auto-fit, 10k scrollback
+- [x] Basic monitoring: run count, last run time, exit codes, live uptime
 - [x] Menu bar presence via Tauri tray plugin: quick status of running projects
 
 **Ship:** Internal dogfood build. Use it yourself daily.
@@ -155,9 +155,9 @@ runway agent install ubuntu@my-server.com
 ### Phase 2: MCP + CLI (Month 3)
 **Goal: AI agents can control Runway**
 
-- [ ] MCP server (stdio transport): all core tools from spec above
-- [ ] CLI tool: thin wrapper, same commands as MCP tools
-- [ ] .mcp.json config for easy Claude Code integration
+- [x] MCP server (stdio transport): 10 tools — list, status, deploy, run, stop, logs, import, detect, delete, health
+- [x] CLI tool: `runway list|deploy|run|stop|status|logs|import|detect|delete|health`
+- [x] .mcp.json config for easy Claude Code integration
 - [ ] Test: Claude Code can deploy a script via MCP end-to-end
 - [ ] Scheduling: cron-like local scheduling for projects
 - [ ] Auto-detect improvements: requirements.txt, package.json, go.mod, Cargo.toml parsing

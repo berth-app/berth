@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "runway": {
+      "command": "cargo",
+      "args": ["run", "-p", "runway-mcp", "--quiet"],
+      "cwd": "."
+    }
+  }
+}
