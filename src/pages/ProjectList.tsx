@@ -5,6 +5,7 @@ import { listProjects, type Project, type StatusEvent } from "../lib/invoke";
 interface Props {
   onSelect: (id: string) => void;
   onNewProject: () => void;
+  onTargets?: () => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -64,7 +65,7 @@ function LoadingSkeleton() {
   );
 }
 
-export default function ProjectList({ onSelect, onNewProject }: Props) {
+export default function ProjectList({ onSelect, onNewProject, onTargets }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -137,12 +138,22 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
             {projects.length}
           </span>
         </h1>
-        <button
-          onClick={onNewProject}
-          className="px-3 py-1.5 rounded-md bg-runway-accent text-white text-xs font-medium hover:opacity-90 transition-opacity"
-        >
-          + New
-        </button>
+        <div className="flex gap-2">
+          {onTargets && (
+            <button
+              onClick={onTargets}
+              className="px-3 py-1.5 rounded-md border border-runway-border text-runway-muted text-xs font-medium hover:text-runway-text hover:border-runway-accent transition-colors"
+            >
+              Targets
+            </button>
+          )}
+          <button
+            onClick={onNewProject}
+            className="px-3 py-1.5 rounded-md bg-runway-accent text-white text-xs font-medium hover:opacity-90 transition-opacity"
+          >
+            + New
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         {projects.map((project) => (

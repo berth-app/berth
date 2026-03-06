@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sysinfo::System;
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -8,6 +9,10 @@ use uuid::Uuid;
 
 use runway_core::executor::{self, LogStream};
 use runway_core::runtime::Runtime;
+
+fn gethostname() -> String {
+    System::host_name().unwrap_or_else(|| "unknown".into())
+}
 
 use crate::proto::agent_service_server::AgentService;
 use crate::proto::*;
@@ -127,11 +132,17 @@ impl AgentService for AgentServiceImpl {
             })
             .collect();
 
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        let cpu_usage = sys.global_cpu_usage() as f64;
+        let memory_bytes = sys.used_memory();
+
         Ok(Response::new(StatusResponse {
-            agent_id: "local".into(),
+            agent_id: gethostname(),
             status: "running".into(),
-            cpu_usage: 0.0,
-            memory_bytes: 0,
+            cpu_usage,
+            memory_bytes,
             projects,
         }))
     }

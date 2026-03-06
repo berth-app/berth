@@ -27,3 +27,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dirs-next = "2"
 uuid = { workspace = true }
+tonic = { workspace = true }

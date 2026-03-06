@@ -2,9 +2,10 @@ import { useState } from "react";
 import ProjectList from "./pages/ProjectList";
 import ProjectDetail from "./pages/ProjectDetail";
 import PasteAndDeploy from "./pages/PasteAndDeploy";
+import Targets from "./pages/Targets";
 import { ToastProvider } from "./components/Toast";
 
-type View = "list" | "detail" | "paste";
+type View = "list" | "detail" | "paste" | "targets";
 
 export default function App() {
   const [view, setView] = useState<View>("list");
@@ -30,6 +31,7 @@ export default function App() {
                 setView("detail");
               }}
               onNewProject={() => setView("paste")}
+              onTargets={() => setView("targets")}
             />
           )}
           {view === "detail" && selectedProjectId && (
@@ -46,6 +48,9 @@ export default function App() {
                 setView("detail");
               }}
             />
+          )}
+          {view === "targets" && (
+            <Targets onBack={() => setView("list")} />
           )}
         </div>
       </div>

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use runway_core::agent_client::AgentClient;
 use runway_core::executor::{self, LogStream};
 use tauri::Emitter;
 use runway_core::project::{Project, ProjectStatus};
 use runway_core::runtime::{self, RuntimeInfo};
 use runway_core::store::ProjectStore;
+use runway_core::target::Target;
 use serde::Serialize;
 use std::path::Path;
 use tokio::process::Child;
@@ -267,4 +269,100 @@ pub async fn stop_project(
     );
 
     Ok(())
+}
+
+// --- Target commands ---
+
+#[derive(Clone, Serialize)]
+pub struct TargetInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub host: Option<String>,
+    pub port: u16,
+    pub status: String,
+    pub agent_version: Option<String>,
+    pub last_seen_at: Option<String>,
+}
+
+impl From<&Target> for TargetInfo {
+    fn from(t: &Target) -> Self {
+        Self {
+            id: t.id.to_string(),
+            name: t.name.clone(),
+            kind: format!("{:?}", t.kind).to_lowercase(),
+            host: t.host.clone(),
+            port: t.port,
+            status: format!("{:?}", t.status).to_lowercase(),
+            agent_version: t.agent_version.clone(),
+            last_seen_at: t.last_seen_at.map(|ts| ts.to_rfc3339()),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_targets() -> Result<Vec<TargetInfo>, String> {
+    let store = get_store()?;
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    Ok(targets.iter().map(TargetInfo::from).collect())
+}
+
+#[tauri::command]
+pub fn add_target(name: String, host: String, port: u16) -> Result<TargetInfo, String> {
+    let store = get_store()?;
+    let target = Target::new_remote(name, host, port);
+    store.insert_target(&target).map_err(|e| e.to_string())?;
+    Ok(TargetInfo::from(&target))
+}
+
+#[tauri::command]
+pub fn remove_target(id: String) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store.delete_target(uuid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    let target = targets
+        .iter()
+        .find(|t| t.id == uuid)
+        .ok_or_else(|| format!("Target {} not found", id))?;
+
+    let endpoint = target.grpc_endpoint();
+    match AgentClient::connect(&endpoint).await {
+        Ok(mut client) => match client.health().await {
+            Ok(health) => {
+                let _ = store.update_target_status(
+                    target.id,
+                    runway_core::target::TargetStatus::Online,
+                    Some(&health.version),
+                );
+                let mut info = TargetInfo::from(target);
+                info.status = "online".into();
+                info.agent_version = Some(health.version);
+                Ok(info)
+            }
+            Err(e) => {
+                let _ = store.update_target_status(
+                    target.id,
+                    runway_core::target::TargetStatus::Offline,
+                    None,
+                );
+                Err(format!("Agent unhealthy: {}", e))
+            }
+        },
+        Err(e) => {
+            let _ = store.update_target_status(
+                target.id,
+                runway_core::target::TargetStatus::Offline,
+                None,
+            );
+            Err(format!("Connection failed: {}", e))
+        }
+    }
 }

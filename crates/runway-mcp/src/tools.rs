@@ -3,7 +3,9 @@ use std::path::Path;
 use runway_core::executor;
 use runway_core::project::Project;
 use runway_core::runtime;
+use runway_core::agent_client::AgentClient;
 use runway_core::scheduler::Schedule;
+use runway_core::target::Target;
 use runway_core::store::ProjectStore;
 use serde_json::{json, Value};
 
@@ -226,6 +228,61 @@ pub fn list_tools() -> Vec<Tool> {
                 "required": ["schedule_id"]
             }),
         },
+        Tool {
+            name: "runway_list_targets".into(),
+            description: "List configured deploy targets (local + remote agents)".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
+        Tool {
+            name: "runway_add_target".into(),
+            description: "Add a new remote deploy target (agent endpoint)".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Target name (e.g. 'my-vps', 'staging')"
+                    },
+                    "host": {
+                        "type": "string",
+                        "description": "Agent host address (IP or hostname)"
+                    },
+                    "port": {
+                        "type": "integer",
+                        "description": "Agent port (default: 50051)",
+                        "default": 50051
+                    }
+                },
+                "required": ["name", "host"]
+            }),
+        },
+        Tool {
+            name: "runway_remove_target".into(),
+            description: "Remove a deploy target by name".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Target name"
+                    }
+                },
+                "required": ["name"]
+            }),
+        },
+        Tool {
+            name: "runway_list_agents".into(),
+            description: "List connected agents and their health status. Pings each target.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
     ]
 }
 
@@ -262,6 +319,10 @@ pub async fn call_tool(name: &str, args: &Value) -> CallToolResult {
         "runway_schedule_add" => handle_schedule_add(args).await,
         "runway_schedule_list" => handle_schedule_list().await,
         "runway_schedule_remove" => handle_schedule_remove(args).await,
+        "runway_list_targets" => handle_list_targets().await,
+        "runway_add_target" => handle_add_target(args).await,
+        "runway_remove_target" => handle_remove_target(args).await,
+        "runway_list_agents" => handle_list_agents().await,
         _ => CallToolResult::error(format!("Unknown tool: {name}")),
     }
 }
@@ -712,4 +773,157 @@ async fn handle_schedule_remove(args: &Value) -> CallToolResult {
     }
 
     CallToolResult::text("Schedule deleted".into())
+}
+
+async fn handle_list_targets() -> CallToolResult {
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let targets = match store.list_targets() {
+        Ok(t) => t,
+        Err(e) => return CallToolResult::error(e.to_string()),
+    };
+
+    let mut list: Vec<Value> = vec![json!({
+        "name": "local",
+        "kind": "local",
+        "host": "127.0.0.1",
+        "port": 50051,
+        "status": "online",
+    })];
+
+    for t in &targets {
+        list.push(json!({
+            "name": t.name,
+            "kind": format!("{:?}", t.kind).to_lowercase(),
+            "host": t.host,
+            "port": t.port,
+            "status": format!("{:?}", t.status).to_lowercase(),
+            "agent_version": t.agent_version,
+            "last_seen_at": t.last_seen_at.map(|ts| ts.to_rfc3339()),
+        }));
+    }
+
+    CallToolResult::text(serde_json::to_string_pretty(&list).unwrap_or_default())
+}
+
+async fn handle_add_target(args: &Value) -> CallToolResult {
+    let name = match args.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n,
+        None => return CallToolResult::error("Missing required parameter: name".into()),
+    };
+    let host = match args.get("host").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return CallToolResult::error("Missing required parameter: host".into()),
+    };
+    let port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(50051) as u16;
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let target = Target::new_remote(name.to_string(), host.to_string(), port);
+    if let Err(e) = store.insert_target(&target) {
+        return CallToolResult::error(format!("Failed to add target: {e}"));
+    }
+
+    CallToolResult::text(format!(
+        "Target '{}' added ({}:{})",
+        name, host, port
+    ))
+}
+
+async fn handle_remove_target(args: &Value) -> CallToolResult {
+    let name = match args.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n,
+        None => return CallToolResult::error("Missing required parameter: name".into()),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let target = match store.get_target_by_name(name) {
+        Ok(Some(t)) => t,
+        Ok(None) => return CallToolResult::error(format!("Target '{name}' not found")),
+        Err(e) => return CallToolResult::error(e.to_string()),
+    };
+
+    if let Err(e) = store.delete_target(target.id) {
+        return CallToolResult::error(format!("Failed to remove target: {e}"));
+    }
+
+    CallToolResult::text(format!("Target '{}' removed", name))
+}
+
+async fn handle_list_agents() -> CallToolResult {
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let targets = match store.list_targets() {
+        Ok(t) => t,
+        Err(e) => return CallToolResult::error(e.to_string()),
+    };
+
+    let mut agents = Vec::new();
+
+    for target in &targets {
+        let endpoint = target.grpc_endpoint();
+        let health = match AgentClient::connect(&endpoint).await {
+            Ok(mut client) => match client.health().await {
+                Ok(h) => {
+                    let _ = store.update_target_status(
+                        target.id,
+                        runway_core::target::TargetStatus::Online,
+                        Some(&h.version),
+                    );
+                    json!({
+                        "name": target.name,
+                        "host": target.host,
+                        "port": target.port,
+                        "status": "online",
+                        "version": h.version,
+                        "uptime_seconds": h.uptime_seconds,
+                    })
+                }
+                Err(e) => {
+                    let _ = store.update_target_status(
+                        target.id,
+                        runway_core::target::TargetStatus::Offline,
+                        None,
+                    );
+                    json!({
+                        "name": target.name,
+                        "host": target.host,
+                        "port": target.port,
+                        "status": "offline",
+                        "error": e.to_string(),
+                    })
+                }
+            },
+            Err(e) => {
+                let _ = store.update_target_status(
+                    target.id,
+                    runway_core::target::TargetStatus::Offline,
+                    None,
+                );
+                json!({
+                    "name": target.name,
+                    "host": target.host,
+                    "port": target.port,
+                    "status": "unreachable",
+                    "error": e.to_string(),
+                })
+            }
+        };
+        agents.push(health);
+    }
+
+    CallToolResult::text(serde_json::to_string_pretty(&agents).unwrap_or_default())
 }

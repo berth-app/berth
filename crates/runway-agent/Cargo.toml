@@ -19,6 +19,7 @@ prost = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 tokio-stream = "0.1"
+sysinfo = "0.33"
 
 [build-dependencies]
 tonic-build = { workspace = true }

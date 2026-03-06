@@ -1,11 +1,13 @@
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
+use runway_core::agent_client::AgentClient;
 use runway_core::executor;
 use runway_core::project::Project;
 use runway_core::runtime;
 use runway_core::scheduler::{self, Schedule};
 use runway_core::store::ProjectStore;
+use runway_core::target::Target;
 
 #[derive(Parser)]
 #[command(name = "runway", about = "Deploy and manage code from your terminal")]
@@ -88,11 +90,26 @@ enum Commands {
 enum TargetActions {
     /// List configured targets
     List,
-    /// Add a new target
+    /// Add a new remote target
     Add {
+        /// Target name
         name: String,
+        /// Agent host address (IP or hostname)
         #[arg(long)]
-        host: Option<String>,
+        host: String,
+        /// Agent port (default: 50051)
+        #[arg(long, default_value_t = 50051)]
+        port: u16,
+    },
+    /// Remove a target
+    Remove {
+        /// Target name
+        name: String,
+    },
+    /// Check health of a target's agent
+    Ping {
+        /// Target name
+        name: String,
     },
 }
 
@@ -357,15 +374,79 @@ async fn main() -> anyhow::Result<()> {
             println!("Platform: {}", std::env::consts::OS);
         }
 
-        Commands::Targets { action } => match action {
-            TargetActions::List => {
-                println!("local  (built-in, always available)");
-                println!("\nRemote targets will be available in Phase 3.");
+        Commands::Targets { action } => {
+            let store = get_store()?;
+            match action {
+                TargetActions::List => {
+                    println!("local  (built-in, always available)");
+                    let targets = store.list_targets()?;
+                    if !targets.is_empty() {
+                        println!(
+                            "\n{:<20}  {:<20}  {:<6}  {:<8}  {}",
+                            "NAME", "HOST", "PORT", "STATUS", "AGENT"
+                        );
+                        for t in &targets {
+                            println!(
+                                "{:<20}  {:<20}  {:<6}  {:<8}  {}",
+                                t.name,
+                                t.host.as_deref().unwrap_or("-"),
+                                t.port,
+                                format!("{:?}", t.status).to_lowercase(),
+                                t.agent_version.as_deref().unwrap_or("-"),
+                            );
+                        }
+                    }
+                }
+                TargetActions::Add { name, host, port } => {
+                    let target = Target::new_remote(name.clone(), host, port);
+                    store.insert_target(&target)?;
+                    println!("Target '{}' added ({}:{})", name, target.host.as_deref().unwrap_or("?"), port);
+                }
+                TargetActions::Remove { name } => {
+                    let target = store
+                        .get_target_by_name(&name)?
+                        .ok_or_else(|| anyhow::anyhow!("Target '{}' not found", name))?;
+                    store.delete_target(target.id)?;
+                    println!("Target '{}' removed", name);
+                }
+                TargetActions::Ping { name } => {
+                    let target = store
+                        .get_target_by_name(&name)?
+                        .ok_or_else(|| anyhow::anyhow!("Target '{}' not found", name))?;
+                    let endpoint = target.grpc_endpoint();
+                    println!("Pinging {} ...", endpoint);
+                    match AgentClient::connect(&endpoint).await {
+                        Ok(mut client) => match client.health().await {
+                            Ok(health) => {
+                                store.update_target_status(
+                                    target.id,
+                                    runway_core::target::TargetStatus::Online,
+                                    Some(&health.version),
+                                )?;
+                                println!("Agent: {} v{}", health.status, health.version);
+                                println!("Uptime: {}s", health.uptime_seconds);
+                            }
+                            Err(e) => {
+                                store.update_target_status(
+                                    target.id,
+                                    runway_core::target::TargetStatus::Offline,
+                                    None,
+                                )?;
+                                println!("Agent unhealthy: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            store.update_target_status(
+                                target.id,
+                                runway_core::target::TargetStatus::Offline,
+                                None,
+                            )?;
+                            println!("Connection failed: {}", e);
+                        }
+                    }
+                }
             }
-            TargetActions::Add { name, .. } => {
-                println!("Target '{}' — remote targets available in Phase 3.", name);
-            }
-        },
+        }
 
         Commands::Schedule { action } => {
             let store = get_store()?;

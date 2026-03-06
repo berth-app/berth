@@ -167,13 +167,15 @@ runway agent install ubuntu@my-server.com
 ### Phase 3: Remote Agents (Month 4-5)
 **Goal: Deploy to your own Linux server**
 
-- [ ] Agent install script: `curl -sSL https://get.runway.dev | sh`
-- [ ] gRPC + mTLS: secure agent-to-app communication over internet
-- [ ] Target management UI: add/edit/remove remote targets
-- [ ] Remote deploy: push code to agent, agent runs it, stream logs back
-- [ ] Agent health monitoring: heartbeat, CPU/mem, disk
+- [x] Agent install script: `scripts/install-agent.sh` with systemd service, --uninstall flag
+- [ ] gRPC + mTLS: secure agent-to-app communication over internet (TLS not yet implemented)
+- [x] Target management UI: add/edit/remove remote targets (React page + Tauri commands)
+- [x] Remote deploy: gRPC client in runway-core, CLI deploy to remote targets, MCP tools
+- [x] Agent health monitoring: real CPU/mem via sysinfo crate, ping command in CLI + UI
 - [ ] Credential management via security-framework (Keychain on Mac)
 - [ ] mDNS discovery for LAN agents
+- [x] Target model: Target struct, SQLite table, store CRUD, 17 MCP tools total
+- [x] CLI: `runway targets add|list|remove|ping` with real gRPC health checks
 
 **Ship:** Beta expansion. Target 100 users.
 

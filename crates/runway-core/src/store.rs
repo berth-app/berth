@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::project::{Project, ProjectStatus};
 use crate::runtime::Runtime;
 use crate::scheduler::Schedule;
+use crate::target::{Target, TargetKind, TargetStatus};
 
 pub struct ProjectStore {
     conn: Connection,
@@ -63,6 +64,20 @@ impl ProjectStore {
                 created_at TEXT NOT NULL,
                 last_triggered_at TEXT,
                 next_run_at TEXT
+            );",
+        )?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS targets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL DEFAULT 'remote',
+                host TEXT,
+                port INTEGER NOT NULL DEFAULT 50051,
+                status TEXT NOT NULL DEFAULT 'unknown',
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                agent_version TEXT
             );",
         )?;
 
@@ -297,6 +312,102 @@ impl ProjectStore {
             .execute("DELETE FROM schedules WHERE id = ?1", [id.to_string()])?;
         Ok(())
     }
+
+    // --- Target methods ---
+
+    pub fn insert_target(&self, target: &Target) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO targets (id, name, kind, host, port, status, created_at, last_seen_at, agent_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (
+                target.id.to_string(),
+                &target.name,
+                format_target_kind(target.kind),
+                &target.host,
+                target.port as i32,
+                format_target_status(target.status),
+                target.created_at.to_rfc3339(),
+                target.last_seen_at.map(|t| t.to_rfc3339()),
+                &target.agent_version,
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn list_targets(&self) -> Result<Vec<Target>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version FROM targets ORDER BY name ASC",
+        )?;
+
+        let targets = stmt
+            .query_map([], |row| {
+                Ok(Target {
+                    id: row.get::<_, String>(0)?.parse().unwrap_or_default(),
+                    name: row.get(1)?,
+                    kind: parse_target_kind(&row.get::<_, String>(2)?),
+                    host: row.get(3)?,
+                    port: row.get::<_, i32>(4)? as u16,
+                    status: parse_target_status(&row.get::<_, String>(5)?),
+                    created_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                    last_seen_at: row
+                        .get::<_, Option<String>>(7)?
+                        .and_then(|s| s.parse().ok()),
+                    agent_version: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(targets)
+    }
+
+    pub fn get_target_by_name(&self, name: &str) -> Result<Option<Target>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version FROM targets WHERE name = ?1",
+        )?;
+
+        let mut rows = stmt.query_map([name], |row| {
+            Ok(Target {
+                id: row.get::<_, String>(0)?.parse().unwrap_or_default(),
+                name: row.get(1)?,
+                kind: parse_target_kind(&row.get::<_, String>(2)?),
+                host: row.get(3)?,
+                port: row.get::<_, i32>(4)? as u16,
+                status: parse_target_status(&row.get::<_, String>(5)?),
+                created_at: row.get::<_, String>(6)?.parse().unwrap_or_default(),
+                last_seen_at: row
+                    .get::<_, Option<String>>(7)?
+                    .and_then(|s| s.parse().ok()),
+                agent_version: row.get(8)?,
+            })
+        })?;
+
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn update_target_status(
+        &self,
+        id: Uuid,
+        status: TargetStatus,
+        agent_version: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE targets SET status = ?1, last_seen_at = ?2, agent_version = ?3 WHERE id = ?4",
+            (
+                format_target_status(status),
+                &now,
+                agent_version,
+                id.to_string(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_target(&self, id: Uuid) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM targets WHERE id = ?1", [id.to_string()])?;
+        Ok(())
+    }
 }
 
 fn parse_runtime(s: &str) -> Runtime {
@@ -337,5 +448,38 @@ fn format_status(s: ProjectStatus) -> &'static str {
         ProjectStatus::Running => "running",
         ProjectStatus::Stopped => "stopped",
         ProjectStatus::Failed => "failed",
+    }
+}
+
+fn parse_target_kind(s: &str) -> TargetKind {
+    match s {
+        "local" => TargetKind::Local,
+        "remote" => TargetKind::Remote,
+        "lan" => TargetKind::Lan,
+        _ => TargetKind::Remote,
+    }
+}
+
+fn format_target_kind(k: TargetKind) -> &'static str {
+    match k {
+        TargetKind::Local => "local",
+        TargetKind::Remote => "remote",
+        TargetKind::Lan => "lan",
+    }
+}
+
+fn parse_target_status(s: &str) -> TargetStatus {
+    match s {
+        "online" => TargetStatus::Online,
+        "offline" => TargetStatus::Offline,
+        _ => TargetStatus::Unknown,
+    }
+}
+
+fn format_target_status(s: TargetStatus) -> &'static str {
+    match s {
+        TargetStatus::Online => "online",
+        TargetStatus::Offline => "offline",
+        TargetStatus::Unknown => "unknown",
     }
 }

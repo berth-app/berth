@@ -63,6 +63,10 @@ pub fn run() {
             save_paste_code,
             run_project,
             stop_project,
+            list_targets,
+            add_target,
+            remove_target,
+            ping_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Runway");

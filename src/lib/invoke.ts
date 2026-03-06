@@ -68,3 +68,36 @@ export interface StatusEvent {
   status: "idle" | "running" | "stopped" | "failed";
   exit_code: number | null;
 }
+
+// --- Targets ---
+
+export interface TargetInfo {
+  id: string;
+  name: string;
+  kind: string;
+  host: string | null;
+  port: number;
+  status: string;
+  agent_version: string | null;
+  last_seen_at: string | null;
+}
+
+export async function listTargets(): Promise<TargetInfo[]> {
+  return tauriInvoke<TargetInfo[]>("list_targets");
+}
+
+export async function addTarget(
+  name: string,
+  host: string,
+  port: number
+): Promise<TargetInfo> {
+  return tauriInvoke<TargetInfo>("add_target", { name, host, port });
+}
+
+export async function removeTarget(id: string): Promise<void> {
+  return tauriInvoke("remove_target", { id });
+}
+
+export async function pingTarget(id: string): Promise<TargetInfo> {
+  return tauriInvoke<TargetInfo>("ping_target", { id });
+}
