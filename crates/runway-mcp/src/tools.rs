@@ -3,6 +3,7 @@ use std::path::Path;
 use runway_core::executor;
 use runway_core::project::Project;
 use runway_core::runtime;
+use runway_core::scheduler::Schedule;
 use runway_core::store::ProjectStore;
 use serde_json::{json, Value};
 
@@ -184,6 +185,47 @@ pub fn list_tools() -> Vec<Tool> {
                 "required": []
             }),
         },
+        Tool {
+            name: "runway_schedule_add".into(),
+            description: "Add a cron-like schedule to a project. Supports: @every 5m, @hourly, @daily, @weekly, or 'M H * * *'".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    },
+                    "cron": {
+                        "type": "string",
+                        "description": "Cron expression (e.g. '@every 5m', '@hourly', '@daily', '30 9 * * *')"
+                    }
+                },
+                "required": ["project_id", "cron"]
+            }),
+        },
+        Tool {
+            name: "runway_schedule_list".into(),
+            description: "List all schedules".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
+        Tool {
+            name: "runway_schedule_remove".into(),
+            description: "Remove a schedule by UUID".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "schedule_id": {
+                        "type": "string",
+                        "description": "Schedule UUID"
+                    }
+                },
+                "required": ["schedule_id"]
+            }),
+        },
     ]
 }
 
@@ -217,6 +259,9 @@ pub async fn call_tool(name: &str, args: &Value) -> CallToolResult {
         "runway_detect_runtime" => handle_detect_runtime(args).await,
         "runway_delete" => handle_delete(args).await,
         "runway_health" => handle_health().await,
+        "runway_schedule_add" => handle_schedule_add(args).await,
+        "runway_schedule_list" => handle_schedule_list().await,
+        "runway_schedule_remove" => handle_schedule_remove(args).await,
         _ => CallToolResult::error(format!("Unknown tool: {name}")),
     }
 }
@@ -533,6 +578,8 @@ async fn handle_detect_runtime(args: &Value) -> CallToolResult {
         "entrypoint": info.entrypoint,
         "version_file": info.version_file,
         "confidence": info.confidence,
+        "dependencies": info.dependencies,
+        "scripts": info.scripts,
     });
 
     CallToolResult::text(serde_json::to_string_pretty(&result).unwrap_or_default())
@@ -562,18 +609,107 @@ async fn handle_delete(args: &Value) -> CallToolResult {
 }
 
 async fn handle_health() -> CallToolResult {
-    let store = get_store();
-    let project_count = store
-        .and_then(|s| s.list().map_err(|e| e.to_string()))
-        .map(|p| p.len())
-        .unwrap_or(0);
+    let (project_count, schedule_count) = match get_store() {
+        Ok(s) => {
+            let pc = s.list().map(|p| p.len()).unwrap_or(0);
+            let sc = s.list_schedules().map(|s| s.len()).unwrap_or(0);
+            (pc, sc)
+        }
+        Err(_) => (0, 0),
+    };
 
     let info = json!({
         "status": "healthy",
         "version": env!("CARGO_PKG_VERSION"),
         "projects": project_count,
+        "schedules": schedule_count,
         "platform": std::env::consts::OS,
     });
 
     CallToolResult::text(serde_json::to_string_pretty(&info).unwrap_or_default())
+}
+
+async fn handle_schedule_add(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+    let cron = match args.get("cron").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => return CallToolResult::error("Missing required parameter: cron".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let sched = Schedule::new(project.id, cron.to_string());
+    if let Err(e) = store.insert_schedule(&sched) {
+        return CallToolResult::error(format!("Failed to create schedule: {e}"));
+    }
+
+    let result = json!({
+        "schedule_id": sched.id.to_string(),
+        "project": project.name,
+        "cron": cron,
+        "next_run_at": sched.next_run_at.map(|t| t.to_rfc3339()),
+    });
+    CallToolResult::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+}
+
+async fn handle_schedule_list() -> CallToolResult {
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let schedules = match store.list_schedules() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e.to_string()),
+    };
+
+    let list: Vec<Value> = schedules
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id.to_string(),
+                "project_id": s.project_id.to_string(),
+                "cron": s.cron_expr,
+                "enabled": s.enabled,
+                "next_run_at": s.next_run_at.map(|t| t.to_rfc3339()),
+                "last_triggered_at": s.last_triggered_at.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+
+    CallToolResult::text(serde_json::to_string_pretty(&list).unwrap_or_default())
+}
+
+async fn handle_schedule_remove(args: &Value) -> CallToolResult {
+    let schedule_id = match args.get("schedule_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: schedule_id".into()),
+    };
+
+    let uuid: uuid::Uuid = match schedule_id.parse() {
+        Ok(u) => u,
+        Err(_) => return CallToolResult::error(format!("Invalid UUID: {schedule_id}")),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    if let Err(e) = store.delete_schedule(uuid) {
+        return CallToolResult::error(format!("Failed to delete schedule: {e}"));
+    }
+
+    CallToolResult::text("Schedule deleted".into())
 }

@@ -1,9 +1,11 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use uuid::Uuid;
 
 use crate::project::{Project, ProjectStatus};
 use crate::runtime::Runtime;
+use crate::scheduler::Schedule;
 
 pub struct ProjectStore {
     conn: Connection,
@@ -51,6 +53,18 @@ impl ProjectStore {
                  ALTER TABLE projects ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0;",
             )?;
         }
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schedules (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                cron_expr TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_triggered_at TEXT,
+                next_run_at TEXT
+            );",
+        )?;
 
         Ok(())
     }
@@ -173,6 +187,114 @@ impl ProjectStore {
     pub fn delete(&self, id: Uuid) -> Result<()> {
         self.conn
             .execute("DELETE FROM projects WHERE id = ?1", [id.to_string()])?;
+        Ok(())
+    }
+
+    // --- Schedule methods ---
+
+    pub fn insert_schedule(&self, schedule: &Schedule) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO schedules (id, project_id, cron_expr, enabled, created_at, last_triggered_at, next_run_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                schedule.id.to_string(),
+                schedule.project_id.to_string(),
+                &schedule.cron_expr,
+                schedule.enabled as i32,
+                schedule.created_at.to_rfc3339(),
+                schedule.last_triggered_at.map(|t| t.to_rfc3339()),
+                schedule.next_run_at.map(|t| t.to_rfc3339()),
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn list_schedules(&self) -> Result<Vec<Schedule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, cron_expr, enabled, created_at, last_triggered_at, next_run_at FROM schedules ORDER BY created_at DESC",
+        )?;
+
+        let schedules = stmt
+            .query_map([], |row| {
+                Ok(Schedule {
+                    id: row.get::<_, String>(0)?.parse().unwrap_or_default(),
+                    project_id: row.get::<_, String>(1)?.parse().unwrap_or_default(),
+                    cron_expr: row.get(2)?,
+                    enabled: row.get::<_, i32>(3)? != 0,
+                    created_at: row
+                        .get::<_, String>(4)?
+                        .parse()
+                        .unwrap_or_default(),
+                    last_triggered_at: row
+                        .get::<_, Option<String>>(5)?
+                        .and_then(|s| s.parse().ok()),
+                    next_run_at: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| s.parse().ok()),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(schedules)
+    }
+
+    pub fn get_schedules_for_project(&self, project_id: Uuid) -> Result<Vec<Schedule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, cron_expr, enabled, created_at, last_triggered_at, next_run_at FROM schedules WHERE project_id = ?1",
+        )?;
+
+        let schedules = stmt
+            .query_map([project_id.to_string()], |row| {
+                Ok(Schedule {
+                    id: row.get::<_, String>(0)?.parse().unwrap_or_default(),
+                    project_id: row.get::<_, String>(1)?.parse().unwrap_or_default(),
+                    cron_expr: row.get(2)?,
+                    enabled: row.get::<_, i32>(3)? != 0,
+                    created_at: row
+                        .get::<_, String>(4)?
+                        .parse()
+                        .unwrap_or_default(),
+                    last_triggered_at: row
+                        .get::<_, Option<String>>(5)?
+                        .and_then(|s| s.parse().ok()),
+                    next_run_at: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| s.parse().ok()),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(schedules)
+    }
+
+    pub fn update_schedule_after_run(
+        &self,
+        id: Uuid,
+        triggered_at: DateTime<Utc>,
+        next_run_at: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE schedules SET last_triggered_at = ?1, next_run_at = ?2 WHERE id = ?3",
+            (
+                triggered_at.to_rfc3339(),
+                next_run_at.map(|t| t.to_rfc3339()),
+                id.to_string(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn set_schedule_enabled(&self, id: Uuid, enabled: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE schedules SET enabled = ?1 WHERE id = ?2",
+            (enabled as i32, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_schedule(&self, id: Uuid) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM schedules WHERE id = ?1", [id.to_string()])?;
         Ok(())
     }
 }

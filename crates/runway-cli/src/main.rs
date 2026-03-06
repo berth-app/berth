@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use runway_core::executor;
 use runway_core::project::Project;
 use runway_core::runtime;
+use runway_core::scheduler::{self, Schedule};
 use runway_core::store::ProjectStore;
 
 #[derive(Parser)]
@@ -76,6 +77,11 @@ enum Commands {
         #[command(subcommand)]
         action: TargetActions,
     },
+    /// Manage schedules
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -88,6 +94,37 @@ enum TargetActions {
         #[arg(long)]
         host: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum ScheduleActions {
+    /// Add a schedule to a project
+    Add {
+        /// Project name or UUID
+        project: String,
+        /// Cron expression (e.g. "@every 5m", "@hourly", "@daily", "30 9 * * *")
+        #[arg(long)]
+        cron: String,
+    },
+    /// List all schedules
+    List,
+    /// Remove a schedule
+    Remove {
+        /// Schedule UUID
+        id: String,
+    },
+    /// Enable a schedule
+    Enable {
+        /// Schedule UUID
+        id: String,
+    },
+    /// Disable a schedule
+    Disable {
+        /// Schedule UUID
+        id: String,
+    },
+    /// Run one scheduler tick (execute any due schedules)
+    Tick,
 }
 
 fn get_store() -> anyhow::Result<ProjectStore> {
@@ -287,6 +324,21 @@ async fn main() -> anyhow::Result<()> {
             if let Some(vf) = info.version_file {
                 println!("Marker:     {}", vf);
             }
+            if !info.dependencies.is_empty() {
+                println!(
+                    "Deps:       {} ({})",
+                    info.dependencies.len(),
+                    info.dependencies
+                        .iter()
+                        .take(10)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            if !info.scripts.is_empty() {
+                println!("Scripts:    {}", info.scripts.keys().cloned().collect::<Vec<_>>().join(", "));
+            }
         }
 
         Commands::Delete { project } => {
@@ -312,6 +364,76 @@ async fn main() -> anyhow::Result<()> {
             }
             TargetActions::Add { name, .. } => {
                 println!("Target '{}' — remote targets available in Phase 3.", name);
+            }
+        },
+
+        Commands::Schedule { action } => {
+            let store = get_store()?;
+            match action {
+                ScheduleActions::Add { project, cron } => {
+                    let p = find_project(&store, &project)?;
+                    let sched = Schedule::new(p.id, cron.clone());
+                    store.insert_schedule(&sched)?;
+                    println!(
+                        "Schedule created: {} (next run: {})",
+                        sched.id,
+                        sched
+                            .next_run_at
+                            .map(|t| t.to_rfc3339())
+                            .unwrap_or("unknown".into())
+                    );
+                }
+                ScheduleActions::List => {
+                    let schedules = store.list_schedules()?;
+                    if schedules.is_empty() {
+                        println!("No schedules. Use 'runway schedule add <project> --cron \"@every 5m\"'");
+                        return Ok(());
+                    }
+                    println!(
+                        "{:<36}  {:<36}  {:<16}  {:<8}  {}",
+                        "SCHEDULE ID", "PROJECT ID", "CRON", "ENABLED", "NEXT RUN"
+                    );
+                    for s in &schedules {
+                        println!(
+                            "{:<36}  {:<36}  {:<16}  {:<8}  {}",
+                            s.id,
+                            s.project_id,
+                            s.cron_expr,
+                            if s.enabled { "yes" } else { "no" },
+                            s.next_run_at
+                                .map(|t| t.to_rfc3339())
+                                .unwrap_or("-".into()),
+                        );
+                    }
+                }
+                ScheduleActions::Remove { id } => {
+                    let uuid: uuid::Uuid = id.parse().map_err(|_| anyhow::anyhow!("Invalid UUID: {}", id))?;
+                    store.delete_schedule(uuid)?;
+                    println!("Schedule deleted");
+                }
+                ScheduleActions::Enable { id } => {
+                    let uuid: uuid::Uuid = id.parse().map_err(|_| anyhow::anyhow!("Invalid UUID: {}", id))?;
+                    store.set_schedule_enabled(uuid, true)?;
+                    println!("Schedule enabled");
+                }
+                ScheduleActions::Disable { id } => {
+                    let uuid: uuid::Uuid = id.parse().map_err(|_| anyhow::anyhow!("Invalid UUID: {}", id))?;
+                    store.set_schedule_enabled(uuid, false)?;
+                    println!("Schedule disabled");
+                }
+                ScheduleActions::Tick => {
+                    let results = scheduler::tick(&store).await;
+                    if results.is_empty() {
+                        println!("No schedules due");
+                    } else {
+                        for (project_id, result) in &results {
+                            match result {
+                                Ok(code) => println!("Project {} ran (exit code: {})", project_id, code),
+                                Err(e) => println!("Project {} failed: {}", project_id, e),
+                            }
+                        }
+                    }
+                }
             }
         },
     }

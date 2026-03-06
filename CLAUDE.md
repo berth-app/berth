@@ -155,12 +155,12 @@ runway agent install ubuntu@my-server.com
 ### Phase 2: MCP + CLI (Month 3)
 **Goal: AI agents can control Runway**
 
-- [x] MCP server (stdio transport): 10 tools — list, status, deploy, run, stop, logs, import, detect, delete, health
-- [x] CLI tool: `runway list|deploy|run|stop|status|logs|import|detect|delete|health`
+- [x] MCP server (stdio transport): 13 tools — list, status, deploy, run, stop, logs, import, detect, delete, health, schedule_add, schedule_list, schedule_remove
+- [x] CLI tool: `runway list|deploy|run|stop|status|logs|import|detect|delete|health|schedule`
 - [x] .mcp.json config for easy Claude Code integration
-- [ ] Test: Claude Code can deploy a script via MCP end-to-end
-- [ ] Scheduling: cron-like local scheduling for projects
-- [ ] Auto-detect improvements: requirements.txt, package.json, go.mod, Cargo.toml parsing
+- [x] Test: Claude Code can deploy a script via MCP end-to-end (verified: deploy inline code, run, delete)
+- [x] Scheduling: cron-like local scheduling (@every, @hourly, @daily, @weekly, M H * * *) with CLI + MCP tools
+- [x] Auto-detect improvements: parse requirements.txt, package.json (deps + scripts), go.mod, Cargo.toml
 
 **Ship:** Beta via direct download. Invite 20 developers from AI coding communities.
 
