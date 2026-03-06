@@ -521,37 +521,51 @@ service AgentService {
 </table>
 
 <!-- ============================================================ -->
-<h2 id="mcp">MCP Server (Phase 2)</h2>
+<h2 id="mcp">MCP Server <span class="badge badge-done">Done</span></h2>
 
-<p>12 tools defined for AI agent control via Model Context Protocol:</p>
+<p>10 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05):</p>
 
 <table>
-  <tr><th>Tool</th><th>Purpose</th></tr>
-  <tr><td><code>runway_list_projects</code></td><td>List all projects with status</td></tr>
-  <tr><td><code>runway_project_status</code></td><td>Detailed status of one project</td></tr>
-  <tr><td><code>runway_deploy</code></td><td>Deploy code to a target</td></tr>
-  <tr><td><code>runway_stop</code></td><td>Stop a running deployment</td></tr>
-  <tr><td><code>runway_restart</code></td><td>Restart a deployment</td></tr>
-  <tr><td><code>runway_logs</code></td><td>Stream or fetch logs</td></tr>
-  <tr><td><code>runway_list_targets</code></td><td>List configured deploy targets</td></tr>
-  <tr><td><code>runway_add_target</code></td><td>Configure a new target</td></tr>
-  <tr><td><code>runway_list_agents</code></td><td>List connected agents</td></tr>
-  <tr><td><code>runway_import_code</code></td><td>Import code from path or stdin</td></tr>
-  <tr><td><code>runway_detect_runtime</code></td><td>Auto-detect language and deps</td></tr>
-  <tr><td><code>runway_health</code></td><td>System health check</td></tr>
+  <tr><th>Tool</th><th>Purpose</th><th>Status</th></tr>
+  <tr><td><code>runway_list_projects</code></td><td>List all projects with status, runtime, run history</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_project_status</code></td><td>Detailed status of one project (by UUID or name)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_deploy</code></td><td>Create project + run (inline code or path)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_run</code></td><td>Run existing project, capture output with timeout</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_stop</code></td><td>Stop a running project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_logs</code></td><td>Fetch logs (pending log store)</td><td><span class="badge badge-partial">Partial</span></td></tr>
+  <tr><td><code>runway_import_code</code></td><td>Import code from path or inline, create project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_detect_runtime</code></td><td>Auto-detect language, entrypoint, confidence</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_delete</code></td><td>Delete a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_health</code></td><td>System health check (version, project count, platform)</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
-<p>Transport: stdio (primary, for Claude Code) + HTTP via axum (for remote/web clients).</p>
+<p>Transport: stdio (primary, for Claude Code). HTTP via axum planned for Phase 3.</p>
+<p>Claude Code integration: <code>.mcp.json</code> config included in repo root.</p>
+
+<h3>MCP Architecture</h3>
+<pre><code>crates/runway-mcp/
+  src/
+    main.rs       -- Entry point, tokio::main, calls server::run_stdio()
+    lib.rs        -- Module exports (protocol, server, tools)
+    protocol.rs   -- JSON-RPC 2.0 types, MCP types (InitializeResult, Tool, CallToolResult)
+    server.rs     -- Stdio loop: read line -> parse JSON-RPC -> dispatch -> write response
+    tools.rs      -- Tool definitions (list_tools) + handlers (call_tool)</code></pre>
 
 <!-- ============================================================ -->
-<h2 id="cli">CLI (Phase 2)</h2>
+<h2 id="cli">CLI <span class="badge badge-done">Done</span></h2>
 
-<pre><code>runway list                                    # List projects
-runway deploy &lt;path&gt; --target &lt;target&gt;         # Deploy code
-runway logs &lt;project&gt; [-f|--follow]            # View logs
-runway status &lt;project&gt;                        # Check status
+<pre><code>runway list                                    # List all projects (table format)
+runway deploy &lt;path&gt; [--name N] [--target T]   # Create project + run
+runway run &lt;project&gt;                           # Run by name or UUID
+runway stop &lt;project&gt;                          # Stop a project
+runway logs &lt;project&gt; [-f|--follow]            # Run and capture output
+runway status &lt;project&gt;                        # Detailed project info
+runway import &lt;path&gt; [--name N]                # Import code as project
+runway detect &lt;path&gt;                           # Detect runtime
+runway delete &lt;project&gt;                        # Delete a project
+runway health                                  # System health check
 runway targets list                            # List deploy targets
-runway targets add &lt;name&gt; --host &lt;host&gt;       # Add target</code></pre>
+runway targets add &lt;name&gt; --host &lt;host&gt;       # Add target (Phase 3)</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="file-map">File Map</h2>
@@ -592,25 +606,33 @@ mac-rundeck/
 |   +-- src/
 |       +-- main.rs             <span class="muted">Desktop entry</span>
 |       +-- lib.rs              <span class="muted">Tauri builder, state, plugins</span>
-|       +-- commands.rs         <span class="muted">6 commands + ProcessRegistry</span>
+|       +-- commands.rs         <span class="muted">7 commands + ProcessRegistry + monitoring</span>
 |
 +-- <span class="green">crates/</span>
 |   +-- runway-core/            <span class="badge badge-done">Done</span>
 |   |   +-- src/
 |   |       +-- lib.rs          <span class="muted">Re-exports</span>
-|   |       +-- project.rs      <span class="muted">Project, ProjectStatus</span>
-|   |       +-- runtime.rs      <span class="muted">Runtime detection</span>
-|   |       +-- executor.rs     <span class="muted">Process spawn + log stream</span>
-|   |       +-- store.rs        <span class="muted">SQLite CRUD</span>
+|   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
+|   |       +-- runtime.rs      <span class="muted">Runtime detection (markers + entrypoints + extensions)</span>
+|   |       +-- executor.rs     <span class="muted">Process spawn + log stream (mpsc channel)</span>
+|   |       +-- store.rs        <span class="muted">SQLite CRUD + record_run_start/end + migration</span>
 |   |
-|   +-- runway-mcp/             <span class="badge badge-stub">Stub</span>
-|   |   +-- src/lib.rs          <span class="muted">12 MCP tool names defined</span>
+|   +-- runway-mcp/             <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |       +-- main.rs         <span class="muted">Entry point (stdio)</span>
+|   |       +-- lib.rs          <span class="muted">Module exports</span>
+|   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
+|   |       +-- server.rs       <span class="muted">Stdio server loop</span>
+|   |       +-- tools.rs        <span class="muted">10 tool definitions + handlers</span>
 |   |
-|   +-- runway-agent/           <span class="badge badge-stub">Stub</span>
-|   |   +-- src/main.rs         <span class="muted">Clap CLI, local mode</span>
+|   +-- runway-agent/           <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |   |   +-- main.rs         <span class="muted">gRPC server on localhost:50051</span>
+|   |   |   +-- service.rs      <span class="muted">AgentService impl (Execute, Status, Stop, Health)</span>
+|   |   +-- build.rs            <span class="muted">tonic-build proto compilation</span>
 |   |
-|   +-- runway-cli/             <span class="badge badge-stub">Stub</span>
-|       +-- src/main.rs         <span class="muted">Clap subcommands, stubs</span>
+|   +-- runway-cli/             <span class="badge badge-done">Done</span>
+|       +-- src/main.rs         <span class="muted">11 commands (list, deploy, run, stop, etc.)</span>
 |
 +-- proto/
 |   +-- runway.proto            <span class="muted">gRPC service (Phase 3)</span>
@@ -631,24 +653,33 @@ mac-rundeck/
 <!-- ============================================================ -->
 <h2 id="roadmap">Roadmap & Status</h2>
 
-<h3>Phase 1: Foundation <span class="badge badge-partial">In Progress</span></h3>
+<h3>Phase 1: Foundation <span class="badge badge-done">Complete</span></h3>
 <table>
   <tr><th>Item</th><th>Status</th></tr>
   <tr><td>Tauri app scaffold (project list, detail, code import)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>runway-core: project model, runtime detection</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>Run/Stop execution (executor wired to Tauri commands)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>Menu bar tray icon</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>Paste & Deploy: UI + create/detect</td><td><span class="badge badge-partial">Partial</span> (execution not connected, paste doesn't write to disk)</td></tr>
-  <tr><td>xterm.js log viewer</td><td><span class="badge badge-stub">Pending</span></td></tr>
-  <tr><td>Basic monitoring (process status, last run time)</td><td><span class="badge badge-stub">Pending</span></td></tr>
-  <tr><td>Local agent communication (Unix socket / gRPC)</td><td><span class="badge badge-stub">Pending</span></td></tr>
+  <tr><td>Run/Stop execution (ProcessRegistry, log streaming via events)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Paste & Deploy end-to-end (save to disk, smart quote normalization)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>xterm.js log viewer (ANSI colors, auto-fit, 10k scrollback)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Basic monitoring (run count, last run, exit codes, live uptime)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Local agent gRPC (tonic on localhost:50051)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Menu bar tray icon (TrayIconBuilder + managed state)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>UI polish (toasts, skeletons, runtime badges, live status)</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
-<h3>Phase 2: MCP + CLI <span class="badge badge-stub">Not Started</span></h3>
-<p>MCP server (stdio + HTTP), CLI tool, scheduling, Claude Code integration.</p>
+<h3>Phase 2: MCP + CLI <span class="badge badge-partial">In Progress</span></h3>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>MCP server (stdio, 10 tools, JSON-RPC 2.0)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>CLI tool (11 commands: list, deploy, run, stop, etc.)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>.mcp.json config for Claude Code integration</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>E2E test: Claude Code deploys via MCP</td><td><span class="badge badge-stub">Pending</span></td></tr>
+  <tr><td>Scheduling: cron-like local scheduling</td><td><span class="badge badge-stub">Pending</span></td></tr>
+  <tr><td>Auto-detect improvements (dep file parsing)</td><td><span class="badge badge-stub">Pending</span></td></tr>
+</table>
 
 <h3>Phase 3: Remote Agents <span class="badge badge-stub">Not Started</span></h3>
-<p>Agent install script, gRPC + mTLS, remote deploy, agent health monitoring.</p>
+<p>Agent install script, gRPC + mTLS over internet, remote deploy, agent health monitoring, mDNS LAN discovery.</p>
 
 <h3>Phase 4: Cloud Targets <span class="badge badge-stub">Not Started</span></h3>
 <p>AWS Lambda, Cloudflare Workers, deployment history, code signing, Homebrew cask.</p>
