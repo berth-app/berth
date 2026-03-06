@@ -48,14 +48,50 @@ pub fn detect_runtime(path: &Path) -> RuntimeInfo {
         }
     }
 
-    // Check for common script files
+    // Check for entrypoint files directly (no marker file present)
+    let direct_checks: &[(&str, Runtime)] = &[
+        ("main.py", Runtime::Python),
+        ("app.py", Runtime::Python),
+        ("run.py", Runtime::Python),
+        ("index.js", Runtime::Node),
+        ("index.ts", Runtime::Node),
+        ("main.js", Runtime::Node),
+        ("app.js", Runtime::Node),
+        ("main.go", Runtime::Go),
+        ("run.sh", Runtime::Shell),
+        ("start.sh", Runtime::Shell),
+        ("main.sh", Runtime::Shell),
+    ];
+
+    for (file, runtime) in direct_checks {
+        if path.join(file).exists() {
+            return RuntimeInfo {
+                runtime: *runtime,
+                version_file: None,
+                entrypoint: Some(file.to_string()),
+                confidence: 0.7,
+            };
+        }
+    }
+
+    // Check for files by extension as last resort
     for ext in &["sh", "bash", "zsh"] {
-        let pattern = format!("*.{ext}");
         if has_files_with_extension(path, ext) {
             return RuntimeInfo {
                 runtime: Runtime::Shell,
                 version_file: None,
-                entrypoint: Some(pattern),
+                entrypoint: find_first_with_extension(path, ext),
+                confidence: 0.5,
+            };
+        }
+    }
+
+    for (ext, runtime) in &[("py", Runtime::Python), ("js", Runtime::Node), ("go", Runtime::Go)] {
+        if has_files_with_extension(path, ext) {
+            return RuntimeInfo {
+                runtime: *runtime,
+                version_file: None,
+                entrypoint: find_first_with_extension(path, ext),
                 confidence: 0.5,
             };
         }
@@ -102,6 +138,19 @@ fn find_entrypoint(path: &Path, runtime: Runtime) -> Option<String> {
         .iter()
         .find(|c| path.join(c).exists())
         .map(|c| c.to_string())
+}
+
+fn find_first_with_extension(path: &Path, ext: &str) -> Option<String> {
+    path.read_dir()
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            e.path()
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e2| e2 == ext)
+        })
+        .map(|e| e.file_name().to_string_lossy().into())
 }
 
 fn has_files_with_extension(path: &Path, ext: &str) -> bool {

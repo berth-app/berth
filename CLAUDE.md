@@ -7,6 +7,16 @@
 
 Runway is a Tauri-based macOS app that lets developers deploy and manage code — especially AI-generated code from Claude Code, Codex, Cursor — to local machines, remote Linux servers, AWS Lambda, and Cloudflare Workers. It includes a lightweight Rust agent for remote execution and exposes an MCP server so AI coding agents can deploy and monitor programmatically.
 
+## Current Status (March 2026)
+
+Phase 1 scaffold is complete. The app compiles, launches, and renders.
+
+**Working end-to-end:** Create project (SQLite), list projects, detect runtime, delete project.
+**UI exists but not connected:** Run/Stop buttons, log viewer, paste-code-to-disk flow.
+**Stubs only:** MCP server, CLI, remote agent, gRPC communication.
+
+The app runs via `cargo tauri dev` on macOS. Private GitHub repo created.
+
 ## Design Philosophy
 
 ### Aesthetic is not decoration — it IS the product
@@ -131,14 +141,14 @@ runway agent install ubuntu@my-server.com
 ### Phase 1: Foundation (Month 1-2)
 **Goal: App shell + local execution**
 
-- [ ] Tauri app scaffold with React: project list, detail view, code import
-- [ ] runway-core (Rust): project model, runtime detection (Python, Node, Go, shell)
-- [ ] Local agent (Rust): execute scripts, capture stdout/stderr, exit codes
+- [x] Tauri app scaffold with React: project list, detail view, code import
+- [x] runway-core (Rust): project model, runtime detection (Python, Node, Go, shell)
+- [x] Local execution: Run/Stop via Tauri commands, ProcessRegistry, log streaming via events
 - [ ] Local agent communication: Unix socket, basic gRPC service via tonic
-- [ ] "Paste & Deploy" flow: paste code -> detect runtime -> run locally
-- [ ] xterm.js log viewer: streaming output, ANSI color support
+- [x] "Paste & Deploy" flow: paste code → save to disk → detect runtime → run
+- [ ] xterm.js log viewer: plain text viewer works, xterm.js upgrade pending
 - [ ] Basic monitoring: process status, last run time
-- [ ] Menu bar presence via Tauri tray plugin: quick status of running projects
+- [x] Menu bar presence via Tauri tray plugin: quick status of running projects
 
 **Ship:** Internal dogfood build. Use it yourself daily.
 
@@ -242,3 +252,4 @@ runway agent install ubuntu@my-server.com
 | Min macOS | 13 (Ventura) | Tauri 2.0 minimum; wider user base than macOS 15 |
 | Distribution | Direct download + Homebrew cask (primary) | Developer-native distribution; App Store optional later |
 | Pricing model | Freemium | Free local use, Pro for remote + cloud targets |
+| Backend storage | SQLite (rusqlite) | 3-way debate: SQLite won 3-0 over YAML/JSON. AI agents get JSON via MCP, not flat files (DRF 006) |

@@ -43,7 +43,7 @@ fn build_command(runtime: Runtime, entrypoint: &str, working_dir: &str) -> Comma
     let mut cmd = match runtime {
         Runtime::Python => {
             let mut c = Command::new("python3");
-            c.arg(entrypoint);
+            c.args(["-u", entrypoint]);
             c
         }
         Runtime::Node => {

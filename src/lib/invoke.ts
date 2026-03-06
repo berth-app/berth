@@ -34,6 +34,33 @@ export async function detectRuntime(path: string): Promise<RuntimeInfo> {
   return tauriInvoke<RuntimeInfo>("detect_runtime", { path });
 }
 
+export async function savePasteCode(
+  name: string,
+  code: string
+): Promise<string> {
+  return tauriInvoke<string>("save_paste_code", { name, code });
+}
+
 export async function deleteProject(id: string): Promise<void> {
   return tauriInvoke("delete_project", { id });
+}
+
+export async function runProject(id: string): Promise<void> {
+  return tauriInvoke("run_project", { id });
+}
+
+export async function stopProject(id: string): Promise<void> {
+  return tauriInvoke("stop_project", { id });
+}
+
+export interface LogEvent {
+  project_id: string;
+  stream: "stdout" | "stderr";
+  text: string;
+  timestamp: string;
+}
+
+export interface StatusEvent {
+  project_id: string;
+  status: "idle" | "running" | "stopped" | "failed";
 }

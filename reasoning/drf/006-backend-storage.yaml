@@ -1,0 +1,72 @@
+id: "006"
+title: Backend Storage Selection
+status: decided
+date: "2026-03-06"
+deciders: [claude, gemini, codex-simulated]
+format_version: "1.0"
+
+context:
+  question: "Should Runway use SQLite, YAML/JSON flat files, or a hybrid for project data storage?"
+  constraints:
+    - Solo founder, 6-month MVP timeline
+    - 10-20 typical projects, must scale to 100
+    - MCP server (AI agents) reads/writes project data
+    - Future: team features, web dashboard, sync
+    - User prefers file-based for AI agent accessibility and easy migration
+
+options:
+  - id: sqlite
+    name: SQLite via rusqlite (current)
+    pros:
+      - ACID transactions prevent corruption from concurrent Tauri commands
+      - WAL mode handles concurrent reads/writes without locks
+      - Sub-millisecond queries at 100 rows
+      - Mac app gold standard (Things 3, Bear, Raycast use it)
+      - Clear migration path to PostgreSQL for team/sync features
+      - Already implemented in store.rs (~80 lines)
+    cons:
+      - Not human-readable without tools
+      - AI agents cant edit directly (need MCP interface)
+
+  - id: yaml-json
+    name: YAML/JSON flat files
+    pros:
+      - Human-readable and discoverable
+      - AI agents write YAML/JSON naturally
+      - Git-diffable, version-controllable
+      - Migration is just copying files
+    cons:
+      - No ACID transactions, concurrent write races
+      - Whole-file rewrite pattern risks corruption on crash
+      - Querying 100 files for list operations is wasteful
+      - Need file locks for concurrent access
+      - Single YAML syntax error corrupts entire file
+
+  - id: hybrid
+    name: YAML files + SQLite index (Obsidian pattern)
+    pros:
+      - User-facing discoverability of YAML
+      - SQLite for fast queries
+    cons:
+      - Dual-write complexity burns solo founder time
+      - YAML/SQLite drift is hard to resolve
+      - Obsidian comparison invalid (document-centric vs orchestration tool)
+      - 40% dev time on sync bugs instead of features
+
+decision: sqlite
+confidence: high
+vote: "3-0 (all perspectives converged on SQLite)"
+
+rationale: |
+  All three debate perspectives agreed: SQLite is the right choice.
+  The AI-friendly requirement is satisfied by MCP tools returning JSON,
+  not by flat files. Dual-write hybrid adds complexity a solo founder
+  cannot afford. The current rusqlite implementation works and needs
+  no changes.
+
+implementation_notes:
+  - Keep current store.rs as-is
+  - Consider adding a JSON metadata column for schema-free flexible fields
+  - AI agents interact through MCP tools (JSON), never touch SQLite directly
+  - Future: add one-way "runway export --format yaml" if users demand portability
+  - Do NOT build bidirectional file sync

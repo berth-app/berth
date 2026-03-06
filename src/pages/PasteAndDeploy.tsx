@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createProject, detectRuntime, type RuntimeInfo } from "../lib/invoke";
+import { createProject, detectRuntime, savePasteCode, type RuntimeInfo } from "../lib/invoke";
 
 interface Props {
   onBack: () => void;
@@ -28,7 +28,15 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
     if (!name) return;
     setCreating(true);
     try {
-      const project = await createProject(name, path || "/tmp/runway-scratch");
+      let projectPath = path;
+      if (mode === "paste" && code) {
+        projectPath = await savePasteCode(name, code);
+      }
+      if (!projectPath) {
+        console.error("No code or path provided");
+        return;
+      }
+      const project = await createProject(name, projectPath);
       onCreated(project.id);
     } catch (e) {
       console.error("Failed to create project:", e);
@@ -151,7 +159,7 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
         {/* Deploy button */}
         <button
           onClick={handleCreate}
-          disabled={!name || creating}
+          disabled={!name || creating || (mode === "paste" && !code) || (mode === "directory" && !path)}
           className="px-4 py-3 rounded-lg bg-runway-accent text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {creating ? "Creating..." : "Create Project"}

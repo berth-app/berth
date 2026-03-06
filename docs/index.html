@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Runway - Technical Documentation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--text); }
+  h4 { font-size: 0.95rem; margin: 1rem 0 0.3rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  p, li { color: var(--muted); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; color: var(--text); }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+  th { background: var(--surface); color: var(--text); font-weight: 600; }
+  td { color: var(--muted); }
+  .badge { display: inline-block; padding: 0.15em 0.5em; border-radius: 12px; font-size: 0.75em; font-weight: 600; }
+  .badge-done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-stub { background: rgba(210,153,34,0.15); color: var(--orange); }
+  .badge-partial { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }
+  nav { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 2rem; }
+  nav a { display: inline-block; margin: 0.2rem 0.5rem; font-size: 0.9rem; }
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; font-family: 'SF Mono', monospace; font-size: 0.8rem; line-height: 1.4; white-space: pre; overflow-x: auto; color: var(--muted); }
+  .diagram .highlight { color: var(--accent); }
+  .diagram .green { color: var(--green); }
+  .diagram .red { color: var(--red); }
+  .diagram .purple { color: var(--purple); }
+  .diagram .orange { color: var(--orange); }
+  .diagram .pink { color: var(--pink); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+  .card h3 { margin-top: 0; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Runway</h1>
+<p class="subtitle">Mac-native deployment control plane for AI-generated code. &mdash; v0.1.0</p>
+
+<nav>
+  <strong>Contents:</strong>
+  <a href="#architecture">Architecture</a>
+  <a href="#data-flow">Data Flow</a>
+  <a href="#crates">Rust Crates</a>
+  <a href="#database">Database</a>
+  <a href="#tauri-commands">Tauri Commands</a>
+  <a href="#events">Events</a>
+  <a href="#frontend">Frontend</a>
+  <a href="#design-tokens">Design Tokens</a>
+  <a href="#protobuf">Protobuf</a>
+  <a href="#mcp">MCP Server</a>
+  <a href="#cli">CLI</a>
+  <a href="#file-map">File Map</a>
+  <a href="#roadmap">Roadmap</a>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="architecture">System Architecture</h2>
+
+<div class="diagram">
+<span class="highlight">+----------------------------------------------------------+</span>
+<span class="highlight">|                    Tauri Desktop App                      |</span>
+<span class="highlight">|                                                          |</span>
+<span class="highlight">|  <span class="green">React 19 Frontend</span>          <span class="purple">Rust Backend</span>               |</span>
+<span class="highlight">|  +--------------------+    +-------------------------+  |</span>
+<span class="highlight">|  | ProjectList.tsx    |    | commands.rs             |  |</span>
+<span class="highlight">|  | ProjectDetail.tsx  |&lt;--&gt;| (6 Tauri commands)      |  |</span>
+<span class="highlight">|  | PasteAndDeploy.tsx |    |   + ProcessRegistry     |  |</span>
+<span class="highlight">|  +--------------------+    +------------+------------+  |</span>
+<span class="highlight">|       invoke() / listen()               |                |</span>
+<span class="highlight">+------------------------------------------+----------------+</span>
+                                           |
+                                    <span class="purple">runway-core</span>
+                              +------------+------------+
+                              |                         |
+                     +--------+--------+    +-----------+---------+
+                     | <span class="green">executor.rs</span>     |    | <span class="green">store.rs</span>             |
+                     | spawn_and_stream|    | SQLite (rusqlite)   |
+                     | LogLine channel |    | projects table      |
+                     +-----------------+    +---------------------+
+                              |
+              +---------------+---------------+
+              |               |               |
+         <span class="orange">Local Mac</span>      <span class="orange">Linux VPS</span>       <span class="orange">Serverless</span>
+         (Phase 1)     (Phase 3)       (Phase 4)
+</div>
+
+<h3>Workspace Crates</h3>
+<div class="grid">
+  <div class="card">
+    <h3>runway-core <span class="badge badge-done">Done</span></h3>
+    <p>Shared business logic: project model, runtime detection, process executor, SQLite store.</p>
+  </div>
+  <div class="card">
+    <h3>runway-app (src-tauri) <span class="badge badge-done">Done</span></h3>
+    <p>Tauri 2.0 desktop app. Rust backend with 6 commands + React frontend with 3 pages.</p>
+  </div>
+  <div class="card">
+    <h3>runway-mcp <span class="badge badge-stub">Stub</span></h3>
+    <p>MCP server for AI agent control. 12 tools defined. Phase 2 implementation.</p>
+  </div>
+  <div class="card">
+    <h3>runway-agent <span class="badge badge-stub">Stub</span></h3>
+    <p>Remote execution agent binary. Local mode only. gRPC server in Phase 3.</p>
+  </div>
+  <div class="card">
+    <h3>runway-cli <span class="badge badge-stub">Stub</span></h3>
+    <p>CLI interface. Subcommands defined (list, deploy, logs, status, targets). Phase 2.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="data-flow">Data Flow</h2>
+
+<h3>Project Execution Flow</h3>
+<div class="diagram">
+<span class="green">User clicks "Run"</span>
+      |
+      v
+<span class="highlight">ProjectDetail.tsx</span> --invoke("run_project")--> <span class="purple">commands.rs::run_project()</span>
+                                                  |
+                                         +--------+--------+
+                                         |                 |
+                                    store.get(uuid)   registry.lock()
+                                         |            (prevent double-run)
+                                         v
+                                  <span class="green">executor::spawn_and_stream()</span>
+                                         |
+                                  Returns (Child, Receiver&lt;LogLine&gt;)
+                                         |
+                              +----------+-----------+
+                              |                      |
+                         Child stored in        tokio::spawn(log_task)
+                         ProcessRegistry             |
+                                              reads from Receiver
+                                                     |
+                                              <span class="highlight">app.emit("project-log", LogEvent)</span>
+                                                     |
+                                                     v
+                                         <span class="green">ProjectDetail.tsx</span>
+                                         listen("project-log")
+                                         appends to logs state
+                                         renders in log viewer
+
+<span class="red">When process exits:</span>
+  log_task detects channel closed
+      --> registry.remove(uuid)
+      --> child.wait() for exit code
+      --> store.update_status(Idle or Failed)
+      --> <span class="highlight">app.emit("project-status-change")</span>
+</div>
+
+<h3>Project Creation Flow</h3>
+<div class="diagram">
+<span class="green">PasteAndDeploy.tsx</span>
+      |
+      +--> invoke("detect_runtime", { path })
+      |         |
+      |    <span class="purple">runtime::detect_runtime()</span>
+      |         |
+      |    Scans for marker files:
+      |    requirements.txt -> Python
+      |    package.json     -> Node
+      |    go.mod           -> Go
+      |    Cargo.toml       -> Rust
+      |         |
+      |    Returns RuntimeInfo { runtime, entrypoint, confidence }
+      |
+      +--> invoke("create_project", { name, path })
+               |
+          <span class="purple">commands.rs::create_project()</span>
+               |
+          detect_runtime + Project::new + store.insert
+               |
+          Returns Project (saved to SQLite)
+</div>
+
+<!-- ============================================================ -->
+<h2 id="crates">Rust Crates Detail</h2>
+
+<h3>runway-core::project</h3>
+<pre><code>pub struct Project {
+    pub id: Uuid,
+    pub name: String,
+    pub path: String,
+    pub runtime: Runtime,
+    pub entrypoint: Option&lt;String&gt;,
+    pub status: ProjectStatus,
+    pub created_at: DateTime&lt;Utc&gt;,
+    pub updated_at: DateTime&lt;Utc&gt;,
+}
+
+pub enum ProjectStatus {
+    Idle,       // Not running
+    Running,    // Process active
+    Stopped,    // Manually stopped
+    Failed,     // Non-zero exit code
+}
+
+impl Project {
+    pub fn new(name: String, path: String, runtime: Runtime) -&gt; Self
+    // Generates UUID v4, sets status to Idle, timestamps to now
+}</code></pre>
+
+<h3>runway-core::runtime</h3>
+<pre><code>pub enum Runtime {
+    Python, Node, Go, Rust, Shell, Unknown,
+}
+
+pub struct RuntimeInfo {
+    pub runtime: Runtime,
+    pub version_file: Option&lt;String&gt;,
+    pub entrypoint: Option&lt;String&gt;,
+    pub confidence: f32,          // 0.0 - 1.0
+}
+
+pub fn detect_runtime(path: &amp;Path) -&gt; RuntimeInfo</code></pre>
+
+<h4>Detection Matrix</h4>
+<table>
+  <tr><th>Marker File</th><th>Runtime</th><th>Entrypoints Checked</th></tr>
+  <tr><td><code>requirements.txt</code>, <code>pyproject.toml</code>, <code>setup.py</code></td><td>Python</td><td><code>main.py</code>, <code>app.py</code>, <code>run.py</code>, <code>__main__.py</code></td></tr>
+  <tr><td><code>package.json</code></td><td>Node</td><td><code>index.js</code>, <code>index.ts</code>, <code>main.js</code>, <code>app.js</code></td></tr>
+  <tr><td><code>go.mod</code></td><td>Go</td><td><code>main.go</code>, <code>cmd/main.go</code></td></tr>
+  <tr><td><code>Cargo.toml</code></td><td>Rust</td><td><code>src/main.rs</code></td></tr>
+  <tr><td><code>*.sh</code>, <code>*.bash</code></td><td>Shell</td><td><code>run.sh</code>, <code>start.sh</code>, <code>main.sh</code></td></tr>
+</table>
+
+<h3>runway-core::executor</h3>
+<pre><code>pub struct LogLine {
+    pub stream: LogStream,        // Stdout or Stderr
+    pub text: String,
+    pub timestamp: DateTime&lt;Utc&gt;,
+}
+
+pub enum LogStream { Stdout, Stderr }
+
+pub async fn spawn_and_stream(
+    runtime: Runtime,
+    entrypoint: &amp;str,
+    working_dir: &amp;str,
+) -&gt; anyhow::Result&lt;(Child, mpsc::Receiver&lt;LogLine&gt;)&gt;</code></pre>
+
+<h4>Command Mapping</h4>
+<table>
+  <tr><th>Runtime</th><th>Command</th></tr>
+  <tr><td>Python</td><td><code>python3 -u &lt;entrypoint&gt;</code></td></tr>
+  <tr><td>Node</td><td><code>node &lt;entrypoint&gt;</code></td></tr>
+  <tr><td>Go</td><td><code>go run &lt;entrypoint&gt;</code></td></tr>
+  <tr><td>Rust</td><td><code>cargo run</code></td></tr>
+  <tr><td>Shell / Unknown</td><td><code>sh &lt;entrypoint&gt;</code></td></tr>
+</table>
+<p>All commands run with <code>kill_on_drop(true)</code>, piped stdout/stderr, and two background tokio tasks reading into a 256-capacity mpsc channel.</p>
+
+<h3>runway-core::store</h3>
+<pre><code>pub struct ProjectStore { conn: Connection }
+
+impl ProjectStore {
+    pub fn open(path: &amp;str) -&gt; Result&lt;Self&gt;
+    pub fn open_in_memory() -&gt; Result&lt;Self&gt;
+    pub fn list(&amp;self) -&gt; Result&lt;Vec&lt;Project&gt;&gt;
+    pub fn insert(&amp;self, project: &amp;Project) -&gt; Result&lt;()&gt;
+    pub fn get(&amp;self, id: Uuid) -&gt; Result&lt;Option&lt;Project&gt;&gt;
+    pub fn update_status(&amp;self, id: Uuid, status: ProjectStatus) -&gt; Result&lt;()&gt;
+    pub fn delete(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="database">Database Schema</h2>
+
+<h3>SQLite &mdash; <code>~/Library/Application Support/com.runway.app/runway.db</code></h3>
+
+<div class="diagram">
++-------------------------------------------------------------------+
+|                          <span class="highlight">projects</span>                                 |
++-------------------------------------------------------------------+
+| <span class="green">id</span>          TEXT PRIMARY KEY    UUID v4 as string                 |
+| <span class="green">name</span>        TEXT NOT NULL       Human-readable project name       |
+| <span class="green">path</span>        TEXT NOT NULL       Absolute filesystem path           |
+| <span class="green">runtime</span>     TEXT NOT NULL       python|node|go|rust|shell|unknown  |
+| <span class="green">entrypoint</span>  TEXT               main.py, index.js, etc. (nullable) |
+| <span class="green">status</span>      TEXT NOT NULL       idle|running|stopped|failed         |
+|             DEFAULT 'idle'                                         |
+| <span class="green">created_at</span>  TEXT NOT NULL       RFC 3339 timestamp                 |
+| <span class="green">updated_at</span>  TEXT NOT NULL       RFC 3339 timestamp                 |
++-------------------------------------------------------------------+
+</div>
+
+<h4>Status State Machine</h4>
+<div class="diagram">
+                   create_project()
+                        |
+                        v
+                  +----------+
+         +--------+  <span class="green">Idle</span>   +&lt;-------+
+         |        +----+-----+        |
+         |             |              |
+    run_project()  run_project()  exit code 0
+         |             |              |
+         v             v              |
+  +----------+   +-----------+       |
+  | <span class="red">Failed</span>   |   | <span class="highlight">Running</span>  +-------+
+  | (no      |   +-----+-----+
+  | entrypoint)        |
+  +----------+    stop_project()
+                       |
+                       v
+                 +-----------+
+                 | <span class="orange">Stopped</span>   |
+                 +-----------+
+
+  <span class="red">Failed</span> also occurs on non-zero exit code
+</div>
+
+<h4>Column Formats</h4>
+<table>
+  <tr><th>Column</th><th>Format</th><th>Example</th></tr>
+  <tr><td><code>id</code></td><td>UUID v4 string</td><td><code>8bda6c73-3ead-47f5-a64d-8d8b48f428d3</code></td></tr>
+  <tr><td><code>runtime</code></td><td>lowercase enum</td><td><code>python</code>, <code>node</code>, <code>go</code>, <code>rust</code>, <code>shell</code>, <code>unknown</code></td></tr>
+  <tr><td><code>status</code></td><td>lowercase enum</td><td><code>idle</code>, <code>running</code>, <code>stopped</code>, <code>failed</code></td></tr>
+  <tr><td><code>created_at</code></td><td>RFC 3339</td><td><code>2026-03-06T08:30:00+00:00</code></td></tr>
+  <tr><td><code>updated_at</code></td><td>RFC 3339</td><td><code>2026-03-06T09:15:42+00:00</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="tauri-commands">Tauri Commands</h2>
+
+<table>
+  <tr><th>Command</th><th>Params</th><th>Returns</th><th>Async</th></tr>
+  <tr><td><code>list_projects</code></td><td>&mdash;</td><td><code>{ projects: Project[] }</code></td><td>No</td></tr>
+  <tr><td><code>create_project</code></td><td><code>name: String, path: String</code></td><td><code>Project</code></td><td>No</td></tr>
+  <tr><td><code>detect_runtime</code></td><td><code>path: String</code></td><td><code>RuntimeInfo</code></td><td>No</td></tr>
+  <tr><td><code>delete_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>run_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>Yes</td></tr>
+  <tr><td><code>stop_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>Yes</td></tr>
+</table>
+
+<h3>Managed State</h3>
+<pre><code>pub type ProcessRegistry = Arc&lt;tokio::sync::Mutex&lt;HashMap&lt;Uuid, RunningProcess&gt;&gt;&gt;;
+
+pub struct RunningProcess {
+    pub child: tokio::process::Child,
+    pub log_task_abort: tokio::task::AbortHandle,
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="events">Tauri Events</h2>
+
+<table>
+  <tr><th>Event Name</th><th>Payload</th><th>Emitted By</th></tr>
+  <tr><td><code>project-log</code></td><td><code>LogEvent</code></td><td>Background log task in <code>run_project</code></td></tr>
+  <tr><td><code>project-status-change</code></td><td><code>StatusEvent</code></td><td><code>run_project</code>, <code>stop_project</code>, log task cleanup</td></tr>
+</table>
+
+<h4>Event Payloads</h4>
+<pre><code>// LogEvent (Rust -> Frontend)
+{
+  "project_id": "8bda6c73-...",
+  "stream": "stdout",          // "stdout" | "stderr"
+  "text": "[1/10] AAPL: $215.13 (+4.64%)",
+  "timestamp": "2026-03-06T09:15:42.123+00:00"
+}
+
+// StatusEvent (Rust -> Frontend)
+{
+  "project_id": "8bda6c73-...",
+  "status": "running"          // "idle" | "running" | "stopped" | "failed"
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="frontend">Frontend Components</h2>
+
+<h3>Component Tree</h3>
+<div class="diagram">
+<span class="highlight">App.tsx</span> (root, view router, titlebar)
+  |
+  +-- view === "list"
+  |     <span class="green">ProjectList.tsx</span>
+  |       Props: onSelect(id), onNewProject()
+  |       State: projects[], loading
+  |
+  +-- view === "detail"
+  |     <span class="green">ProjectDetail.tsx</span>
+  |       Props: projectId, onBack()
+  |       State: project, status, logs[], error
+  |       Listens: project-log, project-status-change
+  |
+  +-- view === "paste"
+        <span class="green">PasteAndDeploy.tsx</span>
+          Props: onBack(), onCreated(id)
+          State: name, code, path, runtimeInfo, mode, creating
+</div>
+
+<h3>TypeScript Interfaces</h3>
+<pre><code>interface Project {
+  id: string;
+  name: string;
+  path: string;
+  runtime: string;
+  entrypoint: string | null;
+  status: "idle" | "running" | "stopped" | "failed";
+  created_at: string;
+  updated_at: string;
+}
+
+interface RuntimeInfo {
+  runtime: string;
+  version_file: string | null;
+  entrypoint: string | null;
+  confidence: number;           // 0.0 - 1.0
+}
+
+interface LogEvent {
+  project_id: string;
+  stream: "stdout" | "stderr";
+  text: string;
+  timestamp: string;
+}
+
+interface StatusEvent {
+  project_id: string;
+  status: "idle" | "running" | "stopped" | "failed";
+}</code></pre>
+
+<h3>Invoke Functions</h3>
+<pre><code>listProjects(): Promise&lt;Project[]&gt;
+createProject(name: string, path: string): Promise&lt;Project&gt;
+detectRuntime(path: string): Promise&lt;RuntimeInfo&gt;
+deleteProject(id: string): Promise&lt;void&gt;
+runProject(id: string): Promise&lt;void&gt;
+stopProject(id: string): Promise&lt;void&gt;</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="design-tokens">Design Tokens</h2>
+
+<h4>Dark Mode (default)</h4>
+<table>
+  <tr><th>Token</th><th>Value</th><th>Usage</th></tr>
+  <tr><td><code>--runway-bg</code></td><td><code>#1c1c1e</code></td><td>Page background</td></tr>
+  <tr><td><code>--runway-surface</code></td><td><code>#2c2c2e</code></td><td>Cards, inputs, log viewer</td></tr>
+  <tr><td><code>--runway-border</code></td><td><code>#3a3a3c</code></td><td>Borders, dividers</td></tr>
+  <tr><td><code>--runway-text</code></td><td><code>#f5f5f7</code></td><td>Primary text</td></tr>
+  <tr><td><code>--runway-muted</code></td><td><code>#8e8e93</code></td><td>Secondary text, labels</td></tr>
+  <tr><td><code>--runway-accent</code></td><td><code>#0a84ff</code></td><td>Buttons, links, active states</td></tr>
+  <tr><td><code>--runway-success</code></td><td><code>#30d158</code></td><td>Running status</td></tr>
+  <tr><td><code>--runway-error</code></td><td><code>#ff453a</code></td><td>Failed status, stderr</td></tr>
+</table>
+
+<h4>Light Mode</h4>
+<table>
+  <tr><th>Token</th><th>Value</th></tr>
+  <tr><td><code>--runway-bg</code></td><td><code>#f2f2f7</code></td></tr>
+  <tr><td><code>--runway-surface</code></td><td><code>#ffffff</code></td></tr>
+  <tr><td><code>--runway-border</code></td><td><code>#d1d1d6</code></td></tr>
+  <tr><td><code>--runway-text</code></td><td><code>#1c1c1e</code></td></tr>
+  <tr><td><code>--runway-accent</code></td><td><code>#007aff</code></td></tr>
+  <tr><td><code>--runway-success</code></td><td><code>#34c759</code></td></tr>
+  <tr><td><code>--runway-error</code></td><td><code>#ff3b30</code></td></tr>
+</table>
+
+<h4>Typography</h4>
+<pre><code>font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+             "Helvetica Neue", Helvetica, Arial, sans-serif;
+-webkit-font-smoothing: antialiased;
+user-select: none;</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="protobuf">Protobuf / gRPC (Phase 3)</h2>
+
+<pre><code>syntax = "proto3";
+package runway;
+
+service AgentService {
+  rpc Execute(ExecuteRequest)       returns (stream ExecuteResponse);
+  rpc Status(StatusRequest)         returns (StatusResponse);
+  rpc StreamLogs(LogStreamRequest)  returns (stream LogStreamResponse);
+  rpc Stop(StopRequest)             returns (StopResponse);
+  rpc Health(HealthRequest)         returns (HealthResponse);
+}</code></pre>
+
+<h4>Message Types</h4>
+<table>
+  <tr><th>Message</th><th>Key Fields</th><th>Notes</th></tr>
+  <tr><td><code>ExecuteRequest</code></td><td>project_id, runtime, entrypoint, code (bytes), working_dir</td><td>code field for paste-and-deploy</td></tr>
+  <tr><td><code>ExecuteResponse</code></td><td>stream, text, timestamp</td><td>Server-streaming</td></tr>
+  <tr><td><code>StatusRequest</code></td><td>project_id</td><td>Empty = agent-level status</td></tr>
+  <tr><td><code>StatusResponse</code></td><td>agent_id, status, cpu_usage, memory_bytes, projects[]</td><td></td></tr>
+  <tr><td><code>ProjectStatus</code></td><td>project_id, status, pid, started_at</td><td>Nested in StatusResponse</td></tr>
+  <tr><td><code>LogStreamRequest</code></td><td>project_id, follow, tail_lines</td><td>tail_lines=0 means all</td></tr>
+  <tr><td><code>StopRequest/Response</code></td><td>project_id / success, message</td><td></td></tr>
+  <tr><td><code>HealthRequest/Response</code></td><td>&mdash; / agent_version, status, uptime_seconds</td><td></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="mcp">MCP Server (Phase 2)</h2>
+
+<p>12 tools defined for AI agent control via Model Context Protocol:</p>
+
+<table>
+  <tr><th>Tool</th><th>Purpose</th></tr>
+  <tr><td><code>runway_list_projects</code></td><td>List all projects with status</td></tr>
+  <tr><td><code>runway_project_status</code></td><td>Detailed status of one project</td></tr>
+  <tr><td><code>runway_deploy</code></td><td>Deploy code to a target</td></tr>
+  <tr><td><code>runway_stop</code></td><td>Stop a running deployment</td></tr>
+  <tr><td><code>runway_restart</code></td><td>Restart a deployment</td></tr>
+  <tr><td><code>runway_logs</code></td><td>Stream or fetch logs</td></tr>
+  <tr><td><code>runway_list_targets</code></td><td>List configured deploy targets</td></tr>
+  <tr><td><code>runway_add_target</code></td><td>Configure a new target</td></tr>
+  <tr><td><code>runway_list_agents</code></td><td>List connected agents</td></tr>
+  <tr><td><code>runway_import_code</code></td><td>Import code from path or stdin</td></tr>
+  <tr><td><code>runway_detect_runtime</code></td><td>Auto-detect language and deps</td></tr>
+  <tr><td><code>runway_health</code></td><td>System health check</td></tr>
+</table>
+
+<p>Transport: stdio (primary, for Claude Code) + HTTP via axum (for remote/web clients).</p>
+
+<!-- ============================================================ -->
+<h2 id="cli">CLI (Phase 2)</h2>
+
+<pre><code>runway list                                    # List projects
+runway deploy &lt;path&gt; --target &lt;target&gt;         # Deploy code
+runway logs &lt;project&gt; [-f|--follow]            # View logs
+runway status &lt;project&gt;                        # Check status
+runway targets list                            # List deploy targets
+runway targets add &lt;name&gt; --host &lt;host&gt;       # Add target</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="file-map">File Map</h2>
+
+<div class="diagram">
+mac-rundeck/
++-- Cargo.toml                  <span class="muted">Workspace manifest</span>
++-- Cargo.lock
++-- package.json                <span class="muted">React frontend deps</span>
++-- tsconfig.json
++-- vite.config.ts
++-- tailwind.config.ts
++-- postcss.config.js
++-- index.html                  <span class="muted">Vite entry</span>
++-- CLAUDE.md                   <span class="muted">Project instructions</span>
++-- PRODUCT_VISION.md           <span class="muted">Business & market</span>
+|
++-- <span class="highlight">src/</span>                        <span class="muted">React frontend</span>
+|   +-- main.tsx                <span class="muted">React entry</span>
+|   +-- App.tsx                 <span class="muted">Root component, view router</span>
+|   +-- lib/
+|   |   +-- invoke.ts           <span class="muted">6 typed Tauri invoke functions</span>
+|   +-- pages/
+|   |   +-- ProjectList.tsx     <span class="muted">Project list with status</span>
+|   |   +-- ProjectDetail.tsx   <span class="muted">Run/Stop, log viewer, events</span>
+|   |   +-- PasteAndDeploy.tsx  <span class="muted">Code import wizard</span>
+|   +-- styles/
+|       +-- globals.css         <span class="muted">macOS design tokens</span>
+|
++-- <span class="purple">src-tauri/</span>                  <span class="muted">Tauri Rust backend</span>
+|   +-- Cargo.toml
+|   +-- tauri.conf.json         <span class="muted">Window, tray, plugins</span>
+|   +-- build.rs
+|   +-- capabilities/
+|   |   +-- default.json        <span class="muted">Permissions</span>
+|   +-- icons/
+|   |   +-- icon.png            <span class="muted">32x32 tray icon</span>
+|   +-- src/
+|       +-- main.rs             <span class="muted">Desktop entry</span>
+|       +-- lib.rs              <span class="muted">Tauri builder, state, plugins</span>
+|       +-- commands.rs         <span class="muted">6 commands + ProcessRegistry</span>
+|
++-- <span class="green">crates/</span>
+|   +-- runway-core/            <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |       +-- lib.rs          <span class="muted">Re-exports</span>
+|   |       +-- project.rs      <span class="muted">Project, ProjectStatus</span>
+|   |       +-- runtime.rs      <span class="muted">Runtime detection</span>
+|   |       +-- executor.rs     <span class="muted">Process spawn + log stream</span>
+|   |       +-- store.rs        <span class="muted">SQLite CRUD</span>
+|   |
+|   +-- runway-mcp/             <span class="badge badge-stub">Stub</span>
+|   |   +-- src/lib.rs          <span class="muted">12 MCP tool names defined</span>
+|   |
+|   +-- runway-agent/           <span class="badge badge-stub">Stub</span>
+|   |   +-- src/main.rs         <span class="muted">Clap CLI, local mode</span>
+|   |
+|   +-- runway-cli/             <span class="badge badge-stub">Stub</span>
+|       +-- src/main.rs         <span class="muted">Clap subcommands, stubs</span>
+|
++-- proto/
+|   +-- runway.proto            <span class="muted">gRPC service (Phase 3)</span>
+|
++-- reasoning/                  <span class="muted">Decision records (DRF/CRF)</span>
+|   +-- crf/runway-project.yaml
+|   +-- drf/001-framework-selection.yaml
+|   +-- drf/002-agent-language.yaml
+|   +-- drf/003-product-positioning.yaml
+|   +-- drf/004-business-model.yaml
+|   +-- drf/005-mcp-as-core.yaml
+|   +-- drf/006-backend-storage.yaml
+|
++-- docs/                       <span class="muted">This documentation</span>
+    +-- index.html
+</div>
+
+<!-- ============================================================ -->
+<h2 id="roadmap">Roadmap & Status</h2>
+
+<h3>Phase 1: Foundation <span class="badge badge-partial">In Progress</span></h3>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>Tauri app scaffold (project list, detail, code import)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>runway-core: project model, runtime detection</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Run/Stop execution (executor wired to Tauri commands)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Menu bar tray icon</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Paste & Deploy: UI + create/detect</td><td><span class="badge badge-partial">Partial</span> (execution not connected, paste doesn't write to disk)</td></tr>
+  <tr><td>xterm.js log viewer</td><td><span class="badge badge-stub">Pending</span></td></tr>
+  <tr><td>Basic monitoring (process status, last run time)</td><td><span class="badge badge-stub">Pending</span></td></tr>
+  <tr><td>Local agent communication (Unix socket / gRPC)</td><td><span class="badge badge-stub">Pending</span></td></tr>
+</table>
+
+<h3>Phase 2: MCP + CLI <span class="badge badge-stub">Not Started</span></h3>
+<p>MCP server (stdio + HTTP), CLI tool, scheduling, Claude Code integration.</p>
+
+<h3>Phase 3: Remote Agents <span class="badge badge-stub">Not Started</span></h3>
+<p>Agent install script, gRPC + mTLS, remote deploy, agent health monitoring.</p>
+
+<h3>Phase 4: Cloud Targets <span class="badge badge-stub">Not Started</span></h3>
+<p>AWS Lambda, Cloudflare Workers, deployment history, code signing, Homebrew cask.</p>
+
+<h3>Phase 5: Growth <span class="badge badge-stub">Not Started</span></h3>
+<p>Pro tier, team features, web dashboard, Windows/Linux builds.</p>
+
+<!-- ============================================================ -->
+<h2>Tech Stack Summary</h2>
+<table>
+  <tr><th>Layer</th><th>Technology</th><th>Version</th></tr>
+  <tr><td>Desktop Framework</td><td>Tauri</td><td>2.10</td></tr>
+  <tr><td>Frontend</td><td>React + TypeScript</td><td>19 / 5.6</td></tr>
+  <tr><td>Build Tool</td><td>Vite</td><td>6.0</td></tr>
+  <tr><td>Styling</td><td>Tailwind CSS</td><td>3.4</td></tr>
+  <tr><td>Rust Runtime</td><td>tokio</td><td>1.x (full)</td></tr>
+  <tr><td>Database</td><td>SQLite via rusqlite</td><td>0.32 (bundled)</td></tr>
+  <tr><td>Serialization</td><td>serde + serde_json</td><td>1.x</td></tr>
+  <tr><td>gRPC (Phase 3)</td><td>tonic + prost</td><td>0.12 / 0.13</td></tr>
+  <tr><td>CLI Parsing</td><td>clap</td><td>4.x</td></tr>
+  <tr><td>Logging</td><td>tracing + tracing-subscriber</td><td>0.1 / 0.3</td></tr>
+</table>
+
+<hr style="border-color: var(--border); margin: 3rem 0 1rem;">
+<p style="text-align: center; font-size: 0.85rem;">
+  Runway v0.1.0 &mdash; Documentation generated March 2026<br>
+  <a href="https://github.com/setillo/runway">github.com/setillo/runway</a>
+</p>
+
+</div>
+</body>
+</html>
