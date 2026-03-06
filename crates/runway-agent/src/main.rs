@@ -1,13 +1,23 @@
+mod service;
+
 use clap::Parser;
+use tonic::transport::Server;
+
+pub mod proto {
+    tonic::include_proto!("runway");
+}
+
+use proto::agent_service_server::AgentServiceServer;
+use service::AgentServiceImpl;
 
 #[derive(Parser)]
 #[command(name = "runway-agent", about = "Runway deployment agent")]
 struct Cli {
-    /// Run in local mode (no gRPC server)
+    /// Run in local mode (localhost only)
     #[arg(long, default_value_t = true)]
     local: bool,
 
-    /// Port for gRPC server (Phase 3)
+    /// Port for gRPC server
     #[arg(long, default_value_t = 50051)]
     port: u16,
 }
@@ -18,13 +28,21 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    if cli.local {
-        tracing::info!("Runway agent running in local mode");
-        // Phase 1: local mode — the Tauri app communicates directly via runway-core
-        // Phase 3: will start a gRPC server here
-        tokio::signal::ctrl_c().await?;
-        tracing::info!("Shutting down");
-    }
+    let addr = if cli.local {
+        format!("127.0.0.1:{}", cli.port)
+    } else {
+        format!("0.0.0.0:{}", cli.port)
+    };
+
+    let addr = addr.parse()?;
+    let service = AgentServiceImpl::new();
+
+    tracing::info!("Runway agent listening on {}", addr);
+
+    Server::builder()
+        .add_service(AgentServiceServer::new(service))
+        .serve(addr)
+        .await?;
 
     Ok(())
 }

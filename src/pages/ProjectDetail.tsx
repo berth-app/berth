@@ -1,13 +1,16 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   runProject,
   stopProject,
+  deleteProject,
   listProjects,
   type Project,
   type LogEvent,
   type StatusEvent,
 } from "../lib/invoke";
+import { useToast } from "../components/Toast";
+import Terminal from "../components/Terminal";
 
 interface Props {
   projectId: string;
@@ -21,12 +24,23 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "bg-red-500",
 };
 
+function timeAgo(dateStr: string | null): string {
+  if (!dateStr) return "never";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
 export default function ProjectDetail({ projectId, onBack }: Props) {
   const [project, setProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<string>("idle");
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [uptime, setUptime] = useState("");
+  const { toast } = useToast();
 
   useEffect(() => {
     listProjects().then((projects) => {
@@ -34,6 +48,9 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
       if (p) {
         setProject(p);
         setStatus(p.status);
+        if (p.status === "running") {
+          setStartedAt(Date.now());
+        }
       }
     });
   }, [projectId]);
@@ -53,40 +70,103 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
     const unlisten = listen<StatusEvent>("project-status-change", (event) => {
       if (event.payload.project_id === projectId) {
         setStatus(event.payload.status);
+        if (event.payload.status === "running") {
+          setStartedAt(Date.now());
+        } else {
+          setStartedAt(null);
+          if (event.payload.status === "failed") {
+            const code = event.payload.exit_code;
+            toast(
+              `Process exited with code ${code ?? "unknown"}`,
+              "error"
+            );
+          } else if (event.payload.status === "idle") {
+            toast("Process completed successfully", "success");
+          }
+        }
       }
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [projectId]);
+  }, [projectId, toast]);
 
+  // Uptime ticker
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+    if (!startedAt) {
+      setUptime("");
+      return;
+    }
+    const interval = setInterval(() => {
+      const secs = Math.floor((Date.now() - startedAt) / 1000);
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      setUptime(`${m}:${s.toString().padStart(2, "0")}`);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startedAt]);
 
   const handleRun = useCallback(async () => {
     setError(null);
     setLogs([]);
     try {
       await runProject(projectId);
+      toast("Project started", "success");
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg);
+      toast(msg, "error");
     }
-  }, [projectId]);
+  }, [projectId, toast]);
 
   const handleStop = useCallback(async () => {
     setError(null);
     try {
       await stopProject(projectId);
+      toast("Project stopped", "info");
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg);
+      toast(msg, "error");
     }
-  }, [projectId]);
+  }, [projectId, toast]);
+
+  const handleDelete = useCallback(async () => {
+    try {
+      await deleteProject(projectId);
+      toast("Project deleted", "info");
+      onBack();
+    } catch (e) {
+      toast(String(e), "error");
+    }
+  }, [projectId, onBack, toast]);
 
   const isRunning = status === "running";
 
+  if (!project) {
+    return (
+      <div className="h-full flex flex-col">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-runway-border">
+          <button
+            onClick={onBack}
+            className="text-runway-accent text-sm hover:underline"
+          >
+            &larr; Back
+          </button>
+          <div className="skeleton h-4 w-32" />
+        </div>
+        <div className="p-4 flex flex-col gap-3">
+          <div className="skeleton h-10 w-full" />
+          <div className="skeleton h-8 w-48" />
+          <div className="skeleton h-64 w-full" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col">
+      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-runway-border">
         <button
           onClick={onBack}
@@ -94,22 +174,55 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
         >
           &larr; Back
         </button>
-        <h1 className="text-sm font-semibold">
-          {project?.name ?? "Project"}
-        </h1>
+        <h1 className="text-sm font-semibold">{project.name}</h1>
+        <button
+          onClick={handleDelete}
+          className="ml-auto text-xs text-runway-muted hover:text-runway-error transition-colors"
+        >
+          Delete
+        </button>
       </div>
 
-      <div className="flex-1 flex flex-col gap-4 p-4">
+      <div className="flex-1 flex flex-col gap-3 p-4 overflow-hidden">
         {/* Status bar */}
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-runway-surface">
           <div
-            className={`w-2 h-2 rounded-full ${STATUS_COLORS[status] ?? STATUS_COLORS.idle}`}
+            className={`w-2.5 h-2.5 rounded-full ${STATUS_COLORS[status] ?? STATUS_COLORS.idle} ${isRunning ? "animate-pulse-soft" : ""}`}
           />
-          <span className="text-sm capitalize">{status}</span>
-          <span className="text-xs text-runway-muted ml-auto">
-            {project?.runtime} &middot;{" "}
-            {project?.entrypoint ?? "no entrypoint"}
-          </span>
+          <span className="text-sm font-medium capitalize">{status}</span>
+          {uptime && (
+            <span className="text-xs text-runway-muted font-mono">
+              {uptime}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-3 text-xs text-runway-muted">
+            <span>{project.runtime}</span>
+            <span>{project.entrypoint ?? "no entrypoint"}</span>
+          </div>
+        </div>
+
+        {/* Monitoring stats */}
+        <div className="flex gap-3">
+          <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface text-center">
+            <div className="text-lg font-semibold tabular-nums">
+              {project.run_count}
+            </div>
+            <div className="text-xs text-runway-muted">Runs</div>
+          </div>
+          <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface text-center">
+            <div className="text-lg font-semibold">
+              {timeAgo(project.last_run_at)}
+            </div>
+            <div className="text-xs text-runway-muted">Last Run</div>
+          </div>
+          <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface text-center">
+            <div className="text-lg font-semibold tabular-nums">
+              {project.last_exit_code !== null
+                ? project.last_exit_code
+                : "--"}
+            </div>
+            <div className="text-xs text-runway-muted">Exit Code</div>
+          </div>
         </div>
 
         {/* Error display */}
@@ -124,41 +237,48 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
           <button
             onClick={handleRun}
             disabled={isRunning}
-            className="px-4 py-2 rounded-lg bg-runway-accent text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-runway-accent text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
           >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path d="M8 5v14l11-7z" />
+            </svg>
             Run
           </button>
           <button
             onClick={handleStop}
             disabled={!isRunning}
-            className="px-4 py-2 rounded-lg bg-runway-surface text-runway-text text-sm border border-runway-border hover:bg-runway-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-runway-surface text-runway-text text-sm border border-runway-border hover:bg-runway-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <rect x="6" y="6" width="12" height="12" rx="1" />
+            </svg>
             Stop
           </button>
         </div>
 
-        {/* Log viewer */}
-        <div className="flex-1 rounded-lg bg-runway-surface border border-runway-border p-3 font-mono text-xs overflow-y-auto">
-          {logs.length === 0 ? (
-            <div className="text-runway-muted">
-              Logs will appear here when the project is running.
-            </div>
-          ) : (
-            logs.map((line, i) => (
-              <div
-                key={i}
-                className={
-                  line.stream === "stderr"
-                    ? "text-red-400"
-                    : "text-runway-text"
-                }
-              >
-                {line.text}
+        {/* xterm.js log viewer */}
+        {logs.length === 0 && !isRunning ? (
+          <div className="flex-1 flex items-center justify-center rounded-lg bg-runway-surface border border-runway-border">
+            <div className="text-center">
+              <div className="text-runway-muted text-sm">No logs yet</div>
+              <div className="text-runway-muted/60 text-xs mt-1">
+                Click Run to start the project
               </div>
-            ))
-          )}
-          <div ref={logEndRef} />
-        </div>
+            </div>
+          </div>
+        ) : (
+          <Terminal logs={logs} />
+        )}
       </div>
     </div>
   );

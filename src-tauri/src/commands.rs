@@ -31,6 +31,7 @@ pub struct LogEvent {
 pub struct StatusEvent {
     pub project_id: String,
     pub status: String,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -156,8 +157,9 @@ pub async fn run_project(
         .await
         .map_err(|e| format!("Failed to start process: {e}"))?;
 
+    // Record run start (updates status, last_run_at, run_count)
     store
-        .update_status(uuid, ProjectStatus::Running)
+        .record_run_start(uuid)
         .map_err(|e| e.to_string())?;
 
     let _ = app_handle.emit(
@@ -165,6 +167,7 @@ pub async fn run_project(
         StatusEvent {
             project_id: id.clone(),
             status: "running".into(),
+            exit_code: None,
         },
     );
 
@@ -193,23 +196,22 @@ pub async fn run_project(
         let mut reg = registry_clone.lock().await;
         if let Some(mut proc) = reg.remove(&uuid) {
             let exit_status = proc.child.wait().await.ok();
-            let status = match exit_status.and_then(|s| s.code()) {
-                Some(0) => ProjectStatus::Idle,
-                _ => ProjectStatus::Failed,
-            };
+            let exit_code = exit_status.and_then(|s| s.code());
+
             if let Ok(store) = get_store() {
-                let _ = store.update_status(uuid, status);
+                let _ = store.record_run_end(uuid, exit_code);
             }
-            let status_str = match status {
-                ProjectStatus::Idle => "idle",
-                ProjectStatus::Failed => "failed",
-                _ => "idle",
+
+            let status_str = match exit_code {
+                Some(0) => "idle",
+                _ => "failed",
             };
             let _ = app_for_exit.emit(
                 "project-status-change",
                 StatusEvent {
                     project_id: uuid.to_string(),
                     status: status_str.into(),
+                    exit_code,
                 },
             );
         }
@@ -260,6 +262,7 @@ pub async fn stop_project(
         StatusEvent {
             project_id: id,
             status: "stopped".into(),
+            exit_code: None,
         },
     );
 

@@ -9,6 +9,9 @@ export interface Project {
   status: "idle" | "running" | "stopped" | "failed";
   created_at: string;
   updated_at: string;
+  last_run_at: string | null;
+  last_exit_code: number | null;
+  run_count: number;
 }
 
 export interface RuntimeInfo {
@@ -63,4 +66,5 @@ export interface LogEvent {
 export interface StatusEvent {
   project_id: string;
   status: "idle" | "running" | "stopped" | "failed";
+  exit_code: number | null;
 }

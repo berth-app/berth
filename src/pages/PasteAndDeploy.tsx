@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createProject, detectRuntime, savePasteCode, type RuntimeInfo } from "../lib/invoke";
+import { useToast } from "../components/Toast";
 
 interface Props {
   onBack: () => void;
@@ -13,14 +14,16 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [mode, setMode] = useState<"paste" | "directory">("paste");
   const [creating, setCreating] = useState(false);
+  const { toast } = useToast();
 
   async function handleDetect() {
     if (!path) return;
     try {
       const info = await detectRuntime(path);
       setRuntimeInfo(info);
+      toast(`Detected ${info.runtime} (${Math.round(info.confidence * 100)}%)`, "success");
     } catch (e) {
-      console.error("Runtime detection failed:", e);
+      toast(`Detection failed: ${e}`, "error");
     }
   }
 
@@ -33,13 +36,14 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
         projectPath = await savePasteCode(name, code);
       }
       if (!projectPath) {
-        console.error("No code or path provided");
+        toast("No code or path provided", "error");
         return;
       }
       const project = await createProject(name, projectPath);
+      toast(`Project "${name}" created`, "success");
       onCreated(project.id);
     } catch (e) {
-      console.error("Failed to create project:", e);
+      toast(`Failed to create project: ${e}`, "error");
     } finally {
       setCreating(false);
     }
@@ -68,7 +72,7 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="my-crawler"
-            className="w-full px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent"
+            className="w-full px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent transition-colors"
           />
         </div>
 
@@ -79,7 +83,7 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
               mode === "paste"
                 ? "bg-runway-accent text-white"
-                : "bg-runway-surface text-runway-muted border border-runway-border"
+                : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
             }`}
           >
             Paste Code
@@ -89,7 +93,7 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
               mode === "directory"
                 ? "bg-runway-accent text-white"
-                : "bg-runway-surface text-runway-muted border border-runway-border"
+                : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
             }`}
           >
             Select Directory
@@ -107,7 +111,7 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
               onChange={(e) => setCode(e.target.value)}
               placeholder="Paste code from Claude Code, Cursor, or any AI tool..."
               rows={12}
-              className="w-full px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm font-mono text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent resize-none"
+              className="w-full px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm font-mono text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent resize-none transition-colors"
             />
           </div>
         )}
@@ -124,7 +128,7 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 placeholder="/Users/you/projects/my-bot"
-                className="flex-1 px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent"
+                className="flex-1 px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent transition-colors"
               />
               <button
                 onClick={handleDetect}
