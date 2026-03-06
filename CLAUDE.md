@@ -168,12 +168,12 @@ runway agent install ubuntu@my-server.com
 **Goal: Deploy to your own Linux server**
 
 - [x] Agent install script: `scripts/install-agent.sh` with systemd service, --uninstall flag
-- [ ] gRPC + mTLS: secure agent-to-app communication over internet (TLS not yet implemented)
+- [x] gRPC + mTLS: secure agent-to-app communication over internet (rcgen CA + server/client certs, tonic TLS config helpers)
 - [x] Target management UI: add/edit/remove remote targets (React page + Tauri commands)
 - [x] Remote deploy: gRPC client in runway-core, CLI deploy to remote targets, MCP tools
 - [x] Agent health monitoring: real CPU/mem via sysinfo crate, ping command in CLI + UI
-- [ ] Credential management via security-framework (Keychain on Mac)
-- [ ] mDNS discovery for LAN agents
+- [x] Credential management via security-framework (Keychain on Mac) — store/get/delete SSH keys and AWS credentials
+- [x] mDNS discovery for LAN agents — mdns-sd crate, register/discover `_runway._tcp.local.` services
 - [x] Target model: Target struct, SQLite table, store CRUD, 17 MCP tools total
 - [x] CLI: `runway targets add|list|remove|ping` with real gRPC health checks
 
