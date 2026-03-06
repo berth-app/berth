@@ -238,3 +238,70 @@ pub fn client_tls_config(
 
     Ok(tls)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_ca() {
+        let ca = generate_ca().expect("CA generation failed");
+        let pem = ca.pem();
+        assert!(pem.contains("BEGIN CERTIFICATE"), "CA cert should be valid PEM");
+        let key_pem = ca.key().serialize_pem();
+        assert!(key_pem.contains("BEGIN PRIVATE KEY"), "CA key should be valid PEM");
+    }
+
+    #[test]
+    fn test_generate_server_cert() {
+        let ca = generate_ca().unwrap();
+        let bundle = generate_server_cert(&ca, "agent.local").unwrap();
+        assert!(bundle.cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(bundle.key_pem.contains("BEGIN PRIVATE KEY"));
+    }
+
+    #[test]
+    fn test_generate_client_cert() {
+        let ca = generate_ca().unwrap();
+        let bundle = generate_client_cert(&ca, "runway-app").unwrap();
+        assert!(bundle.cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(bundle.key_pem.contains("BEGIN PRIVATE KEY"));
+    }
+
+    #[test]
+    fn test_save_and_load_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = generate_ca().unwrap();
+        let bundle = generate_server_cert(&ca, "test.local").unwrap();
+
+        // Save to temp dir
+        let cert_path = dir.path().join("test.crt");
+        let key_path = dir.path().join("test.key");
+        std::fs::write(&cert_path, &bundle.cert_pem).unwrap();
+        std::fs::write(&key_path, &bundle.key_pem).unwrap();
+
+        // Read back
+        let loaded_cert = std::fs::read_to_string(&cert_path).unwrap();
+        let loaded_key = std::fs::read_to_string(&key_path).unwrap();
+        assert_eq!(loaded_cert, bundle.cert_pem);
+        assert_eq!(loaded_key, bundle.key_pem);
+    }
+
+    #[test]
+    fn test_server_tls_config() {
+        let ca = generate_ca().unwrap();
+        let ca_pem = ca.pem();
+        let server_bundle = generate_server_cert(&ca, "test.local").unwrap();
+        let config = server_tls_config(&server_bundle, &ca_pem);
+        assert!(config.is_ok(), "ServerTlsConfig should build successfully");
+    }
+
+    #[test]
+    fn test_client_tls_config() {
+        let ca = generate_ca().unwrap();
+        let ca_pem = ca.pem();
+        let client_bundle = generate_client_cert(&ca, "runway-app").unwrap();
+        let config = client_tls_config(&client_bundle, &ca_pem);
+        assert!(config.is_ok(), "ClientTlsConfig should build successfully");
+    }
+}

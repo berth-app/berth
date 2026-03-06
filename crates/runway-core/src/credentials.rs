@@ -64,3 +64,68 @@ pub fn get_aws_credentials(profile: &str) -> Result<Option<(String, String)>> {
         _ => Ok(None),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_store_get_delete_credential() {
+        let key = "runway-test:unit-test-cred";
+        let value = "s3cret-test-value-42";
+
+        // Store
+        store_credential(key, value).expect("store_credential failed");
+
+        // Get
+        let retrieved = get_credential(key).expect("get_credential failed");
+        assert_eq!(retrieved, Some(value.to_string()));
+
+        // Delete
+        delete_credential(key).expect("delete_credential failed");
+
+        // Confirm deleted
+        let after_delete = get_credential(key).expect("get_credential after delete failed");
+        assert_eq!(after_delete, None);
+    }
+
+    #[test]
+    fn test_get_nonexistent_credential() {
+        let result = get_credential("runway-test:does-not-exist-xyz-999")
+            .expect("get_credential failed");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_delete_nonexistent_is_ok() {
+        let result = delete_credential("runway-test:never-existed-abc-777");
+        assert!(result.is_ok(), "deleting nonexistent credential should succeed");
+    }
+
+    #[test]
+    fn test_ssh_key_helpers() {
+        let target = "test-unit-target";
+        let key_data = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----";
+
+        store_ssh_key(target, key_data).expect("store_ssh_key failed");
+        let retrieved = get_ssh_key(target).expect("get_ssh_key failed");
+        assert_eq!(retrieved, Some(key_data.to_string()));
+
+        // Cleanup
+        delete_credential(&format!("target:{target}:ssh-key")).unwrap();
+    }
+
+    #[test]
+    fn test_aws_credentials_helpers() {
+        let profile = "test-unit-profile";
+        store_aws_credentials(profile, "AKIATEST123", "secret456")
+            .expect("store_aws_credentials failed");
+
+        let creds = get_aws_credentials(profile).expect("get_aws_credentials failed");
+        assert_eq!(creds, Some(("AKIATEST123".to_string(), "secret456".to_string())));
+
+        // Cleanup
+        delete_credential(&format!("aws:{profile}:access-key")).unwrap();
+        delete_credential(&format!("aws:{profile}:secret-key")).unwrap();
+    }
+}

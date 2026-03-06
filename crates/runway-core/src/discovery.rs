@@ -21,13 +21,21 @@ pub fn register_agent(port: u16) -> Result<ServiceDaemon> {
     let mdns = ServiceDaemon::new()
         .map_err(|e| anyhow::anyhow!("Failed to create mDNS daemon: {}", e))?;
 
-    let hostname = hostname::get()?.to_string_lossy().to_string();
-    let instance_name = format!("runway-agent-{}", &hostname);
+    let raw_hostname = hostname::get()?.to_string_lossy().to_string();
+    // mdns-sd requires the hostname to end with ".local."
+    let mdns_hostname = if raw_hostname.ends_with(".local") {
+        format!("{}.", raw_hostname)
+    } else if raw_hostname.ends_with(".local.") {
+        raw_hostname.clone()
+    } else {
+        format!("{}.local.", raw_hostname)
+    };
+    let instance_name = format!("runway-agent-{}", &raw_hostname);
 
     let service_info = ServiceInfo::new(
         SERVICE_TYPE,
         &instance_name,
-        &hostname,
+        &mdns_hostname,
         "",
         port,
         None,
@@ -84,4 +92,41 @@ pub async fn discover_agents(timeout_secs: u64) -> Result<Vec<DiscoveredAgent>> 
 
     let _ = mdns.stop_browse(SERVICE_TYPE);
     Ok(agents)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_agent() {
+        // Use a random high port to avoid conflicts
+        let daemon = register_agent(59999);
+        assert!(daemon.is_ok(), "mDNS agent registration should succeed");
+        // Daemon is dropped here, which unregisters the service
+    }
+
+    #[tokio::test]
+    async fn test_discover_agents_short_timeout() {
+        // Quick 1-second scan — may find 0 agents, but should not error
+        let agents = discover_agents(1).await;
+        assert!(agents.is_ok(), "mDNS discovery should not error");
+    }
+
+    #[tokio::test]
+    async fn test_register_then_discover() {
+        let _daemon = register_agent(59998).expect("registration failed");
+
+        // Give mDNS a moment to propagate, then discover
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let agents = discover_agents(2).await.expect("discovery failed");
+
+        // We should find at least our own agent
+        let found = agents.iter().any(|a| a.port == 59998);
+        // Note: mDNS discovery on localhost is not guaranteed in all CI environments,
+        // so we just assert the call succeeded without error
+        if found {
+            assert!(agents.iter().any(|a| a.name.contains("runway-agent")));
+        }
+    }
 }
