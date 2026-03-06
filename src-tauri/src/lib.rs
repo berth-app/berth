@@ -29,7 +29,7 @@ pub fn run() {
 
             let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(icon)
                 .icon_as_template(true)
                 .tooltip("Runway")
@@ -49,6 +49,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Keep tray alive for the app's lifetime — it is removed when dropped
+            app.manage(tray);
 
             Ok(())
         })
