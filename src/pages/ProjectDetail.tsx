@@ -5,9 +5,13 @@ import {
   stopProject,
   deleteProject,
   listProjects,
+  listTargets,
+  runProjectRemote,
+  stopProjectRemote,
   type Project,
   type LogEvent,
   type StatusEvent,
+  type TargetInfo,
 } from "../lib/invoke";
 import { useToast } from "../components/Toast";
 import Terminal from "../components/Terminal";
@@ -40,6 +44,8 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [uptime, setUptime] = useState("");
+  const [targets, setTargets] = useState<TargetInfo[]>([]);
+  const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -53,6 +59,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
         }
       }
     });
+    listTargets().then(setTargets).catch(console.error);
   }, [projectId]);
 
   useEffect(() => {
@@ -110,26 +117,36 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
     setError(null);
     setLogs([]);
     try {
-      await runProject(projectId);
-      toast("Project started", "success");
+      if (selectedTarget) {
+        await runProjectRemote(projectId, selectedTarget);
+        const t = targets.find((t) => t.id === selectedTarget);
+        toast(`Started on ${t?.name ?? "remote"}`, "success");
+      } else {
+        await runProject(projectId);
+        toast("Project started", "success");
+      }
     } catch (e) {
       const msg = String(e);
       setError(msg);
       toast(msg, "error");
     }
-  }, [projectId, toast]);
+  }, [projectId, selectedTarget, targets, toast]);
 
   const handleStop = useCallback(async () => {
     setError(null);
     try {
-      await stopProject(projectId);
+      if (selectedTarget) {
+        await stopProjectRemote(projectId, selectedTarget);
+      } else {
+        await stopProject(projectId);
+      }
       toast("Project stopped", "info");
     } catch (e) {
       const msg = String(e);
       setError(msg);
       toast(msg, "error");
     }
-  }, [projectId, toast]);
+  }, [projectId, selectedTarget, toast]);
 
   const handleDelete = useCallback(async () => {
     try {
@@ -224,6 +241,48 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
             <div className="text-xs text-runway-muted">Exit Code</div>
           </div>
         </div>
+
+        {/* Target selector */}
+        {targets.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-runway-muted">Target:</span>
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setSelectedTarget(null)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  selectedTarget === null
+                    ? "bg-runway-accent text-white"
+                    : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
+                }`}
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-runway-success" />
+                local
+              </button>
+              {targets.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setSelectedTarget(t.id)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    selectedTarget === t.id
+                      ? "bg-runway-accent text-white"
+                      : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
+                  }`}
+                >
+                  <div
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      t.status === "online"
+                        ? "bg-runway-success"
+                        : t.status === "offline"
+                        ? "bg-runway-error"
+                        : "bg-runway-muted"
+                    }`}
+                  />
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Error display */}
         {error && (

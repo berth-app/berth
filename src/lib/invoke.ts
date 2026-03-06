@@ -101,3 +101,19 @@ export async function removeTarget(id: string): Promise<void> {
 export async function pingTarget(id: string): Promise<TargetInfo> {
   return tauriInvoke<TargetInfo>("ping_target", { id });
 }
+
+// --- Remote execution ---
+
+export async function runProjectRemote(
+  id: string,
+  targetId: string
+): Promise<void> {
+  return tauriInvoke("run_project_remote", { id, targetId });
+}
+
+export async function stopProjectRemote(
+  id: string,
+  targetId: string
+): Promise<void> {
+  return tauriInvoke("stop_project_remote", { id, targetId });
+}

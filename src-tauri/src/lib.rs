@@ -67,6 +67,8 @@ pub fn run() {
             add_target,
             remove_target,
             ping_target,
+            run_project_remote,
+            stop_project_remote,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Runway");

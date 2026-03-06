@@ -366,3 +366,161 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
         }
     }
 }
+
+#[tauri::command]
+pub async fn run_project_remote(
+    id: String,
+    target_id: String,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let target_uuid: Uuid = target_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+
+    let project = store
+        .get(uuid)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Project {id} not found"))?;
+
+    let entrypoint = project
+        .entrypoint
+        .as_deref()
+        .ok_or("Project has no entrypoint.")?
+        .to_string();
+
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    let target = targets
+        .iter()
+        .find(|t| t.id == target_uuid)
+        .ok_or_else(|| format!("Target {target_id} not found"))?;
+
+    let endpoint = target.grpc_endpoint();
+
+    // Read code from disk
+    let code_path = std::path::Path::new(&project.path).join(&entrypoint);
+    let code = std::fs::read(&code_path)
+        .map_err(|e| format!("Failed to read {}: {e}", code_path.display()))?;
+
+    let runtime_str = format!("{:?}", project.runtime).to_lowercase();
+
+    // Record run start
+    store.record_run_start(uuid).map_err(|e| e.to_string())?;
+
+    let _ = app_handle.emit(
+        "project-status-change",
+        StatusEvent {
+            project_id: id.clone(),
+            status: "running".into(),
+            exit_code: None,
+        },
+    );
+
+    // Connect and execute on remote agent
+    let mut client = AgentClient::connect(&endpoint)
+        .await
+        .map_err(|e| format!("Failed to connect to agent: {e}"))?;
+
+    let project_id_str = id.clone();
+
+    // Spawn background task for streaming logs
+    tokio::spawn(async move {
+        let result = client
+            .execute(
+                &project_id_str,
+                &runtime_str,
+                &entrypoint,
+                "/tmp",
+                Some(&code),
+            )
+            .await;
+
+        match result {
+            Ok(logs) => {
+                for line in &logs {
+                    let _ = app_handle.emit(
+                        "project-log",
+                        LogEvent {
+                            project_id: project_id_str.clone(),
+                            stream: match line.stream {
+                                LogStream::Stdout => "stdout".into(),
+                                LogStream::Stderr => "stderr".into(),
+                            },
+                            text: line.text.clone(),
+                            timestamp: line.timestamp.to_rfc3339(),
+                        },
+                    );
+                }
+
+                if let Ok(store) = get_store() {
+                    let _ = store.record_run_end(uuid, Some(0));
+                }
+
+                let _ = app_handle.emit(
+                    "project-status-change",
+                    StatusEvent {
+                        project_id: project_id_str,
+                        status: "idle".into(),
+                        exit_code: Some(0),
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = app_handle.emit(
+                    "project-log",
+                    LogEvent {
+                        project_id: project_id_str.clone(),
+                        stream: "stderr".into(),
+                        text: format!("Remote execution failed: {e}"),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    },
+                );
+
+                if let Ok(store) = get_store() {
+                    let _ = store.record_run_end(uuid, Some(1));
+                }
+
+                let _ = app_handle.emit(
+                    "project-status-change",
+                    StatusEvent {
+                        project_id: project_id_str,
+                        status: "failed".into(),
+                        exit_code: Some(1),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_project_remote(
+    id: String,
+    target_id: String,
+) -> Result<(), String> {
+    let store = get_store()?;
+    let target_uuid: Uuid = target_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    let target = targets
+        .iter()
+        .find(|t| t.id == target_uuid)
+        .ok_or_else(|| format!("Target {target_id} not found"))?;
+
+    let endpoint = target.grpc_endpoint();
+    let mut client = AgentClient::connect(&endpoint)
+        .await
+        .map_err(|e| format!("Failed to connect to agent: {e}"))?;
+
+    let stopped = client
+        .stop(&id)
+        .await
+        .map_err(|e| format!("Failed to stop remote project: {e}"))?;
+
+    if stopped {
+        Ok(())
+    } else {
+        Err("Project is not running on the remote agent.".into())
+    }
+}
