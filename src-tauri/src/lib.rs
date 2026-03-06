@@ -3,6 +3,7 @@ mod commands;
 use commands::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tauri::image::Image;
 use tauri::tray::TrayIconBuilder;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::Manager;
@@ -26,8 +27,10 @@ pub fn run() {
                 .item(&quit)
                 .build()?;
 
+            let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+
             let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().unwrap())
+                .icon(icon)
                 .icon_as_template(true)
                 .tooltip("Runway")
                 .menu(&menu)
