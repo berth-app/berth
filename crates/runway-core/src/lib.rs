@@ -1,4 +1,5 @@
 pub mod agent_client;
+#[cfg(target_os = "macos")]
 pub mod credentials;
 pub mod discovery;
 pub mod executor;

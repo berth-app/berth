@@ -13,9 +13,9 @@ use service::AgentServiceImpl;
 #[derive(Parser)]
 #[command(name = "runway-agent", about = "Runway deployment agent")]
 struct Cli {
-    /// Run in local mode (localhost only)
-    #[arg(long, default_value_t = true)]
-    local: bool,
+    /// Bind to 0.0.0.0 instead of 127.0.0.1
+    #[arg(long)]
+    listen_all: bool,
 
     /// Port for gRPC server
     #[arg(long, default_value_t = 50051)]
@@ -28,10 +28,10 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    let addr = if cli.local {
-        format!("127.0.0.1:{}", cli.port)
-    } else {
+    let addr = if cli.listen_all {
         format!("0.0.0.0:{}", cli.port)
+    } else {
+        format!("127.0.0.1:{}", cli.port)
     };
 
     let addr = addr.parse()?;
