@@ -125,16 +125,16 @@
     <p>Tauri 2.0 desktop app. Rust backend with 6 commands + React frontend with 3 pages.</p>
   </div>
   <div class="card">
-    <h3>runway-mcp <span class="badge badge-stub">Stub</span></h3>
-    <p>MCP server for AI agent control. 12 tools defined. Phase 2 implementation.</p>
+    <h3>runway-mcp <span class="badge badge-done">Done</span></h3>
+    <p>MCP server for AI agent control. 13 tools via JSON-RPC 2.0 stdio. E2E tested.</p>
   </div>
   <div class="card">
-    <h3>runway-agent <span class="badge badge-stub">Stub</span></h3>
-    <p>Remote execution agent binary. Local mode only. gRPC server in Phase 3.</p>
+    <h3>runway-agent <span class="badge badge-done">Done</span></h3>
+    <p>Execution agent binary. gRPC server on localhost:50051. Remote mode in Phase 3.</p>
   </div>
   <div class="card">
-    <h3>runway-cli <span class="badge badge-stub">Stub</span></h3>
-    <p>CLI interface. Subcommands defined (list, deploy, logs, status, targets). Phase 2.</p>
+    <h3>runway-cli <span class="badge badge-done">Done</span></h3>
+    <p>CLI interface. 12 commands + schedule subcommands. Full feature parity with MCP.</p>
   </div>
 </div>
 
@@ -241,6 +241,8 @@ pub struct RuntimeInfo {
     pub version_file: Option&lt;String&gt;,
     pub entrypoint: Option&lt;String&gt;,
     pub confidence: f32,          // 0.0 - 1.0
+    pub dependencies: Vec&lt;String&gt;,
+    pub scripts: HashMap&lt;String, String&gt;,
 }
 
 pub fn detect_runtime(path: &amp;Path) -&gt; RuntimeInfo</code></pre>
@@ -291,7 +293,17 @@ impl ProjectStore {
     pub fn insert(&amp;self, project: &amp;Project) -&gt; Result&lt;()&gt;
     pub fn get(&amp;self, id: Uuid) -&gt; Result&lt;Option&lt;Project&gt;&gt;
     pub fn update_status(&amp;self, id: Uuid, status: ProjectStatus) -&gt; Result&lt;()&gt;
+    pub fn record_run_start(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
+    pub fn record_run_end(&amp;self, id: Uuid, exit_code: Option&lt;i32&gt;) -&gt; Result&lt;()&gt;
     pub fn delete(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
+
+    // Schedule CRUD
+    pub fn insert_schedule(&amp;self, schedule: &amp;Schedule) -&gt; Result&lt;()&gt;
+    pub fn list_schedules(&amp;self) -&gt; Result&lt;Vec&lt;Schedule&gt;&gt;
+    pub fn get_schedules_for_project(&amp;self, project_id: Uuid) -&gt; Result&lt;Vec&lt;Schedule&gt;&gt;
+    pub fn update_schedule_after_run(&amp;self, ...) -&gt; Result&lt;()&gt;
+    pub fn set_schedule_enabled(&amp;self, id: Uuid, enabled: bool) -&gt; Result&lt;()&gt;
+    pub fn delete_schedule(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
 }</code></pre>
 
 <!-- ============================================================ -->
@@ -312,6 +324,23 @@ impl ProjectStore {
 |             DEFAULT 'idle'                                         |
 | <span class="green">created_at</span>  TEXT NOT NULL       RFC 3339 timestamp                 |
 | <span class="green">updated_at</span>  TEXT NOT NULL       RFC 3339 timestamp                 |
+| <span class="green">last_run_at</span> TEXT               RFC 3339 (nullable)                |
+| <span class="green">last_exit_code</span> INTEGER          Process exit code (nullable)       |
+| <span class="green">run_count</span>   INTEGER NOT NULL   Total execution count              |
+|             DEFAULT 0                                              |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                          <span class="highlight">schedules</span>                                |
++-------------------------------------------------------------------+
+| <span class="green">id</span>              TEXT PRIMARY KEY  UUID v4 as string                 |
+| <span class="green">project_id</span>      TEXT NOT NULL     FK -> projects(id) ON DELETE CASCADE |
+| <span class="green">cron_expr</span>       TEXT NOT NULL     @every 5m, @hourly, 30 9 * * *   |
+| <span class="green">enabled</span>         INTEGER NOT NULL  1 = enabled, 0 = disabled         |
+|                 DEFAULT 1                                          |
+| <span class="green">created_at</span>      TEXT NOT NULL     RFC 3339 timestamp                |
+| <span class="green">last_triggered_at</span> TEXT            RFC 3339 (nullable)               |
+| <span class="green">next_run_at</span>     TEXT              RFC 3339 (nullable)               |
 +-------------------------------------------------------------------+
 </div>
 
@@ -523,7 +552,7 @@ service AgentService {
 <!-- ============================================================ -->
 <h2 id="mcp">MCP Server <span class="badge badge-done">Done</span></h2>
 
-<p>10 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05):</p>
+<p>13 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05). E2E tested: deploy inline code, run, capture output, delete.</p>
 
 <table>
   <tr><th>Tool</th><th>Purpose</th><th>Status</th></tr>
@@ -534,9 +563,12 @@ service AgentService {
   <tr><td><code>runway_stop</code></td><td>Stop a running project</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td><code>runway_logs</code></td><td>Fetch logs (pending log store)</td><td><span class="badge badge-partial">Partial</span></td></tr>
   <tr><td><code>runway_import_code</code></td><td>Import code from path or inline, create project</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_detect_runtime</code></td><td>Auto-detect language, entrypoint, confidence</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_detect_runtime</code></td><td>Auto-detect language, entrypoint, deps, scripts</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td><code>runway_delete</code></td><td>Delete a project</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_health</code></td><td>System health check (version, project count, platform)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_health</code></td><td>System health (version, projects, schedules, platform)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_schedule_add</code></td><td>Add a cron-like schedule to a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_schedule_list</code></td><td>List all schedules</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>runway_schedule_remove</code></td><td>Remove a schedule by UUID</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
 <p>Transport: stdio (primary, for Claude Code). HTTP via axum planned for Phase 3.</p>
@@ -561,11 +593,17 @@ runway stop &lt;project&gt;                          # Stop a project
 runway logs &lt;project&gt; [-f|--follow]            # Run and capture output
 runway status &lt;project&gt;                        # Detailed project info
 runway import &lt;path&gt; [--name N]                # Import code as project
-runway detect &lt;path&gt;                           # Detect runtime
+runway detect &lt;path&gt;                           # Detect runtime + deps + scripts
 runway delete &lt;project&gt;                        # Delete a project
 runway health                                  # System health check
 runway targets list                            # List deploy targets
-runway targets add &lt;name&gt; --host &lt;host&gt;       # Add target (Phase 3)</code></pre>
+runway targets add &lt;name&gt; --host &lt;host&gt;       # Add target (Phase 3)
+runway schedule add &lt;project&gt; --cron &lt;expr&gt;   # Add schedule (@every 5m, @hourly, etc.)
+runway schedule list                           # List all schedules
+runway schedule remove &lt;id&gt;                    # Remove a schedule
+runway schedule enable &lt;id&gt;                    # Enable a schedule
+runway schedule disable &lt;id&gt;                   # Disable a schedule
+runway schedule tick                           # Run one scheduler tick</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="file-map">File Map</h2>
@@ -613,9 +651,10 @@ mac-rundeck/
 |   |   +-- src/
 |   |       +-- lib.rs          <span class="muted">Re-exports</span>
 |   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
-|   |       +-- runtime.rs      <span class="muted">Runtime detection (markers + entrypoints + extensions)</span>
+|   |       +-- runtime.rs      <span class="muted">Runtime detection + dep parsing (req.txt, package.json, go.mod, Cargo.toml)</span>
 |   |       +-- executor.rs     <span class="muted">Process spawn + log stream (mpsc channel)</span>
-|   |       +-- store.rs        <span class="muted">SQLite CRUD + record_run_start/end + migration</span>
+|   |       +-- store.rs        <span class="muted">SQLite CRUD (projects + schedules) + migrations</span>
+|   |       +-- scheduler.rs    <span class="muted">Cron-like scheduler (parse, tick, execute due jobs)</span>
 |   |
 |   +-- runway-mcp/             <span class="badge badge-done">Done</span>
 |   |   +-- src/
@@ -623,7 +662,7 @@ mac-rundeck/
 |   |       +-- lib.rs          <span class="muted">Module exports</span>
 |   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
 |   |       +-- server.rs       <span class="muted">Stdio server loop</span>
-|   |       +-- tools.rs        <span class="muted">10 tool definitions + handlers</span>
+|   |       +-- tools.rs        <span class="muted">13 tool definitions + handlers</span>
 |   |
 |   +-- runway-agent/           <span class="badge badge-done">Done</span>
 |   |   +-- src/
@@ -632,7 +671,7 @@ mac-rundeck/
 |   |   +-- build.rs            <span class="muted">tonic-build proto compilation</span>
 |   |
 |   +-- runway-cli/             <span class="badge badge-done">Done</span>
-|       +-- src/main.rs         <span class="muted">11 commands (list, deploy, run, stop, etc.)</span>
+|       +-- src/main.rs         <span class="muted">12 commands + schedule subcommands</span>
 |
 +-- proto/
 |   +-- runway.proto            <span class="muted">gRPC service (Phase 3)</span>
@@ -667,15 +706,15 @@ mac-rundeck/
   <tr><td>UI polish (toasts, skeletons, runtime badges, live status)</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
-<h3>Phase 2: MCP + CLI <span class="badge badge-partial">In Progress</span></h3>
+<h3>Phase 2: MCP + CLI <span class="badge badge-done">Complete</span></h3>
 <table>
   <tr><th>Item</th><th>Status</th></tr>
-  <tr><td>MCP server (stdio, 10 tools, JSON-RPC 2.0)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>CLI tool (11 commands: list, deploy, run, stop, etc.)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>MCP server (stdio, 13 tools, JSON-RPC 2.0)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>CLI tool (12 commands + schedule subcommands)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>.mcp.json config for Claude Code integration</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>E2E test: Claude Code deploys via MCP</td><td><span class="badge badge-stub">Pending</span></td></tr>
-  <tr><td>Scheduling: cron-like local scheduling</td><td><span class="badge badge-stub">Pending</span></td></tr>
-  <tr><td>Auto-detect improvements (dep file parsing)</td><td><span class="badge badge-stub">Pending</span></td></tr>
+  <tr><td>E2E MCP test (deploy inline code, run, capture output, delete)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Scheduling (@every, @hourly, @daily, @weekly, M H * * *)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Auto-detect: parse requirements.txt, package.json, go.mod, Cargo.toml</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
 <h3>Phase 3: Remote Agents <span class="badge badge-stub">Not Started</span></h3>
