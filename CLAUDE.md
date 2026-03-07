@@ -9,13 +9,27 @@ Runway is a Tauri-based macOS app that lets developers deploy and manage code �
 
 ## Current Status (March 2026)
 
-Phase 1 scaffold is complete. The app compiles, launches, and renders.
+Phases 1-3 complete. Phase 4 (cloud targets + polish) is next.
 
-**Working end-to-end:** Create project (SQLite), list projects, detect runtime, delete project.
-**UI exists but not connected:** Run/Stop buttons, log viewer, paste-code-to-disk flow.
-**Stubs only:** MCP server, CLI, remote agent, gRPC communication.
+**Working end-to-end:** Project CRUD, runtime detection, agent-based Run/Stop with log streaming (local via UDS, remote via TCP gRPC), Paste & Deploy, xterm.js terminal, menu bar tray, cron scheduling.
+**MCP server:** 17 tools (stdio transport), Claude Code verified end-to-end.
+**CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets.
+**Remote agents:** Persistent agent with SQLite store (`~/.runway/agent.db`), 14 gRPC RPCs, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
+**Phase 4 progress:** macOS notifications on run complete/fail (per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector.
+**Built but not wired:** mTLS certificate infrastructure (tls.rs), Keychain credential storage (credentials.rs).
 
-The app runs via `cargo tauri dev` on macOS. Private GitHub repo created.
+### Persistent Remote Agent (March 7, 2026)
+The remote agent (`runway-agent`) was redesigned from a stateless gRPC server to a production-grade persistent service:
+- **AgentStore** (`agent_store.rs`): SQLite at `~/.runway/agent.db` with 5 tables (deployments, executions, execution_logs, events, schedules)
+- **PersistentAgentService** (`persistent_service.rs`): 14 gRPC RPCs — Deploy, Execute, Stop, Health, Status, StreamLogs + 8 new RPCs (GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade)
+- **Agent Scheduler** (`agent_scheduler.rs`): Independent tick() loop every 30s, runs cron jobs even when app is offline
+- **Store-and-forward events**: Agent stores events locally, app polls via GetEvents RPC when connected
+- **Remote upgrade**: Client-streaming Upgrade RPC — receive binary, verify, swap, restart via systemd
+- **Dependency install**: Deploy RPC runs `pip install`, `npm install`, `go mod download` during deployment
+- **AgentClient** (`agent_client.rs`): 8 new client methods + types (RemoteExecution, RemoteEvent, RemoteSchedule)
+- **Deployment**: Built natively on remote server, runs as systemd service with auto-restart
+
+See `tasks.md` for detailed pending work. The app runs via `cargo tauri dev` on macOS.
 
 ## Design Philosophy
 
@@ -143,7 +157,7 @@ runway agent install ubuntu@my-server.com
 
 - [x] Tauri app scaffold with React: project list, detail view, code import
 - [x] runway-core (Rust): project model, runtime detection (Python, Node, Go, shell)
-- [x] Local execution: Run/Stop via Tauri commands, ProcessRegistry, log streaming via events
+- [x] Local execution: Run/Stop via embedded agent (UDS), log streaming via events
 - [x] Local agent communication: gRPC service via tonic on localhost:50051
 - [x] "Paste & Deploy" flow: paste code → save to disk → detect runtime → run
 - [x] xterm.js log viewer: ANSI color support, auto-fit, 10k scrollback
@@ -255,3 +269,4 @@ runway agent install ubuntu@my-server.com
 | Distribution | Direct download + Homebrew cask (primary) | Developer-native distribution; App Store optional later |
 | Pricing model | Freemium | Free local use, Pro for remote + cloud targets |
 | Backend storage | SQLite (rusqlite) | 3-way debate: SQLite won 3-0 over YAML/JSON. AI agents get JSON via MCP, not flat files (DRF 006) |
+| Execution architecture | Agent-only (no direct executor) | 4-round 3-way debate: Agent-Only won 2-1. Unified local+remote through AgentClient→AgentService. UDS for local, TCP gRPC for remote (DRF 007) |

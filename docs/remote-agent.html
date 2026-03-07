@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Runway Remote Agent - Technical Documentation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+    --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--text); }
+  h4 { font-size: 0.95rem; margin: 1rem 0 0.3rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  p, li { color: var(--muted); }
+  p { margin: 0.5rem 0; }
+  ul, ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+  li { margin: 0.3rem 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; color: var(--text); }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+  th { background: var(--surface); color: var(--text); font-weight: 600; }
+  td { color: var(--muted); }
+  .badge { display: inline-block; padding: 0.15em 0.5em; border-radius: 12px; font-size: 0.75em; font-weight: 600; }
+  .badge-done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-planned { background: rgba(210,153,34,0.15); color: var(--orange); }
+  .badge-security { background: rgba(248,81,73,0.15); color: var(--red); }
+  .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }
+  nav { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 2rem; }
+  nav a { display: inline-block; margin: 0.2rem 0.5rem; font-size: 0.9rem; }
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; font-family: 'SF Mono', monospace; font-size: 0.8rem; line-height: 1.5; white-space: pre; overflow-x: auto; color: var(--muted); }
+  .callout { background: var(--surface); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 1rem 1.25rem; margin: 1rem 0; }
+  .callout-warn { border-left-color: var(--orange); }
+  .callout-danger { border-left-color: var(--red); }
+  .callout-success { border-left-color: var(--green); }
+  .callout p { margin: 0; }
+  .flow-step { display: flex; align-items: flex-start; gap: 1rem; margin: 0.75rem 0; }
+  .flow-num { background: var(--accent); color: var(--bg); width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; flex-shrink: 0; margin-top: 2px; }
+  .flow-body { flex: 1; }
+  .flow-body strong { color: var(--text); }
+  .back-link { display: inline-block; margin-bottom: 1.5rem; color: var(--accent); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<a href="index.html" class="back-link">&larr; Back to main docs</a>
+
+<h1>Runway Remote Agent</h1>
+<p class="subtitle">Architecture, protocol, deployment, and security reference for the Runway agent system.</p>
+
+<nav>
+  <strong>Contents:</strong>
+  <a href="#overview">Overview</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#protocol">gRPC Protocol</a>
+  <a href="#data-flow">Data Flow</a>
+  <a href="#deployment">Deployment</a>
+  <a href="#security">Security</a>
+  <a href="#agent-binary">Agent Binary</a>
+  <a href="#client">Client Library</a>
+  <a href="#ui-integration">UI Integration</a>
+  <a href="#limitations">Limitations</a>
+  <a href="#roadmap">Roadmap</a>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="overview">Overview</h2>
+
+<p>The Runway Remote Agent is a persistent Rust binary that runs on Linux servers as a systemd service. It receives code deployments from the Runway macOS app (or CLI) over gRPC, manages execution history in a local SQLite database, runs scheduled jobs independently, and supports remote self-upgrade.</p>
+
+<div class="callout">
+  <p><strong>Key principle:</strong> Zero runtime dependencies + full persistence. The agent is a single static binary with embedded SQLite. All execution history, logs, events, and schedules survive restarts. The app polls the agent for events when connected &mdash; no direct network connectivity from agent to app required.</p>
+</div>
+
+<table>
+  <tr><th>Property</th><th>Value</th></tr>
+  <tr><td>Binary</td><td><code>runway-agent</code></td></tr>
+  <tr><td>Language</td><td>Rust (shared <code>runway-core</code> crate with app)</td></tr>
+  <tr><td>Protocol</td><td>gRPC over HTTP/2 (tonic 0.12), 14 RPCs</td></tr>
+  <tr><td>Default port</td><td>50051</td></tr>
+  <tr><td>Protobuf schema</td><td><code>proto/runway.proto</code></td></tr>
+  <tr><td>Local database</td><td><code>~/.runway/agent.db</code> (SQLite, 5 tables)</td></tr>
+  <tr><td>Deployments dir</td><td><code>~/.runway/deploys/{project_id}/v{n}/</code></td></tr>
+  <tr><td>Supported platforms</td><td>Linux x86_64, Linux aarch64</td></tr>
+  <tr><td>Scheduler</td><td>Built-in, tick every 30s, runs independently of app</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="architecture">Architecture</h2>
+
+<h3>System Topology</h3>
+
+<div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  macOS (Runway App)                                                  │
+│                                                                      │
+│  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────────┐  │
+│  │  React UI   │───▸│ Tauri Commands│───▸│  runway-core            │  │
+│  │  (WebKit)   │    │ (Rust)       │    │  ├─ AgentClient (gRPC)  │  │
+│  │             │◂───│              │◂───│  ├─ ProjectStore (SQL)  │  │
+│  │  Terminal   │    │  Events:     │    │  ├─ TLS (rcgen)         │  │
+│  │  Component  │    │  project-log │    │  └─ Credentials (KC)    │  │
+│  └─────────────┘    └──────────────┘    └────────────┬────────────┘  │
+│                                                      │               │
+└──────────────────────────────────────────────────────┼───────────────┘
+                                                       │
+                                          gRPC / HTTP/2 (port 50051)
+                                                       │
+┌──────────────────────────────────────────────────────┼───────────────┐
+│  Linux Server                                        │               │
+│                                                      ▼               │
+│  ┌──────────────────────────────────────────────────────────────┐    │
+│  │  runway-agent (PersistentAgentService)                       │    │
+│  │  ├─ gRPC Server (14 RPCs)                                   │    │
+│  │  │   ├─ Health/Status   → version, uptime, os, arch, CPU   │    │
+│  │  │   ├─ Deploy()        → extract tarball, install deps     │    │
+│  │  │   ├─ Execute()       → run code, persist logs + events  │    │
+│  │  │   ├─ Stop()          → kill process, emit event          │    │
+│  │  │   ├─ GetExecutions() → query execution history           │    │
+│  │  │   ├─ GetEvents()     → poll store-and-forward events    │    │
+│  │  │   ├─ *Schedule()     → agent-side cron management       │    │
+│  │  │   └─ Upgrade()       → receive binary, swap, restart    │    │
+│  │  ├─ AgentStore (SQLite ~/.runway/agent.db)                  │    │
+│  │  │   deployments | executions | logs | events | schedules   │    │
+│  │  ├─ Agent Scheduler (tick every 30s)                        │    │
+│  │  ├─ RunningProcesses (HashMap&lt;project_id, AbortHandle&gt;)     │    │
+│  │  └─ sysinfo (real CPU/memory metrics)                       │    │
+│  └──────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ~/.runway/deploys/{project_id}/v{n}/  ← persistent deploy dirs     │
+│  └── main.py | requirements.txt | ...                                │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>Component Interaction</h3>
+
+<div class="diagram">
+┌──────────┐         ┌───────────┐         ┌──────────────┐
+│  React   │  invoke │   Tauri   │  gRPC   │  runway-     │
+│  UI      │────────▸│  Command  │────────▸│  agent       │
+│          │         │           │         │              │
+│  Target: │         │  Reads    │         │  Writes code │
+│  [linux] │         │  code     │         │  to /tmp/    │
+│          │         │  from     │         │  Spawns      │
+│  [Run]   │         │  disk     │         │  process     │
+│          │◂────────│◂──────────│◂────────│              │
+│ Terminal │  events │  Emits    │ stream  │  Streams     │
+│ (logs)   │         │  log evt  │         │  stdout/err  │
+└──────────┘         └───────────┘         └──────────────┘</div>
+
+<!-- ============================================================ -->
+<h2 id="protocol">gRPC Protocol</h2>
+
+<p>Defined in <code>proto/runway.proto</code>. The agent implements a single gRPC service with 14 RPCs:</p>
+
+<h3>Service: <code>AgentService</code></h3>
+
+<table>
+  <tr><th>RPC</th><th>Request</th><th>Response</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>Health</code></td><td><code>HealthRequest</code></td><td><code>HealthResponse</code></td><td>Unary</td><td>Agent version, status, uptime, os, arch</td></tr>
+  <tr><td><code>Status</code></td><td><code>StatusRequest</code></td><td><code>StatusResponse</code></td><td>Unary</td><td>CPU, memory, running projects list</td></tr>
+  <tr><td><code>Deploy</code></td><td><code>DeployRequest</code></td><td><code>DeployResponse</code></td><td>Unary</td><td>Extract tarball, install deps, persist deployment</td></tr>
+  <tr><td><code>Execute</code></td><td><code>ExecuteRequest</code></td><td><code>stream ExecuteResponse</code></td><td>Server streaming</td><td>Run code, stream logs, persist to SQLite</td></tr>
+  <tr><td><code>Stop</code></td><td><code>StopRequest</code></td><td><code>StopResponse</code></td><td>Unary</td><td>Kill process, emit stop event</td></tr>
+  <tr><td><code>StreamLogs</code></td><td><code>LogStreamRequest</code></td><td><code>stream LogStreamResponse</code></td><td>Server streaming</td><td>Live log streaming</td></tr>
+  <tr><td><code>GetExecutions</code></td><td><code>GetExecutionsRequest</code></td><td><code>GetExecutionsResponse</code></td><td>Unary</td><td>Query persistent execution history</td></tr>
+  <tr><td><code>GetExecutionLogs</code></td><td><code>GetExecutionLogsRequest</code></td><td><code>stream LogStreamResponse</code></td><td>Server streaming</td><td>Replay stored log lines (supports since_seq)</td></tr>
+  <tr><td><code>GetEvents</code></td><td><code>GetEventsRequest</code></td><td><code>GetEventsResponse</code></td><td>Unary</td><td>Poll store-and-forward events (since_id)</td></tr>
+  <tr><td><code>AckEvents</code></td><td><code>AckEventsRequest</code></td><td><code>AckEventsResponse</code></td><td>Unary</td><td>Acknowledge + prune old events</td></tr>
+  <tr><td><code>AddSchedule</code></td><td><code>AddScheduleRequest</code></td><td><code>AddScheduleResponse</code></td><td>Unary</td><td>Create agent-side cron schedule</td></tr>
+  <tr><td><code>RemoveSchedule</code></td><td><code>RemoveScheduleRequest</code></td><td><code>RemoveScheduleResponse</code></td><td>Unary</td><td>Delete a schedule</td></tr>
+  <tr><td><code>ListSchedules</code></td><td><code>ListSchedulesRequest</code></td><td><code>ListSchedulesResponse</code></td><td>Unary</td><td>List schedules for a project</td></tr>
+  <tr><td><code>Upgrade</code></td><td><code>stream UpgradeChunk</code></td><td><code>UpgradeResponse</code></td><td>Client streaming</td><td>Upload new binary, verify, swap, restart</td></tr>
+</table>
+
+<h3>Message Definitions</h3>
+
+<h4>ExecuteRequest</h4>
+<pre><code>message ExecuteRequest {
+  string project_id  = 1;  // Unique project identifier
+  string runtime     = 2;  // "python", "node", "go", "shell", "rust"
+  string entrypoint  = 3;  // Filename: "main.py", "index.js", "run.sh"
+  bytes  code        = 4;  // Inline code content (the file bytes)
+  string working_dir = 5;  // Fallback working directory (if no inline code)
+}</code></pre>
+
+<h4>ExecuteResponse (streamed)</h4>
+<pre><code>message ExecuteResponse {
+  string stream    = 1;  // "stdout" or "stderr"
+  string text      = 2;  // One line of output
+  string timestamp = 3;  // RFC 3339 timestamp
+}</code></pre>
+
+<h4>HealthResponse</h4>
+<pre><code>message HealthResponse {
+  string agent_version  = 1;  // e.g. "0.1.0"
+  string status         = 2;  // "healthy"
+  uint64 uptime_seconds = 3;  // Seconds since agent started
+  string os             = 6;  // e.g. "linux" (from std::env::consts::OS)
+  string arch           = 7;  // e.g. "x86_64" (from std::env::consts::ARCH)
+}</code></pre>
+
+<h4>StatusResponse</h4>
+<pre><code>message StatusResponse {
+  string agent_id             = 1;  // Hostname of the server
+  string status               = 2;  // "running"
+  double cpu_usage            = 3;  // Global CPU % (via sysinfo)
+  uint64 memory_bytes         = 4;  // Used memory in bytes
+  repeated ProjectStatus projects = 5;
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="data-flow">Data Flow</h2>
+
+<h3>Remote Execution Flow</h3>
+
+<p>When a user clicks <strong>Run</strong> with a remote target selected in the UI:</p>
+
+<div class="flow-step">
+  <div class="flow-num">1</div>
+  <div class="flow-body"><strong>Read code from disk</strong> &mdash; Tauri command reads the entrypoint file from <code>~/Library/Application Support/com.runway.app/projects/{name}/{entrypoint}</code> on macOS.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">2</div>
+  <div class="flow-body"><strong>Look up target</strong> &mdash; Target's gRPC endpoint is retrieved from SQLite: <code>http://{host}:{port}</code>.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">3</div>
+  <div class="flow-body"><strong>Connect via gRPC</strong> &mdash; <code>AgentClient::connect(endpoint)</code> establishes an HTTP/2 channel to the remote agent.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">4</div>
+  <div class="flow-body"><strong>Send ExecuteRequest</strong> &mdash; The code bytes, runtime type, and entrypoint filename are sent in a single protobuf message.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">5</div>
+  <div class="flow-body"><strong>Agent writes to deploy dir</strong> &mdash; Code is written to <code>~/.runway/deploys/{project_id}/v{n}/</code>. A versioned directory is created per deployment, persisted in the <code>deployments</code> table.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">6</div>
+  <div class="flow-body"><strong>Agent spawns process</strong> &mdash; Creates an <code>executions</code> row, then runs the command. Every log line is persisted to <code>execution_logs</code> AND streamed over gRPC simultaneously.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">7</div>
+  <div class="flow-body"><strong>Stream logs back</strong> &mdash; stdout/stderr are captured line by line and sent as <code>ExecuteResponse</code> messages over the gRPC stream. Each line is also written to SQLite for later replay via <code>GetExecutionLogs</code>.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">8</div>
+  <div class="flow-body"><strong>Tauri emits events</strong> &mdash; Each log line is emitted as a <code>project-log</code> Tauri event. The Terminal component renders them identically to local logs.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">9</div>
+  <div class="flow-body"><strong>Completion</strong> &mdash; When the stream ends, a <code>project-status-change</code> event is emitted (<code>idle</code> or <code>failed</code>), and the run is recorded in SQLite. On the agent side, the <code>executions</code> row is updated with exit code + finished_at, and an <code>execution_completed</code> event is inserted into the events queue.</div>
+</div>
+
+<h3>Sequence Diagram</h3>
+
+<div class="diagram">
+  Mac UI          Tauri Command       AgentClient        runway-agent (Linux)
+    │                  │                   │                     │
+    │  click Run       │                   │                     │
+    ├─────────────────▸│                   │                     │
+    │                  │  read code        │                     │
+    │                  │  from disk        │                     │
+    │                  │                   │                     │
+    │                  │  emit "running"   │                     │
+    │◂─ ─ ─ ─ ─ ─ ─ ─ │                   │                     │
+    │                  │                   │                     │
+    │                  │  connect()        │                     │
+    │                  ├──────────────────▸│                     │
+    │                  │                   │  ExecuteRequest      │
+    │                  │                   ├────────────────────▸│
+    │                  │                   │                     │ write /tmp/
+    │                  │                   │                     │ spawn python3
+    │                  │                   │                     │
+    │                  │                   │  ExecuteResponse[0]  │
+    │                  │                   │◂────────────────────│ stdout line
+    │                  │  emit project-log │                     │
+    │◂─ ─ ─ ─ ─ ─ ─ ─ │◂──────────────────│                     │
+    │  render in       │                   │  ExecuteResponse[1]  │
+    │  Terminal        │                   │◂────────────────────│ stdout line
+    │◂─ ─ ─ ─ ─ ─ ─ ─ │◂──────────────────│                     │
+    │                  │                   │                     │
+    │                  │                   │  (stream ends)       │
+    │                  │                   │◂────────────────────│ process exits
+    │                  │  emit "idle"      │                     │
+    │◂─ ─ ─ ─ ─ ─ ─ ─ │                   │                     │
+    │                  │  record in DB     │                     │
+    │                  │                   │                     │</div>
+
+<!-- ============================================================ -->
+<h2 id="deployment">Deployment</h2>
+
+<h3>Method 1: Build from Source</h3>
+
+<p>For development and testing. Requires Rust toolchain and <code>protoc</code> on the target server.</p>
+
+<pre><code># On the Linux server:
+sudo apt install -y protobuf-compiler build-essential
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source ~/.cargo/env
+
+# Copy source and build
+rsync -avz --exclude target --exclude node_modules your-mac:~/runway/ ~/runway/
+cd ~/runway
+cargo build -p runway-agent --release
+
+# Run (bind to all interfaces for network access)
+./target/release/runway-agent --listen-all --port 50051</code></pre>
+
+<h3>Method 2: Install Script</h3>
+
+<p>For production servers. Downloads a pre-built binary and installs as a systemd service.</p>
+
+<pre><code># Install
+curl -sSL https://get.runway.dev | sudo bash
+
+# Uninstall
+curl -sSL https://get.runway.dev | sudo bash -s -- --uninstall</code></pre>
+
+<p>The install script (<code>scripts/install-agent.sh</code>) performs:</p>
+
+<table>
+  <tr><th>Step</th><th>Action</th></tr>
+  <tr><td>1. OS Detection</td><td>Linux only (rejects macOS)</td></tr>
+  <tr><td>2. Arch Detection</td><td>x86_64 or aarch64</td></tr>
+  <tr><td>3. Download</td><td>Binary from release URL to <code>/usr/local/bin/runway-agent</code></td></tr>
+  <tr><td>4. User Creation</td><td>Creates <code>runway</code> system user (no home, nologin shell)</td></tr>
+  <tr><td>5. systemd Service</td><td>Creates unit file, enables, starts</td></tr>
+</table>
+
+<h4>systemd Service Configuration</h4>
+
+<pre><code>[Unit]
+Description=Runway Agent
+After=network.target
+
+[Service]
+Type=simple
+User=runway
+ExecStart=/usr/local/bin/runway-agent --port 50051
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+<h4>Post-Install Commands</h4>
+
+<pre><code># Check status
+systemctl status runway-agent
+
+# View logs
+journalctl -u runway-agent -f
+
+# Restart
+sudo systemctl restart runway-agent</code></pre>
+
+<h3>Method 3: Register in Runway App</h3>
+
+<p>After the agent is running, register it as a target:</p>
+
+<pre><code># Via CLI
+runway targets add my-server --host 192.168.1.222 --port 50051
+runway targets ping my-server
+
+# Via UI
+# Targets page → + Add Target → fill name/host/port → Add → Ping</code></pre>
+
+<h3>Agent CLI Flags</h3>
+
+<table>
+  <tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>--port &lt;PORT&gt;</code></td><td>50051</td><td>gRPC server port</td></tr>
+  <tr><td><code>--listen-all</code></td><td>false</td><td>Bind to 0.0.0.0 (required for remote access)</td></tr>
+  <tr><td><code>--show-version</code></td><td>false</td><td>Print version and exit</td></tr>
+</table>
+
+<div class="callout callout-warn">
+  <p><strong>Important:</strong> Without <code>--listen-all</code>, the agent binds to <code>127.0.0.1</code> only, rejecting remote connections. Always use <code>--listen-all</code> for remote targets.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="security">Security</h2>
+
+<h3>Current Security Model</h3>
+
+<div class="callout callout-danger">
+  <p><strong>Warning:</strong> The current implementation uses <strong>plaintext gRPC</strong> (no TLS). This is acceptable for trusted LANs and development, but <strong>must not be used over the internet</strong> without additional protection (VPN, SSH tunnel, or enabling mTLS).</p>
+</div>
+
+<table>
+  <tr><th>Layer</th><th>Current</th><th>Planned</th></tr>
+  <tr><td>Transport encryption</td><td><span class="badge badge-planned">Plaintext</span></td><td>mTLS (mutual TLS)</td></tr>
+  <tr><td>Authentication</td><td><span class="badge badge-planned">None</span></td><td>Client certificates</td></tr>
+  <tr><td>Authorization</td><td><span class="badge badge-planned">None</span></td><td>Per-project permissions</td></tr>
+  <tr><td>Code isolation</td><td>OS user separation</td><td>Container sandboxing</td></tr>
+  <tr><td>Credential storage</td><td><span class="badge badge-done">macOS Keychain</span></td><td>Keychain + encrypted file (Linux)</td></tr>
+</table>
+
+<h3>mTLS Infrastructure (Implemented, Not Yet Wired)</h3>
+
+<p>The TLS module (<code>crates/runway-core/src/tls.rs</code>) provides certificate generation and tonic TLS configuration, ready to be activated:</p>
+
+<h4>Certificate Chain</h4>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────┐
+│  Runway CA (self-signed, 10-year validity)           │
+│  Generated by: tls::generate_ca()                    │
+│  Stored at: ~/Library/Application Support/           │
+│             com.runway.app/certs/ca.crt + ca.key     │
+│                                                      │
+│     ┌────────────────┐     ┌────────────────────┐   │
+│     │  Server Cert    │     │  Client Cert        │   │
+│     │  (per agent)    │     │  (Runway app)       │   │
+│     │                 │     │                      │   │
+│     │  CN: hostname   │     │  CN: runway-app     │   │
+│     │  SAN: hostname  │     │  EKU: clientAuth    │   │
+│     │  EKU: serverAuth│     │  1-year validity     │   │
+│     │  1-year validity│     │                      │   │
+│     └────────────────┘     └────────────────────┘   │
+│                                                      │
+│  Both signed by Runway CA                            │
+└─────────────────────────────────────────────────────┘</div>
+
+<h4>TLS Functions</h4>
+
+<table>
+  <tr><th>Function</th><th>Location</th><th>Purpose</th></tr>
+  <tr><td><code>generate_ca()</code></td><td><code>tls.rs</code></td><td>Create self-signed CA with <code>CertifiedIssuer</code></td></tr>
+  <tr><td><code>generate_server_cert(ca, hostname)</code></td><td><code>tls.rs</code></td><td>Sign a server cert for an agent</td></tr>
+  <tr><td><code>generate_client_cert(ca, name)</code></td><td><code>tls.rs</code></td><td>Sign a client cert for the app</td></tr>
+  <tr><td><code>ensure_ca()</code></td><td><code>tls.rs</code></td><td>Load or create CA, persist to disk</td></tr>
+  <tr><td><code>server_tls_config(bundle, ca_pem)</code></td><td><code>tls.rs</code></td><td>Build <code>tonic::ServerTlsConfig</code> with mTLS</td></tr>
+  <tr><td><code>client_tls_config(bundle, ca_pem)</code></td><td><code>tls.rs</code></td><td>Build <code>tonic::ClientTlsConfig</code> with mTLS</td></tr>
+</table>
+
+<h4>Enabling mTLS (When Ready)</h4>
+
+<pre><code>// Agent server startup (main.rs):
+let ca_pem = fs::read_to_string("ca.crt")?;
+let server_bundle = tls::load_bundle("server")?;
+let tls_config = tls::server_tls_config(&server_bundle, &ca_pem)?;
+
+Server::builder()
+    .tls_config(tls_config)?
+    .add_service(AgentServiceServer::new(service))
+    .serve(addr).await?;
+
+// App client connection (agent_client.rs):
+let ca_pem = fs::read_to_string("ca.crt")?;
+let client_bundle = tls::load_bundle("client")?;
+let tls_config = tls::client_tls_config(&client_bundle, &ca_pem)?;
+
+Channel::from_shared(endpoint)?
+    .tls_config(tls_config)?
+    .connect().await?;</code></pre>
+
+<h3>Credential Storage</h3>
+
+<p>The credentials module (<code>crates/runway-core/src/credentials.rs</code>) stores secrets in the macOS Keychain:</p>
+
+<table>
+  <tr><th>Function</th><th>Keychain Key Pattern</th><th>Purpose</th></tr>
+  <tr><td><code>store_ssh_key(target, key)</code></td><td><code>target:{name}:ssh-key</code></td><td>SSH private key for remote access</td></tr>
+  <tr><td><code>store_aws_credentials(profile, ak, sk)</code></td><td><code>aws:{profile}:access-key</code></td><td>AWS credentials for Lambda targets</td></tr>
+  <tr><td><code>store_credential(key, value)</code></td><td>Custom key</td><td>Generic secret storage</td></tr>
+</table>
+
+<div class="callout callout-success">
+  <p>All credentials use the macOS <code>security-framework</code> crate, which stores secrets in the system Keychain — encrypted at rest, protected by the user's login password.</p>
+</div>
+
+<h3>Security Recommendations</h3>
+
+<ul>
+  <li><strong>LAN only:</strong> Without mTLS, only deploy agents on trusted networks.</li>
+  <li><strong>SSH tunnel:</strong> For internet-facing agents, use <code>ssh -L 50051:localhost:50051 user@server</code> and connect to <code>localhost:50051</code>.</li>
+  <li><strong>Firewall:</strong> Restrict port 50051 to known IPs via <code>ufw</code> or security groups.</li>
+  <li><strong>Agent user:</strong> The install script creates a <code>runway</code> system user with no shell — processes run without root privileges.</li>
+  <li><strong>Temp directory cleanup:</strong> Executed code lives in <code>/tmp/runway-agent-{uuid}/</code> directories. These should be periodically cleaned.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="agent-binary">Agent Binary</h2>
+
+<h3>Source Location</h3>
+
+<pre><code>crates/runway-agent/
+├── Cargo.toml               # Deps: runway-core, tonic, clap, sysinfo, rusqlite, chrono, uuid
+├── build.rs                 # Compiles runway.proto via tonic-build
+└── src/
+    ├── main.rs              # CLI, SQLite init, gRPC server, scheduler loop spawn
+    ├── service.rs           # Legacy re-export (AgentServiceImpl from runway-core)
+    ├── persistent_service.rs # PersistentAgentService (14 RPCs with SQLite persistence)
+    ├── agent_store.rs       # AgentStore: SQLite at ~/.runway/agent.db (5 tables)
+    └── agent_scheduler.rs   # Independent scheduler (tick every 30s, runs cron jobs)</code></pre>
+
+<h3>Process Management</h3>
+
+<p>The agent uses a <code>HashMap&lt;String, RunningChild&gt;</code> protected by a <code>tokio::sync::Mutex</code> to track running processes:</p>
+
+<pre><code>struct RunningChild {
+    abort_handle: tokio::task::AbortHandle,
+    started_at: chrono::DateTime&lt;chrono::Utc&gt;,
+}
+
+// On Execute: insert(project_id, child)
+// On Stop:    remove(project_id) → abort_handle.abort()
+// On exit:    remove(project_id) automatically</code></pre>
+
+<h3>Runtime Support</h3>
+
+<table>
+  <tr><th>Runtime</th><th>Command</th><th>Entrypoint</th></tr>
+  <tr><td>Python</td><td><code>python3 {entrypoint}</code></td><td><code>main.py</code></td></tr>
+  <tr><td>Node.js</td><td><code>node {entrypoint}</code></td><td><code>index.js</code></td></tr>
+  <tr><td>Go</td><td><code>go run {entrypoint}</code></td><td><code>main.go</code></td></tr>
+  <tr><td>Shell</td><td><code>bash {entrypoint}</code></td><td><code>run.sh</code></td></tr>
+  <tr><td>Rust</td><td><code>cargo run</code></td><td><code>main.rs</code></td></tr>
+</table>
+
+<h3>Resource Monitoring</h3>
+
+<p>The <code>Status</code> RPC reports real system metrics via the <code>sysinfo</code> crate:</p>
+
+<ul>
+  <li><strong>CPU:</strong> Global CPU usage percentage</li>
+  <li><strong>Memory:</strong> Used memory in bytes</li>
+  <li><strong>Hostname:</strong> System hostname (used as <code>agent_id</code>)</li>
+  <li><strong>Running projects:</strong> List of active project_ids with start times</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="client">Client Library</h2>
+
+<p>The gRPC client (<code>crates/runway-core/src/agent_client.rs</code>) is used by both the Tauri app and the CLI:</p>
+
+<pre><code>use runway_core::agent_client::AgentClient;
+
+// Connect
+let mut client = AgentClient::connect("http://192.168.1.222:50051").await?;
+
+// Health check
+let health = client.health().await?;
+println!("v{}, uptime {}s", health.version, health.uptime_seconds);
+
+// Execute code remotely
+let code = std::fs::read("main.py")?;
+let logs = client.execute(
+    "my-project",    // project_id
+    "python",        // runtime
+    "main.py",       // entrypoint
+    "/tmp",          // working_dir
+    Some(&code),     // inline code bytes
+).await?;
+
+for line in &logs {
+    println!("[{}] {}", line.stream, line.text);
+}
+
+// Stop
+client.stop("my-project").await?;
+
+// System status
+let status = client.status().await?;
+println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 1024 / 1024);</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="ui-integration">UI Integration</h2>
+
+<h3>Target Selector (ProjectDetail page)</h3>
+
+<p>The project detail view shows pill-style target buttons when remote targets are configured:</p>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────────┐
+│  ← Back    my-crawler                          Delete   │
+├─────────────────────────────────────────────────────────┤
+│  ● Running   0:15          python   main.py             │
+├─────────────────────────────────────────────────────────┤
+│  Target: [● local] [● linux-server] [○ staging]         │
+├─────────────────────────────────────────────────────────┤
+│  [▶ Run]  [■ Stop]                                      │
+├─────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────┐    │
+│  │ $ Hello from setiserver!                        │    │
+│  │ $ OS: Linux 6.8.0-100-generic                   │    │
+│  │ $ Python: 3.12.3                                │    │
+│  │ $ Done!                                         │    │
+│  └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+
+● = green (online)    ○ = gray (unknown)    ● = red (offline)</div>
+
+<h3>Tauri Commands</h3>
+
+<table>
+  <tr><th>Command</th><th>Parameters</th><th>Action</th></tr>
+  <tr><td><code>run_project</code></td><td><code>id</code>, <code>target: Option&lt;String&gt;</code></td><td>Read code, send to agent (local UDS or remote TCP), stream logs via events</td></tr>
+  <tr><td><code>stop_project</code></td><td><code>id</code>, <code>target: Option&lt;String&gt;</code></td><td>Connect to agent, call Stop RPC</td></tr>
+  <tr><td><code>ping_target</code></td><td><code>id</code></td><td>Health check, update target status in DB</td></tr>
+  <tr><td><code>list_targets</code></td><td>&mdash;</td><td>List all configured targets from SQLite</td></tr>
+  <tr><td><code>add_target</code></td><td><code>name</code>, <code>host</code>, <code>port</code></td><td>Save new target to SQLite</td></tr>
+  <tr><td><code>remove_target</code></td><td><code>id</code></td><td>Delete target from SQLite</td></tr>
+</table>
+
+<h3>Event Bridge</h3>
+
+<p>Remote execution reuses the same Tauri events as local execution &mdash; the Terminal component needs no changes:</p>
+
+<table>
+  <tr><th>Event</th><th>Payload</th><th>Source</th></tr>
+  <tr><td><code>project-log</code></td><td><code>{ project_id, stream, text, timestamp }</code></td><td>Local: process stdout/stderr<br>Remote: gRPC stream</td></tr>
+  <tr><td><code>project-status-change</code></td><td><code>{ project_id, status, exit_code }</code></td><td>Local: process exit<br>Remote: stream completion</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="limitations">Current Limitations</h2>
+
+<table>
+  <tr><th>Limitation</th><th>Impact</th><th>Workaround</th></tr>
+  <tr>
+    <td>No TLS in transit</td>
+    <td>Code and logs are transmitted in plaintext</td>
+    <td>Use on trusted LAN or SSH tunnel. mTLS infra built but not wired.</td>
+  </tr>
+  <tr>
+    <td>No authentication</td>
+    <td>Anyone who can reach port 50051 can execute code</td>
+    <td>Firewall rules, bind to localhost + SSH tunnel</td>
+  </tr>
+  <tr>
+    <td>No execution timeout</td>
+    <td>Processes can run indefinitely on the agent</td>
+    <td>Use Stop command or process supervisor</td>
+  </tr>
+  <tr>
+    <td>No container sandboxing</td>
+    <td>Code runs as the agent's OS user, no isolation</td>
+    <td>Run agent as a dedicated low-privilege user</td>
+  </tr>
+</table>
+
+<div class="callout callout-success">
+  <p><strong>Resolved in persistent agent redesign:</strong></p>
+  <ul>
+    <li><strong>Multi-file deploy</strong> &mdash; Deploy RPC accepts tarballs, extracts to persistent directory</li>
+    <li><strong>Dependency install</strong> &mdash; Deploy runs <code>pip install</code>, <code>npm install</code>, <code>go mod download</code> automatically</li>
+    <li><strong>Temp cleanup</strong> &mdash; Deployments go to <code>~/.runway/deploys/</code>, old versions auto-pruned (keep last 5)</li>
+    <li><strong>Log persistence</strong> &mdash; All execution logs stored in SQLite, replayable via GetExecutionLogs</li>
+    <li><strong>Offline scheduling</strong> &mdash; Agent runs cron jobs independently, events queued for app to poll</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="roadmap">Roadmap</h2>
+
+<table>
+  <tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
+  <tr><td>gRPC agent server (14 RPCs)</td><td><span class="badge badge-done">Done</span></td><td>Health, Status, Deploy, Execute, Stop, StreamLogs + 8 persistent RPCs</td></tr>
+  <tr><td>SQLite persistence</td><td><span class="badge badge-done">Done</span></td><td><code>~/.runway/agent.db</code> — 5 tables, survives restarts</td></tr>
+  <tr><td>Execution history + logs</td><td><span class="badge badge-done">Done</span></td><td>Persistent, replayable via GetExecutions/GetExecutionLogs</td></tr>
+  <tr><td>Store-and-forward events</td><td><span class="badge badge-done">Done</span></td><td>Agent queues events, app polls via GetEvents/AckEvents</td></tr>
+  <tr><td>Agent-side scheduler</td><td><span class="badge badge-done">Done</span></td><td>Tick every 30s, runs cron jobs independently of app</td></tr>
+  <tr><td>Dependency install on deploy</td><td><span class="badge badge-done">Done</span></td><td>pip install, npm install, go mod download during Deploy RPC</td></tr>
+  <tr><td>Remote self-upgrade</td><td><span class="badge badge-done">Done</span></td><td>Client-streaming Upgrade RPC, verify + swap + systemd restart</td></tr>
+  <tr><td>Multi-file deploy</td><td><span class="badge badge-done">Done</span></td><td>Deploy RPC accepts tarballs, extracts to persistent dir</td></tr>
+  <tr><td>Deployment versioning</td><td><span class="badge badge-done">Done</span></td><td>Auto-version, keep last 5, prune old</td></tr>
+  <tr><td>gRPC client library</td><td><span class="badge badge-done">Done</span></td><td><code>AgentClient</code> with 8 new methods for persistent RPCs</td></tr>
+  <tr><td>CLI target management</td><td><span class="badge badge-done">Done</span></td><td>add, list, remove, ping</td></tr>
+  <tr><td>UI target management</td><td><span class="badge badge-done">Done</span></td><td>Targets page with add/remove/ping/stats (os, arch, CPU, memory)</td></tr>
+  <tr><td>UI remote execution</td><td><span class="badge badge-done">Done</span></td><td>Target selector + Run/Stop on remote</td></tr>
+  <tr><td>Install script + systemd</td><td><span class="badge badge-done">Done</span></td><td>systemd service with auto-restart on Linux</td></tr>
+  <tr><td>mDNS LAN discovery</td><td><span class="badge badge-done">Done</span></td><td><code>_runway._tcp.local.</code> via mdns-sd</td></tr>
+  <tr><td>TLS cert generation</td><td><span class="badge badge-done">Done</span></td><td>CA + server/client certs via rcgen</td></tr>
+  <tr><td>Activate mTLS</td><td><span class="badge badge-planned">Planned</span></td><td>Wire tls.rs into agent + client</td></tr>
+  <tr><td>Container sandboxing</td><td><span class="badge badge-planned">Planned</span></td><td>OCI/Docker isolation per project</td></tr>
+</table>
+
+<p style="margin-top: 3rem; color: var(--muted); font-size: 0.85rem; text-align: center;">
+  Runway Remote Agent Documentation &mdash; Generated March 2026
+</p>
+
+</div>
+</body>
+</html>

@@ -50,16 +50,17 @@ print(f"User: {os.getenv('USER', 'unknown')}")
 print(f"Python: {platform.python_version()}")
 "#;
 
-    let logs = client
-        .execute("test-python", "python", "main.py", "/tmp", Some(code))
+    let result = client
+        .execute("test-python", "python", "main.py", "/tmp", Some(code), None, std::collections::HashMap::new())
         .await
         .expect("Execute RPC failed");
 
-    assert!(!logs.is_empty(), "Should have log output");
-    let output: String = logs.iter().map(|l| format!("{}\n", l.text)).collect();
+    assert!(!result.logs.is_empty(), "Should have log output");
+    let output: String = result.logs.iter().map(|l| format!("{}\n", l.text)).collect();
     assert!(output.contains("Hello from"), "Output should contain greeting: {output}");
     assert!(output.contains("Python:"), "Output should contain Python version: {output}");
-    println!("Python execution OK:\n{output}");
+    assert_eq!(result.exit_code, 0, "Exit code should be 0");
+    println!("Python execution OK (exit={}):\n{output}", result.exit_code);
 }
 
 #[tokio::test]
@@ -70,16 +71,17 @@ async fn test_remote_execute_shell() {
 
     let code = b"#!/bin/bash\necho \"hostname: $(hostname)\"\necho \"kernel: $(uname -r)\"\necho \"uptime: $(uptime -p)\"";
 
-    let logs = client
-        .execute("test-shell", "shell", "main.sh", "/tmp", Some(code))
+    let result = client
+        .execute("test-shell", "shell", "main.sh", "/tmp", Some(code), None, std::collections::HashMap::new())
         .await
         .expect("Execute RPC failed");
 
-    assert!(!logs.is_empty(), "Should have log output");
-    let output: String = logs.iter().map(|l| format!("{}\n", l.text)).collect();
+    assert!(!result.logs.is_empty(), "Should have log output");
+    let output: String = result.logs.iter().map(|l| format!("{}\n", l.text)).collect();
     assert!(output.contains("hostname:"), "Output should contain hostname: {output}");
     assert!(output.contains("kernel:"), "Output should contain kernel: {output}");
-    println!("Shell execution OK:\n{output}");
+    assert_eq!(result.exit_code, 0, "Exit code should be 0");
+    println!("Shell execution OK (exit={}):\n{output}", result.exit_code);
 }
 
 #[tokio::test]
@@ -99,7 +101,7 @@ async fn test_remote_execute_and_stop() {
 
     let exec_handle = tokio::spawn(async move {
         client2
-            .execute(project_id, "shell", "main.sh", "/tmp", Some(code))
+            .execute(project_id, "shell", "main.sh", "/tmp", Some(code), None, std::collections::HashMap::new())
             .await
     });
 
@@ -113,7 +115,7 @@ async fn test_remote_execute_and_stop() {
     // The execute should complete (possibly with partial output)
     let result = exec_handle.await.expect("Join failed");
     match result {
-        Ok(logs) => println!("Got {} log lines before stop", logs.len()),
+        Ok(exec_result) => println!("Got {} log lines before stop (exit={})", exec_result.logs.len(), exec_result.exit_code),
         Err(e) => println!("Execute ended with error after stop (expected): {e}"),
     }
 }

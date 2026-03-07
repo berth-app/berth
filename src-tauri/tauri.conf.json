@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "/Users/setillo/.nvm/versions/node/v22.17.0/bin/npx vite",
+    "beforeBuildCommand": "/Users/setillo/.nvm/versions/node/v22.17.0/bin/npx tsc && /Users/setillo/.nvm/versions/node/v22.17.0/bin/npx vite build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -22,11 +22,7 @@
         "decorations": true,
         "transparent": false
       }
-    ],
-    "trayIcon": {
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true
-    }
+    ]
   },
   "plugins": {
     "shell": {

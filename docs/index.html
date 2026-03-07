@@ -93,8 +93,10 @@
 <span class="highlight">|  <span class="green">React 19 Frontend</span>          <span class="purple">Rust Backend</span>               |</span>
 <span class="highlight">|  +--------------------+    +-------------------------+  |</span>
 <span class="highlight">|  | ProjectList.tsx    |    | commands.rs             |  |</span>
-<span class="highlight">|  | ProjectDetail.tsx  |&lt;--&gt;| (6 Tauri commands)      |  |</span>
-<span class="highlight">|  | PasteAndDeploy.tsx |    |   + ProcessRegistry     |  |</span>
+<span class="highlight">|  | ProjectDetail.tsx  |&lt;--&gt;| (18 Tauri commands)     |  |</span>
+<span class="highlight">|  | PasteAndDeploy.tsx |    |   + Embedded Agent (UDS)|  |</span>
+<span class="highlight">|  | Targets.tsx        |    |                         |  |</span>
+<span class="highlight">|  | Settings.tsx       |    |                         |  |</span>
 <span class="highlight">|  +--------------------+    +------------+------------+  |</span>
 <span class="highlight">|       invoke() / listen()               |                |</span>
 <span class="highlight">+------------------------------------------+----------------+</span>
@@ -122,19 +124,19 @@
   </div>
   <div class="card">
     <h3>runway-app (src-tauri) <span class="badge badge-done">Done</span></h3>
-    <p>Tauri 2.0 desktop app. Rust backend with 6 commands + React frontend with 3 pages.</p>
+    <p>Tauri 2.0 desktop app. Rust backend with 18 commands + React frontend with 5 pages. Agent-based execution via UDS.</p>
   </div>
   <div class="card">
     <h3>runway-mcp <span class="badge badge-done">Done</span></h3>
-    <p>MCP server for AI agent control. 13 tools via JSON-RPC 2.0 stdio. E2E tested.</p>
+    <p>MCP server for AI agent control. 17 tools via JSON-RPC 2.0 stdio. E2E tested.</p>
   </div>
   <div class="card">
     <h3>runway-agent <span class="badge badge-done">Done</span></h3>
-    <p>Execution agent binary. gRPC server on localhost:50051. Remote mode in Phase 3.</p>
+    <p>Persistent execution agent. 14 gRPC RPCs, SQLite store (~/.runway/agent.db), agent-side scheduler, store-and-forward events, remote upgrade. Deployed on Linux via systemd.</p>
   </div>
   <div class="card">
     <h3>runway-cli <span class="badge badge-done">Done</span></h3>
-    <p>CLI interface. 12 commands + schedule subcommands. Full feature parity with MCP.</p>
+    <p>CLI interface. 12 commands + schedule + targets subcommands. Full feature parity with MCP.</p>
   </div>
 </div>
 
@@ -150,31 +152,31 @@
                                                   |
                                          +--------+--------+
                                          |                 |
-                                    store.get(uuid)   registry.lock()
-                                         |            (prevent double-run)
+                                    store.get(uuid)   target check
+                                         |            (local or remote?)
                                          v
+                                  <span class="green">AgentClient::connect_uds() or connect(tcp)</span>
+                                         |
+                                  <span class="green">AgentClient::execute_streaming()</span>
+                                         |
+                                  <span class="purple">AgentService::execute()</span>
+                                         |
                                   <span class="green">executor::spawn_and_stream()</span>
                                          |
-                                  Returns (Child, Receiver&lt;LogLine&gt;)
+                              Streams ExecuteResponse (log lines)
                                          |
-                              +----------+-----------+
-                              |                      |
-                         Child stored in        tokio::spawn(log_task)
-                         ProcessRegistry             |
-                                              reads from Receiver
-                                                     |
-                                              <span class="highlight">app.emit("project-log", LogEvent)</span>
-                                                     |
-                                                     v
-                                         <span class="green">ProjectDetail.tsx</span>
-                                         listen("project-log")
-                                         appends to logs state
-                                         renders in log viewer
+                              tokio::spawn(log_task)
+                                         |
+                                  <span class="highlight">app.emit("project-log", LogEvent)</span>
+                                         |
+                                         v
+                                  <span class="green">ProjectDetail.tsx</span>
+                                  listen("project-log")
+                                  appends to logs state
+                                  renders in log viewer
 
 <span class="red">When process exits:</span>
-  log_task detects channel closed
-      --> registry.remove(uuid)
-      --> child.wait() for exit code
+  Stream ends with is_final=true + exit_code
       --> store.update_status(Idle or Failed)
       --> <span class="highlight">app.emit("project-status-change")</span>
 </div>
@@ -370,6 +372,72 @@ impl ProjectStore {
   <span class="red">Failed</span> also occurs on non-zero exit code
 </div>
 
+<h3>Agent SQLite &mdash; <code>~/.runway/agent.db</code> (remote agent only)</h3>
+
+<div class="diagram">
++-------------------------------------------------------------------+
+|                        <span class="highlight">deployments</span>                                |
++-------------------------------------------------------------------+
+| <span class="green">id</span>           TEXT PRIMARY KEY    UUID v4                          |
+| <span class="green">project_id</span>   TEXT NOT NULL                                        |
+| <span class="green">version</span>      INTEGER NOT NULL                                     |
+| <span class="green">runtime</span>      TEXT NOT NULL       python|node|go|rust|shell         |
+| <span class="green">entrypoint</span>   TEXT NOT NULL                                        |
+| <span class="green">working_dir</span>  TEXT NOT NULL       /home/user/.runway/deploys/...   |
+| <span class="green">image_tag</span>    TEXT                container image (nullable)        |
+| <span class="green">status</span>       TEXT NOT NULL       deployed|running|stopped          |
+| <span class="green">deployed_at</span>  TEXT NOT NULL       RFC 3339                         |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                        <span class="highlight">executions</span>                                 |
++-------------------------------------------------------------------+
+| <span class="green">id</span>             TEXT PRIMARY KEY  UUID v4                          |
+| <span class="green">project_id</span>     TEXT NOT NULL                                      |
+| <span class="green">deployment_id</span>  TEXT                                               |
+| <span class="green">started_at</span>     TEXT NOT NULL     RFC 3339                         |
+| <span class="green">finished_at</span>    TEXT              RFC 3339 (nullable)              |
+| <span class="green">exit_code</span>      INTEGER                                            |
+| <span class="green">trigger</span>        TEXT NOT NULL     manual|schedule                  |
+| <span class="green">status</span>         TEXT NOT NULL     running|completed|failed|stopped  |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                      <span class="highlight">execution_logs</span>                               |
++-------------------------------------------------------------------+
+| <span class="green">id</span>             INTEGER PRIMARY KEY AUTOINCREMENT                  |
+| <span class="green">execution_id</span>   TEXT NOT NULL                                      |
+| <span class="green">seq</span>            INTEGER NOT NULL                                   |
+| <span class="green">stream</span>         TEXT NOT NULL     stdout|stderr                    |
+| <span class="green">text</span>           TEXT NOT NULL                                      |
+| <span class="green">timestamp</span>      TEXT NOT NULL     RFC 3339                         |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                          <span class="highlight">events</span>                                   |
++-------------------------------------------------------------------+
+| <span class="green">id</span>             INTEGER PRIMARY KEY AUTOINCREMENT                  |
+| <span class="green">event_type</span>     TEXT NOT NULL     deploy_completed, execution_*,   |
+|                                    schedule_triggered, agent_upgraded|
+| <span class="green">project_id</span>     TEXT                                               |
+| <span class="green">execution_id</span>   TEXT                                               |
+| <span class="green">data</span>           TEXT NOT NULL     JSON payload                     |
+| <span class="green">created_at</span>     TEXT NOT NULL     RFC 3339                         |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                        <span class="highlight">schedules</span> (agent-side)                      |
++-------------------------------------------------------------------+
+| <span class="green">id</span>                TEXT PRIMARY KEY  UUID v4                        |
+| <span class="green">project_id</span>        TEXT NOT NULL                                    |
+| <span class="green">cron_expr</span>         TEXT NOT NULL     @every 5m, @hourly, etc.       |
+| <span class="green">enabled</span>           INTEGER NOT NULL  1=enabled, 0=disabled           |
+| <span class="green">created_at</span>        TEXT NOT NULL     RFC 3339                       |
+| <span class="green">last_triggered_at</span> TEXT              RFC 3339 (nullable)            |
+| <span class="green">next_run_at</span>       TEXT              RFC 3339 (nullable)            |
++-------------------------------------------------------------------+
+</div>
+
 <h4>Column Formats</h4>
 <table>
   <tr><th>Column</th><th>Format</th><th>Example</th></tr>
@@ -388,17 +456,39 @@ impl ProjectStore {
   <tr><td><code>list_projects</code></td><td>&mdash;</td><td><code>{ projects: Project[] }</code></td><td>No</td></tr>
   <tr><td><code>create_project</code></td><td><code>name: String, path: String</code></td><td><code>Project</code></td><td>No</td></tr>
   <tr><td><code>detect_runtime</code></td><td><code>path: String</code></td><td><code>RuntimeInfo</code></td><td>No</td></tr>
+  <tr><td><code>update_project</code></td><td><code>id: String, ...</code></td><td><code>Project</code></td><td>No</td></tr>
   <tr><td><code>delete_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
-  <tr><td><code>run_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>Yes</td></tr>
-  <tr><td><code>stop_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>Yes</td></tr>
+  <tr><td><code>save_paste_code</code></td><td><code>name: String, code: String</code></td><td><code>String (path)</code></td><td>No</td></tr>
+  <tr><td><code>run_project</code></td><td><code>id: String, target: Option&lt;String&gt;</code></td><td><code>()</code></td><td>Yes</td></tr>
+  <tr><td><code>stop_project</code></td><td><code>id: String, target: Option&lt;String&gt;</code></td><td><code>()</code></td><td>Yes</td></tr>
+  <tr><td><code>list_targets</code></td><td>&mdash;</td><td><code>Vec&lt;Target&gt;</code></td><td>No</td></tr>
+  <tr><td><code>add_target</code></td><td><code>name, host, port</code></td><td><code>Target</code></td><td>No</td></tr>
+  <tr><td><code>remove_target</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>ping_target</code></td><td><code>id: String</code></td><td><code>HealthResponse</code></td><td>Yes</td></tr>
+  <tr><td><code>get_agent_stats</code></td><td><code>id: String</code></td><td><code>AgentStats</code></td><td>Yes</td></tr>
+  <tr><td><code>set_project_target</code></td><td><code>id: String, targetId: Option&lt;String&gt;</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>set_project_notify</code></td><td><code>id: String, enabled: bool</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>read_project_file</code></td><td><code>id: String</code></td><td><code>String</code></td><td>No</td></tr>
+  <tr><td><code>write_project_file</code></td><td><code>id: String, content: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>import_file</code></td><td><code>filePath: String</code></td><td><code>Project</code></td><td>No</td></tr>
+  <tr><td><code>get_settings</code></td><td>&mdash;</td><td><code>Record&lt;String, String&gt;</code></td><td>No</td></tr>
+  <tr><td><code>update_setting</code></td><td><code>key: String, value: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>list_schedules</code></td><td><code>projectId: String</code></td><td><code>Vec&lt;Schedule&gt;</code></td><td>No</td></tr>
+  <tr><td><code>add_schedule</code></td><td><code>projectId, cronExpr</code></td><td><code>Schedule</code></td><td>No</td></tr>
+  <tr><td><code>remove_schedule</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>toggle_schedule</code></td><td><code>id: String, enabled: bool</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>list_execution_logs</code></td><td><code>projectId, limit</code></td><td><code>Vec&lt;ExecutionLog&gt;</code></td><td>No</td></tr>
 </table>
 
 <h3>Managed State</h3>
-<pre><code>pub type ProcessRegistry = Arc&lt;tokio::sync::Mutex&lt;HashMap&lt;Uuid, RunningProcess&gt;&gt;&gt;;
+<pre><code>// Embedded local agent (in-process, UDS transport)
+// AgentClient connects via ~/.runway/agent.sock
+// Lockfile coordination via ~/.runway/agent.lock
+// No ProcessRegistry — agent owns all process lifecycle
 
-pub struct RunningProcess {
-    pub child: tokio::process::Child,
-    pub log_task_abort: tokio::task::AbortHandle,
+pub struct AppState {
+    pub store: ProjectStore,
+    // Agent started on app init, shared across commands
 }</code></pre>
 
 <!-- ============================================================ -->
@@ -444,9 +534,19 @@ pub struct RunningProcess {
   |       Listens: project-log, project-status-change
   |
   +-- view === "paste"
-        <span class="green">PasteAndDeploy.tsx</span>
-          Props: onBack(), onCreated(id)
-          State: name, code, path, runtimeInfo, mode, creating
+  |     <span class="green">PasteAndDeploy.tsx</span>
+  |       Props: onBack(), onCreated(id)
+  |       State: name, code, path, runtimeInfo, mode, creating, target
+  |
+  +-- view === "targets"
+  |     <span class="green">Targets.tsx</span>
+  |       Props: onBack()
+  |       State: targets[], showAdd, stats{}, expandedId
+  |
+  +-- view === "settings"
+        <span class="green">Settings.tsx</span>
+          Props: onBack()
+          State: settings{}, theme
 </div>
 
 <h3>TypeScript Interfaces</h3>
@@ -523,36 +623,52 @@ stopProject(id: string): Promise&lt;void&gt;</code></pre>
 user-select: none;</code></pre>
 
 <!-- ============================================================ -->
-<h2 id="protobuf">Protobuf / gRPC (Phase 3)</h2>
+<h2 id="protobuf">Protobuf / gRPC</h2>
 
 <pre><code>syntax = "proto3";
 package runway;
 
 service AgentService {
-  rpc Execute(ExecuteRequest)       returns (stream ExecuteResponse);
-  rpc Status(StatusRequest)         returns (StatusResponse);
-  rpc StreamLogs(LogStreamRequest)  returns (stream LogStreamResponse);
-  rpc Stop(StopRequest)             returns (StopResponse);
-  rpc Health(HealthRequest)         returns (HealthResponse);
+  // Core RPCs (Phase 1-3)
+  rpc Execute(ExecuteRequest)           returns (stream ExecuteResponse);
+  rpc Status(StatusRequest)             returns (StatusResponse);
+  rpc StreamLogs(LogStreamRequest)      returns (stream LogStreamResponse);
+  rpc Stop(StopRequest)                 returns (StopResponse);
+  rpc Health(HealthRequest)             returns (HealthResponse);
+  rpc Deploy(DeployRequest)             returns (DeployResponse);
+
+  // Persistent Agent RPCs (Phase 3.5)
+  rpc GetExecutions(GetExecutionsRequest)       returns (GetExecutionsResponse);
+  rpc GetExecutionLogs(GetExecutionLogsRequest)  returns (stream LogStreamResponse);
+  rpc GetEvents(GetEventsRequest)               returns (GetEventsResponse);
+  rpc AckEvents(AckEventsRequest)               returns (AckEventsResponse);
+  rpc AddSchedule(AddScheduleRequest)           returns (AddScheduleResponse);
+  rpc RemoveSchedule(RemoveScheduleRequest)     returns (RemoveScheduleResponse);
+  rpc ListSchedules(ListSchedulesRequest)       returns (ListSchedulesResponse);
+  rpc Upgrade(stream UpgradeChunk)              returns (UpgradeResponse);
 }</code></pre>
 
 <h4>Message Types</h4>
 <table>
   <tr><th>Message</th><th>Key Fields</th><th>Notes</th></tr>
   <tr><td><code>ExecuteRequest</code></td><td>project_id, runtime, entrypoint, code (bytes), working_dir</td><td>code field for paste-and-deploy</td></tr>
-  <tr><td><code>ExecuteResponse</code></td><td>stream, text, timestamp</td><td>Server-streaming</td></tr>
-  <tr><td><code>StatusRequest</code></td><td>project_id</td><td>Empty = agent-level status</td></tr>
+  <tr><td><code>ExecuteResponse</code></td><td>stream, text, timestamp, exit_code, is_final</td><td>Server-streaming, final message has exit code</td></tr>
+  <tr><td><code>HealthResponse</code></td><td>agent_version, status, uptime_seconds, os, arch</td><td>os/arch from std::env::consts</td></tr>
   <tr><td><code>StatusResponse</code></td><td>agent_id, status, cpu_usage, memory_bytes, projects[]</td><td></td></tr>
-  <tr><td><code>ProjectStatus</code></td><td>project_id, status, pid, started_at</td><td>Nested in StatusResponse</td></tr>
-  <tr><td><code>LogStreamRequest</code></td><td>project_id, follow, tail_lines</td><td>tail_lines=0 means all</td></tr>
-  <tr><td><code>StopRequest/Response</code></td><td>project_id / success, message</td><td></td></tr>
-  <tr><td><code>HealthRequest/Response</code></td><td>&mdash; / agent_version, status, uptime_seconds</td><td></td></tr>
+  <tr><td><code>DeployRequest</code></td><td>project_id, runtime, entrypoint, tarball (bytes)</td><td>Multi-file deploy via tarball</td></tr>
+  <tr><td><code>GetExecutionsRequest</code></td><td>project_id, limit</td><td>Query persistent execution history</td></tr>
+  <tr><td><code>ExecutionInfo</code></td><td>id, project_id, started_at, finished_at, exit_code, trigger, status</td><td>Nested in GetExecutionsResponse</td></tr>
+  <tr><td><code>GetEventsRequest</code></td><td>since_id, limit</td><td>Poll for store-and-forward events</td></tr>
+  <tr><td><code>AgentEvent</code></td><td>id, event_type, project_id, execution_id, data, created_at</td><td>Nested in GetEventsResponse</td></tr>
+  <tr><td><code>AgentScheduleInfo</code></td><td>id, project_id, cron_expr, enabled, last_triggered_at, next_run_at</td><td>Agent-side schedule</td></tr>
+  <tr><td><code>UpgradeChunk</code></td><td>data (bytes), chunk_index, total_chunks</td><td>Client-streaming binary upload</td></tr>
+  <tr><td><code>UpgradeResponse</code></td><td>success, new_version, message</td><td>Sent before systemd restart</td></tr>
 </table>
 
 <!-- ============================================================ -->
 <h2 id="mcp">MCP Server <span class="badge badge-done">Done</span></h2>
 
-<p>13 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05). E2E tested: deploy inline code, run, capture output, delete.</p>
+<p>17 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05). E2E tested: deploy inline code, run, capture output, delete.</p>
 
 <table>
   <tr><th>Tool</th><th>Purpose</th><th>Status</th></tr>
@@ -625,11 +741,13 @@ mac-rundeck/
 |   +-- main.tsx                <span class="muted">React entry</span>
 |   +-- App.tsx                 <span class="muted">Root component, view router</span>
 |   +-- lib/
-|   |   +-- invoke.ts           <span class="muted">6 typed Tauri invoke functions</span>
+|   |   +-- invoke.ts           <span class="muted">Typed Tauri invoke functions (targets, schedules, settings, etc.)</span>
 |   +-- pages/
 |   |   +-- ProjectList.tsx     <span class="muted">Project list with status</span>
-|   |   +-- ProjectDetail.tsx   <span class="muted">Run/Stop, log viewer, events</span>
-|   |   +-- PasteAndDeploy.tsx  <span class="muted">Code import wizard</span>
+|   |   +-- ProjectDetail.tsx   <span class="muted">Run/Stop, log viewer, code editor, schedules, history</span>
+|   |   +-- PasteAndDeploy.tsx  <span class="muted">Code import wizard with target selector</span>
+|   |   +-- Targets.tsx         <span class="muted">Remote target management (add/remove/ping/stats)</span>
+|   |   +-- Settings.tsx        <span class="muted">App settings (theme, default target, auto-run)</span>
 |   +-- styles/
 |       +-- globals.css         <span class="muted">macOS design tokens</span>
 |
@@ -644,7 +762,7 @@ mac-rundeck/
 |   +-- src/
 |       +-- main.rs             <span class="muted">Desktop entry</span>
 |       +-- lib.rs              <span class="muted">Tauri builder, state, plugins</span>
-|       +-- commands.rs         <span class="muted">7 commands + ProcessRegistry + monitoring</span>
+|       +-- commands.rs         <span class="muted">18 commands + agent-based execution + monitoring</span>
 |
 +-- <span class="green">crates/</span>
 |   +-- runway-core/            <span class="badge badge-done">Done</span>
@@ -653,8 +771,14 @@ mac-rundeck/
 |   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
 |   |       +-- runtime.rs      <span class="muted">Runtime detection + dep parsing (req.txt, package.json, go.mod, Cargo.toml)</span>
 |   |       +-- executor.rs     <span class="muted">Process spawn + log stream (mpsc channel)</span>
-|   |       +-- store.rs        <span class="muted">SQLite CRUD (projects + schedules) + migrations</span>
+|   |       +-- store.rs        <span class="muted">SQLite CRUD (projects + schedules + targets) + migrations</span>
 |   |       +-- scheduler.rs    <span class="muted">Cron-like scheduler (parse, tick, execute due jobs)</span>
+|   |       +-- agent_service.rs <span class="muted">AgentServiceImpl (shared across all crates)</span>
+|   |       +-- agent_client.rs <span class="muted">gRPC client (TCP + UDS connect, streaming execute)</span>
+|   |       +-- uds.rs          <span class="muted">Unix Domain Socket transport helpers (serve + connect)</span>
+|   |       +-- local_agent.rs  <span class="muted">Embedded agent bootstrap + lockfile coordination</span>
+|   |       +-- tls.rs          <span class="muted">mTLS certificate generation (rcgen)</span>
+|   |       +-- credentials.rs  <span class="muted">Keychain credential storage (security-framework)</span>
 |   |
 |   +-- runway-mcp/             <span class="badge badge-done">Done</span>
 |   |   +-- src/
@@ -662,13 +786,16 @@ mac-rundeck/
 |   |       +-- lib.rs          <span class="muted">Module exports</span>
 |   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
 |   |       +-- server.rs       <span class="muted">Stdio server loop</span>
-|   |       +-- tools.rs        <span class="muted">13 tool definitions + handlers</span>
+|   |       +-- tools.rs        <span class="muted">17 tool definitions + handlers</span>
 |   |
 |   +-- runway-agent/           <span class="badge badge-done">Done</span>
 |   |   +-- src/
-|   |   |   +-- main.rs         <span class="muted">gRPC server on localhost:50051</span>
-|   |   |   +-- service.rs      <span class="muted">AgentService impl (Execute, Status, Stop, Health)</span>
-|   |   +-- build.rs            <span class="muted">tonic-build proto compilation</span>
+|   |   |   +-- main.rs              <span class="muted">Agent startup: SQLite init, gRPC server, scheduler loop</span>
+|   |   |   +-- service.rs           <span class="muted">Legacy re-export (AgentServiceImpl from runway-core)</span>
+|   |   |   +-- persistent_service.rs <span class="muted">PersistentAgentService (14 RPCs, SQLite persistence)</span>
+|   |   |   +-- agent_store.rs       <span class="muted">Agent SQLite store (~/.runway/agent.db, 5 tables)</span>
+|   |   |   +-- agent_scheduler.rs   <span class="muted">Agent-side cron scheduler (tick every 30s)</span>
+|   |   +-- build.rs                 <span class="muted">tonic-build proto compilation</span>
 |   |
 |   +-- runway-cli/             <span class="badge badge-done">Done</span>
 |       +-- src/main.rs         <span class="muted">12 commands + schedule subcommands</span>
@@ -684,9 +811,11 @@ mac-rundeck/
 |   +-- drf/004-business-model.yaml
 |   +-- drf/005-mcp-as-core.yaml
 |   +-- drf/006-backend-storage.yaml
+|   +-- drf/007-agent-only-execution.yaml
 |
 +-- docs/                       <span class="muted">This documentation</span>
     +-- index.html
+    +-- remote-agent.html
 </div>
 
 <!-- ============================================================ -->
@@ -697,7 +826,7 @@ mac-rundeck/
   <tr><th>Item</th><th>Status</th></tr>
   <tr><td>Tauri app scaffold (project list, detail, code import)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>runway-core: project model, runtime detection</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>Run/Stop execution (ProcessRegistry, log streaming via events)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Run/Stop execution (agent-based via UDS, log streaming via events)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>Paste & Deploy end-to-end (save to disk, smart quote normalization)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>xterm.js log viewer (ANSI colors, auto-fit, 10k scrollback)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>Basic monitoring (run count, last run, exit codes, live uptime)</td><td><span class="badge badge-done">Done</span></td></tr>
@@ -717,8 +846,8 @@ mac-rundeck/
   <tr><td>Auto-detect: parse requirements.txt, package.json, go.mod, Cargo.toml</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
-<h3>Phase 3: Remote Agents <span class="badge badge-stub">Not Started</span></h3>
-<p>Agent install script, gRPC + mTLS over internet, remote deploy, agent health monitoring, mDNS LAN discovery.</p>
+<h3>Phase 3: Remote Agents <span class="badge badge-done">Complete</span></h3>
+<p>Persistent remote agent with SQLite store, 14 gRPC RPCs, agent-side scheduler, store-and-forward events, remote upgrade, dependency install during deployment. Agent install script, gRPC communication, remote deploy, agent health monitoring, mDNS LAN discovery, agent-only execution architecture (UDS for local, TCP gRPC for remote). Deployed and verified on setiserver (192.168.1.222).</p>
 
 <h3>Phase 4: Cloud Targets <span class="badge badge-stub">Not Started</span></h3>
 <p>AWS Lambda, Cloudflare Workers, deployment history, code signing, Homebrew cask.</p>

@@ -2,7 +2,6 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 use runway_core::agent_client::AgentClient;
-use runway_core::executor;
 use runway_core::project::Project;
 use runway_core::runtime;
 use runway_core::scheduler::{self, Schedule};
@@ -35,11 +34,17 @@ enum Commands {
     Run {
         /// Project name or UUID
         project: String,
+        /// Target to run on (default: local)
+        #[arg(long, default_value = "local")]
+        target: String,
     },
     /// Stop a running project
     Stop {
         /// Project name or UUID
         project: String,
+        /// Target to stop on (default: local)
+        #[arg(long, default_value = "local")]
+        target: String,
     },
     /// View logs for a project (run and capture)
     Logs {
@@ -48,6 +53,9 @@ enum Commands {
         /// Follow log output
         #[arg(long, short)]
         follow: bool,
+        /// Target to run on (default: local)
+        #[arg(long, default_value = "local")]
+        target: String,
     },
     /// Check status of a project
     Status {
@@ -153,6 +161,18 @@ fn get_store() -> anyhow::Result<ProjectStore> {
     ProjectStore::open(db_path.to_str().unwrap_or("runway.db"))
 }
 
+async fn get_agent_client(target: &str) -> anyhow::Result<AgentClient> {
+    if target == "local" {
+        runway_core::local_agent::get_or_start_local_agent().await
+    } else {
+        let store = get_store()?;
+        let t = store
+            .get_target_by_name(target)?
+            .ok_or_else(|| anyhow::anyhow!("Target '{}' not found", target))?;
+        AgentClient::connect(&t.grpc_endpoint()).await
+    }
+}
+
 fn find_project(store: &ProjectStore, identifier: &str) -> anyhow::Result<Project> {
     if let Ok(uuid) = identifier.parse::<uuid::Uuid>() {
         if let Some(p) = store.get(uuid)? {
@@ -221,27 +241,48 @@ async fn main() -> anyhow::Result<()> {
             };
 
             store.record_run_start(project.id)?;
-            println!("Runtime: {:?} | Entry: {}", project.runtime, entrypoint);
+            let runtime_str = format!("{:?}", project.runtime).to_lowercase();
+            println!("Runtime: {} | Entry: {}", runtime_str, entrypoint);
 
-            let (mut child, mut rx) =
-                executor::spawn_and_stream(project.runtime, &entrypoint, &project.path).await?;
+            let is_remote = target != "local";
+            let code = if is_remote {
+                let code_path = Path::new(&project.path).join(&entrypoint);
+                Some(std::fs::read(&code_path)?)
+            } else {
+                None
+            };
+            let working_dir = if is_remote { "/tmp" } else { &project.path };
 
-            while let Some(line) = rx.recv().await {
-                match line.stream {
-                    executor::LogStream::Stdout => println!("{}", line.text),
-                    executor::LogStream::Stderr => eprintln!("\x1b[31m{}\x1b[0m", line.text),
+            let mut client = get_agent_client(&target).await?;
+            let mut stream = client
+                .execute_streaming(
+                    &project.id.to_string(),
+                    &runtime_str,
+                    &entrypoint,
+                    working_dir,
+                    code.as_deref(),
+                    None,
+                    std::collections::HashMap::new(),
+                )
+                .await?;
+
+            let mut exit_code = 0i32;
+            while let Some(msg) = stream.message().await? {
+                if msg.is_final {
+                    exit_code = msg.exit_code;
+                    continue;
+                }
+                match msg.stream.as_str() {
+                    "stderr" => eprintln!("\x1b[31m{}\x1b[0m", msg.text),
+                    _ => println!("{}", msg.text),
                 }
             }
 
-            let exit_code = child.wait().await.ok().and_then(|s| s.code());
-            store.record_run_end(project.id, exit_code)?;
-            println!(
-                "\nExit code: {}",
-                exit_code.map(|c| c.to_string()).unwrap_or("unknown".into())
-            );
+            store.record_run_end(project.id, Some(exit_code))?;
+            println!("\nExit code: {}", exit_code);
         }
 
-        Commands::Run { project } => {
+        Commands::Run { project, target } => {
             let store = get_store()?;
             let p = find_project(&store, &project)?;
             let entrypoint = p
@@ -250,29 +291,61 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("No entrypoint"))?;
 
             store.record_run_start(p.id)?;
+            let runtime_str = format!("{:?}", p.runtime).to_lowercase();
 
-            let (mut child, mut rx) =
-                executor::spawn_and_stream(p.runtime, entrypoint, &p.path).await?;
+            let is_remote = target != "local";
+            let code = if is_remote {
+                let code_path = Path::new(&p.path).join(entrypoint);
+                Some(std::fs::read(&code_path)?)
+            } else {
+                None
+            };
+            let working_dir = if is_remote { "/tmp" } else { &p.path };
 
-            while let Some(line) = rx.recv().await {
-                match line.stream {
-                    executor::LogStream::Stdout => println!("{}", line.text),
-                    executor::LogStream::Stderr => eprintln!("\x1b[31m{}\x1b[0m", line.text),
+            let mut client = get_agent_client(&target).await?;
+            let mut stream = client
+                .execute_streaming(
+                    &p.id.to_string(),
+                    &runtime_str,
+                    entrypoint,
+                    working_dir,
+                    code.as_deref(),
+                    None,
+                    std::collections::HashMap::new(),
+                )
+                .await?;
+
+            let mut exit_code = 0i32;
+            while let Some(msg) = stream.message().await? {
+                if msg.is_final {
+                    exit_code = msg.exit_code;
+                    continue;
+                }
+                match msg.stream.as_str() {
+                    "stderr" => eprintln!("\x1b[31m{}\x1b[0m", msg.text),
+                    _ => println!("{}", msg.text),
                 }
             }
 
-            let exit_code = child.wait().await.ok().and_then(|s| s.code());
-            store.record_run_end(p.id, exit_code)?;
+            store.record_run_end(p.id, Some(exit_code))?;
         }
 
-        Commands::Stop { project } => {
+        Commands::Stop { project, target } => {
             let store = get_store()?;
             let p = find_project(&store, &project)?;
-            store.update_status(p.id, runway_core::project::ProjectStatus::Stopped)?;
-            println!("Project '{}' marked as stopped", p.name);
+
+            let mut client = get_agent_client(&target).await?;
+            let stopped = client.stop(&p.id.to_string()).await?;
+
+            if stopped {
+                store.update_status(p.id, runway_core::project::ProjectStatus::Stopped)?;
+                println!("Project '{}' stopped", p.name);
+            } else {
+                println!("Project '{}' is not running", p.name);
+            }
         }
 
-        Commands::Logs { project, .. } => {
+        Commands::Logs { project, target, .. } => {
             let store = get_store()?;
             let p = find_project(&store, &project)?;
             println!("Running '{}' to capture logs...\n", p.name);
@@ -282,11 +355,25 @@ async fn main() -> anyhow::Result<()> {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("No entrypoint"))?;
 
-            let (_child, mut rx) =
-                executor::spawn_and_stream(p.runtime, entrypoint, &p.path).await?;
+            let runtime_str = format!("{:?}", p.runtime).to_lowercase();
 
-            while let Some(line) = rx.recv().await {
-                println!("{}", line.text);
+            let mut client = get_agent_client(&target).await?;
+            let mut stream = client
+                .execute_streaming(
+                    &p.id.to_string(),
+                    &runtime_str,
+                    entrypoint,
+                    &p.path,
+                    None,
+                    None,
+                    std::collections::HashMap::new(),
+                )
+                .await?;
+
+            while let Some(msg) = stream.message().await? {
+                if !msg.is_final {
+                    println!("{}", msg.text);
+                }
             }
         }
 

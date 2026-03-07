@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use runway_core::executor;
 use runway_core::project::Project;
 use runway_core::runtime;
 use runway_core::agent_client::AgentClient;
@@ -437,43 +436,53 @@ async fn handle_deploy(args: &Value) -> CallToolResult {
     };
 
     let _ = store.record_run_start(project.id);
+    let runtime_str = format!("{:?}", project.runtime).to_lowercase();
 
-    match executor::spawn_and_stream(project.runtime, &entrypoint, &project.path).await {
-        Ok((mut child, mut rx)) => {
-            let mut output = String::new();
-            let timeout = tokio::time::Duration::from_secs(
-                args.get("timeout_secs")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(30),
-            );
+    let mut client = match runway_core::local_agent::get_or_start_local_agent().await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to start local agent: {e}")),
+    };
 
-            let result = tokio::time::timeout(timeout, async {
-                while let Some(line) = rx.recv().await {
-                    output.push_str(&line.text);
-                    output.push('\n');
-                }
-            })
-            .await;
+    let timeout_secs = args
+        .get("timeout_secs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30);
 
-            let exit_code = if result.is_err() {
-                let _ = child.kill().await;
-                Some(-1)
-            } else {
-                child.wait().await.ok().and_then(|s| s.code())
-            };
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(timeout_secs),
+        client.execute(
+            &project.id.to_string(),
+            &runtime_str,
+            &entrypoint,
+            &project.path,
+            None,
+            None,
+            std::collections::HashMap::new(),
+        ),
+    )
+    .await;
 
-            let _ = store.record_run_end(project.id, exit_code);
-
+    match result {
+        Ok(Ok(exec_result)) => {
+            let output: String = exec_result.logs.iter().map(|l| format!("{}\n", l.text)).collect();
+            let _ = store.record_run_end(project.id, Some(exec_result.exit_code));
             CallToolResult::text(format!(
                 "Deployed and ran '{}' (exit code: {})\n\n{}",
-                name,
-                exit_code.map(|c| c.to_string()).unwrap_or("unknown".into()),
-                output
+                name, exec_result.exit_code, output
             ))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             let _ = store.record_run_end(project.id, Some(-1));
-            CallToolResult::error(format!("Failed to start: {e}"))
+            CallToolResult::error(format!("Failed to execute: {e}"))
+        }
+        Err(_) => {
+            // Timeout — stop the process
+            let _ = client.stop(&project.id.to_string()).await;
+            let _ = store.record_run_end(project.id, Some(-1));
+            CallToolResult::text(format!(
+                "Project '{}' timed out after {}s",
+                name, timeout_secs
+            ))
         }
     }
 }
@@ -499,44 +508,49 @@ async fn handle_run(args: &Value) -> CallToolResult {
         Err(e) => return CallToolResult::error(e),
     };
     let _ = store.record_run_start(project.id);
+    let runtime_str = format!("{:?}", project.runtime).to_lowercase();
+
+    let mut client = match runway_core::local_agent::get_or_start_local_agent().await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to start local agent: {e}")),
+    };
 
     let timeout_secs = args
         .get("timeout_secs")
         .and_then(|v| v.as_u64())
         .unwrap_or(30);
 
-    match executor::spawn_and_stream(project.runtime, &entrypoint, &project.path).await {
-        Ok((mut child, mut rx)) => {
-            let mut output = String::new();
-            let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(timeout_secs),
+        client.execute(
+            &project.id.to_string(),
+            &runtime_str,
+            &entrypoint,
+            &project.path,
+            None,
+            None,
+            std::collections::HashMap::new(),
+        ),
+    )
+    .await;
 
-            let result = tokio::time::timeout(timeout, async {
-                while let Some(line) = rx.recv().await {
-                    output.push_str(&line.text);
-                    output.push('\n');
-                }
-            })
-            .await;
-
-            let exit_code = if result.is_err() {
-                let _ = child.kill().await;
-                output.push_str(&format!("\n[Timed out after {}s]\n", timeout_secs));
-                Some(-1)
-            } else {
-                child.wait().await.ok().and_then(|s| s.code())
-            };
-
-            let _ = store.record_run_end(project.id, exit_code);
-
+    match result {
+        Ok(Ok(exec_result)) => {
+            let output: String = exec_result.logs.iter().map(|l| format!("{}\n", l.text)).collect();
+            let _ = store.record_run_end(project.id, Some(exec_result.exit_code));
             CallToolResult::text(format!(
                 "Exit code: {}\n\n{}",
-                exit_code.map(|c| c.to_string()).unwrap_or("unknown".into()),
-                output
+                exec_result.exit_code, output
             ))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             let _ = store.record_run_end(project.id, Some(-1));
-            CallToolResult::error(format!("Failed to start: {e}"))
+            CallToolResult::error(format!("Failed to execute: {e}"))
+        }
+        Err(_) => {
+            let _ = client.stop(&project.id.to_string()).await;
+            let _ = store.record_run_end(project.id, Some(-1));
+            CallToolResult::text(format!("[Timed out after {}s]", timeout_secs))
         }
     }
 }
@@ -552,19 +566,28 @@ async fn handle_stop(args: &Value) -> CallToolResult {
         Err(e) => return CallToolResult::error(e),
     };
 
-    let store = match get_store() {
-        Ok(s) => s,
-        Err(e) => return CallToolResult::error(e),
+    let mut client = match runway_core::local_agent::get_or_start_local_agent().await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to connect to agent: {e}")),
     };
 
-    if let Err(e) = store.update_status(
-        project.id,
-        runway_core::project::ProjectStatus::Stopped,
-    ) {
-        return CallToolResult::error(format!("Failed to update status: {e}"));
+    match client.stop(&project.id.to_string()).await {
+        Ok(true) => {
+            let store = match get_store() {
+                Ok(s) => s,
+                Err(e) => return CallToolResult::error(e),
+            };
+            let _ = store.update_status(
+                project.id,
+                runway_core::project::ProjectStatus::Stopped,
+            );
+            CallToolResult::text(format!("Project '{}' stopped", project.name))
+        }
+        Ok(false) => {
+            CallToolResult::text(format!("Project '{}' is not running", project.name))
+        }
+        Err(e) => CallToolResult::error(format!("Failed to stop: {e}")),
     }
-
-    CallToolResult::text(format!("Project '{}' marked as stopped", project.name))
 }
 
 async fn handle_logs(_args: &Value) -> CallToolResult {

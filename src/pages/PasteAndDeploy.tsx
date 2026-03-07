@@ -1,5 +1,14 @@
-import { useState } from "react";
-import { createProject, detectRuntime, savePasteCode, type RuntimeInfo } from "../lib/invoke";
+import { useState, useEffect } from "react";
+import {
+  createProject,
+  detectRuntime,
+  savePasteCode,
+  runProject,
+  getSettings,
+  listTargets,
+  type RuntimeInfo,
+  type TargetInfo,
+} from "../lib/invoke";
 import { useToast } from "../components/Toast";
 
 interface Props {
@@ -14,7 +23,20 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [mode, setMode] = useState<"paste" | "directory">("paste");
   const [creating, setCreating] = useState(false);
+  const [targets, setTargets] = useState<TargetInfo[]>([]);
+  const [selectedTarget, setSelectedTarget] = useState<string>("local");
+  const [autoRun, setAutoRun] = useState(false);
   const { toast } = useToast();
+
+  useEffect(() => {
+    listTargets().then(setTargets).catch(console.error);
+    getSettings().then((s) => {
+      setAutoRun(s.auto_run_on_create === "true");
+      if (s.default_target && s.default_target !== "local") {
+        setSelectedTarget(s.default_target);
+      }
+    }).catch(console.error);
+  }, []);
 
   async function handleDetect() {
     if (!path) return;
@@ -41,6 +63,15 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
       }
       const project = await createProject(name, projectPath);
       toast(`Project "${name}" created`, "success");
+      if (autoRun && project.entrypoint) {
+        try {
+          const target = selectedTarget === "local" ? undefined : selectedTarget;
+          await runProject(project.id, target);
+          toast("Auto-running project...", "info");
+        } catch (runErr) {
+          toast(`Auto-run failed: ${runErr}`, "error");
+        }
+      }
       onCreated(project.id);
     } catch (e) {
       toast(`Failed to create project: ${e}`, "error");
@@ -156,6 +187,44 @@ export default function PasteAndDeploy({ onBack, onCreated }: Props) {
               <span className="text-xs text-runway-muted ml-auto">
                 {Math.round(runtimeInfo.confidence * 100)}% confidence
               </span>
+            </div>
+          </div>
+        )}
+
+        {/* Target selector */}
+        {targets.length > 0 && (
+          <div>
+            <label className="block text-xs font-medium text-runway-muted mb-1">
+              Deploy Target
+            </label>
+            <div className="flex gap-1.5 flex-wrap">
+              <button
+                onClick={() => setSelectedTarget("local")}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  selectedTarget === "local"
+                    ? "bg-runway-accent text-white"
+                    : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
+                }`}
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-runway-success" />
+                Local
+              </button>
+              {targets.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setSelectedTarget(t.id)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    selectedTarget === t.id
+                      ? "bg-runway-accent text-white"
+                      : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
+                  }`}
+                >
+                  <div className={`w-1.5 h-1.5 rounded-full ${
+                    t.status === "online" ? "bg-runway-success" : t.status === "offline" ? "bg-runway-error" : "bg-runway-muted"
+                  }`} />
+                  {t.name}
+                </button>
+              ))}
             </div>
           </div>
         )}

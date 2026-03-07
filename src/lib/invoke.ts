@@ -12,6 +12,8 @@ export interface Project {
   last_run_at: string | null;
   last_exit_code: number | null;
   run_count: number;
+  notify_on_complete: boolean;
+  default_target: string | null;
 }
 
 export interface RuntimeInfo {
@@ -44,16 +46,24 @@ export async function savePasteCode(
   return tauriInvoke<string>("save_paste_code", { name, code });
 }
 
+export async function updateProject(
+  id: string,
+  name: string,
+  entrypoint: string | null
+): Promise<void> {
+  return tauriInvoke("update_project", { id, name, entrypoint });
+}
+
 export async function deleteProject(id: string): Promise<void> {
   return tauriInvoke("delete_project", { id });
 }
 
-export async function runProject(id: string): Promise<void> {
-  return tauriInvoke("run_project", { id });
+export async function runProject(id: string, target?: string): Promise<void> {
+  return tauriInvoke("run_project", { id, target: target ?? null });
 }
 
-export async function stopProject(id: string): Promise<void> {
-  return tauriInvoke("stop_project", { id });
+export async function stopProject(id: string, target?: string): Promise<void> {
+  return tauriInvoke("stop_project", { id, target: target ?? null });
 }
 
 export interface LogEvent {
@@ -102,18 +112,131 @@ export async function pingTarget(id: string): Promise<TargetInfo> {
   return tauriInvoke<TargetInfo>("ping_target", { id });
 }
 
-// --- Remote execution ---
-
-export async function runProjectRemote(
-  id: string,
-  targetId: string
-): Promise<void> {
-  return tauriInvoke("run_project_remote", { id, targetId });
+export interface AgentRunningProject {
+  project_id: string;
+  status: string;
+  started_at: string;
 }
 
-export async function stopProjectRemote(
-  id: string,
-  targetId: string
-): Promise<void> {
-  return tauriInvoke("stop_project_remote", { id, targetId });
+export interface AgentStats {
+  agent_id: string;
+  version: string;
+  status: string;
+  uptime_seconds: number;
+  cpu_usage: number;
+  memory_mb: number;
+  podman_version: string | null;
+  container_ready: boolean;
+  running_projects: AgentRunningProject[];
+  os: string | null;
+  arch: string | null;
 }
+
+export async function getAgentStats(id: string): Promise<AgentStats> {
+  return tauriInvoke<AgentStats>("get_agent_stats", { id });
+}
+
+// --- Schedules ---
+
+export interface ScheduleInfo {
+  id: string;
+  project_id: string;
+  cron_expr: string;
+  enabled: boolean;
+  created_at: string;
+  last_triggered_at: string | null;
+  next_run_at: string | null;
+}
+
+export async function listSchedules(projectId: string): Promise<ScheduleInfo[]> {
+  return tauriInvoke<ScheduleInfo[]>("list_schedules", { projectId });
+}
+
+export async function addSchedule(
+  projectId: string,
+  cronExpr: string
+): Promise<ScheduleInfo> {
+  return tauriInvoke<ScheduleInfo>("add_schedule", { projectId, cronExpr });
+}
+
+export async function removeSchedule(id: string): Promise<void> {
+  return tauriInvoke("remove_schedule", { id });
+}
+
+export async function toggleSchedule(
+  id: string,
+  enabled: boolean
+): Promise<void> {
+  return tauriInvoke("toggle_schedule", { id, enabled });
+}
+
+// --- Execution Logs ---
+
+export interface ExecutionLogInfo {
+  id: string;
+  project_id: string;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  output: string;
+  trigger: string;
+}
+
+export async function listExecutionLogs(
+  projectId: string,
+  limit?: number
+): Promise<ExecutionLogInfo[]> {
+  return tauriInvoke<ExecutionLogInfo[]>("list_execution_logs", {
+    projectId,
+    limit: limit ?? null,
+  });
+}
+
+// --- Settings ---
+
+export async function getSettings(): Promise<Record<string, string>> {
+  return tauriInvoke<Record<string, string>>("get_settings");
+}
+
+export async function updateSetting(
+  key: string,
+  value: string
+): Promise<void> {
+  return tauriInvoke("update_setting", { key, value });
+}
+
+// --- Project Notification Setting ---
+
+export async function setProjectTarget(
+  id: string,
+  targetId: string | null
+): Promise<void> {
+  return tauriInvoke("set_project_target", { id, targetId });
+}
+
+export async function setProjectNotify(
+  id: string,
+  enabled: boolean
+): Promise<void> {
+  return tauriInvoke("set_project_notify", { id, enabled });
+}
+
+// --- Project File Access ---
+
+export async function readProjectFile(id: string): Promise<string> {
+  return tauriInvoke<string>("read_project_file", { id });
+}
+
+export async function writeProjectFile(
+  id: string,
+  content: string
+): Promise<void> {
+  return tauriInvoke("write_project_file", { id, content });
+}
+
+// --- File Import ---
+
+export async function importFile(filePath: string): Promise<Project> {
+  return tauriInvoke<Project>("import_file", { filePath });
+}
+

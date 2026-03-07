@@ -17,6 +17,8 @@ pub struct Project {
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_exit_code: Option<i32>,
     pub run_count: u32,
+    pub notify_on_complete: bool,
+    pub default_target: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +45,8 @@ impl Project {
             last_run_at: None,
             last_exit_code: None,
             run_count: 0,
+            notify_on_complete: true,
+            default_target: None,
         }
     }
 }

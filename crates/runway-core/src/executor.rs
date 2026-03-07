@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -39,12 +41,25 @@ impl serde::Serialize for LogLine {
 }
 
 /// Build the command to execute a project based on its runtime.
-fn build_command(runtime: Runtime, entrypoint: &str, working_dir: &str) -> Command {
+fn build_command(
+    runtime: Runtime,
+    entrypoint: &str,
+    working_dir: &str,
+    env_vars: Option<&HashMap<String, String>>,
+) -> Command {
     let mut cmd = match runtime {
         Runtime::Python => {
-            let mut c = Command::new("python3");
-            c.args(["-u", entrypoint]);
-            c
+            // Prefer venv python if it exists
+            let venv_python = Path::new(working_dir).join(".venv/bin/python3");
+            if venv_python.exists() {
+                let mut c = Command::new(venv_python);
+                c.args(["-u", entrypoint]);
+                c
+            } else {
+                let mut c = Command::new("python3");
+                c.args(["-u", entrypoint]);
+                c
+            }
         }
         Runtime::Node => {
             let mut c = Command::new("node");
@@ -73,6 +88,10 @@ fn build_command(runtime: Runtime, entrypoint: &str, working_dir: &str) -> Comma
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    if let Some(vars) = env_vars {
+        cmd.envs(vars);
+    }
+
     cmd
 }
 
@@ -81,8 +100,9 @@ pub async fn spawn_and_stream(
     runtime: Runtime,
     entrypoint: &str,
     working_dir: &str,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> anyhow::Result<(Child, mpsc::Receiver<LogLine>)> {
-    let mut child = build_command(runtime, entrypoint, working_dir).spawn()?;
+    let mut child = build_command(runtime, entrypoint, working_dir, env_vars).spawn()?;
 
     let (tx, rx) = mpsc::channel::<LogLine>(256);
 

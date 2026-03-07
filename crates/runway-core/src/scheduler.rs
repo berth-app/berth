@@ -2,9 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::executor;
-use crate::runtime::Runtime;
-use crate::store::ProjectStore;
+use crate::store::{ExecutionLog, ProjectStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schedule {
@@ -119,13 +117,33 @@ pub async fn tick(store: &ProjectStore) -> Vec<(Uuid, Result<i32, String>)> {
 
         let _ = store.record_run_start(project.id);
 
-        let exit_code = run_with_timeout(project.runtime, &entrypoint, &project.path, 300).await;
+        // Create execution log for scheduled run
+        let exec_log = ExecutionLog::new(project.id, "schedule");
+        let exec_log_id = exec_log.id;
+        let _ = store.insert_execution_log(&exec_log);
+
+        let runtime_str = format!("{:?}", project.runtime).to_lowercase();
+        let exit_code = run_with_timeout(
+            &project.id.to_string(),
+            &runtime_str,
+            &entrypoint,
+            &project.path,
+            300,
+        )
+        .await;
 
         let code = match &exit_code {
             Ok(c) => Some(*c),
             Err(_) => Some(-1),
         };
         let _ = store.record_run_end(project.id, code);
+
+        // Finalize execution log
+        let output = match &exit_code {
+            Ok(c) => format!("Exited with code {c}"),
+            Err(e) => format!("Error: {e}"),
+        };
+        let _ = store.finish_execution_log(exec_log_id, code.unwrap_or(-1), &output);
 
         // Advance schedule
         let next = parse_next_run(&sched.cron_expr, now);
@@ -138,28 +156,30 @@ pub async fn tick(store: &ProjectStore) -> Vec<(Uuid, Result<i32, String>)> {
 }
 
 async fn run_with_timeout(
-    runtime: Runtime,
+    project_id: &str,
+    runtime: &str,
     entrypoint: &str,
     working_dir: &str,
     timeout_secs: u64,
 ) -> Result<i32, String> {
-    let (mut child, mut rx) = executor::spawn_and_stream(runtime, entrypoint, working_dir)
+    let mut client = crate::local_agent::get_or_start_local_agent()
         .await
         .map_err(|e| e.to_string())?;
 
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let result = tokio::time::timeout(timeout, async {
-        while let Some(_line) = rx.recv().await {}
-    })
+    let result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(timeout_secs),
+        client.execute(project_id, runtime, entrypoint, working_dir, None, None, std::collections::HashMap::new()),
+    )
     .await;
 
-    if result.is_err() {
-        let _ = child.kill().await;
-        return Err("Timed out".into());
+    match result {
+        Ok(Ok(exec_result)) => Ok(exec_result.exit_code),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => {
+            let _ = client.stop(project_id).await;
+            Err("Timed out".into())
+        }
     }
-
-    let status = child.wait().await.map_err(|e| e.to_string())?;
-    Ok(status.code().unwrap_or(-1))
 }
 
 #[cfg(test)]

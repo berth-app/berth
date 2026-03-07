@@ -1,25 +1,15 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use runway_core::agent_client::AgentClient;
-use runway_core::executor::{self, LogStream};
 use tauri::Emitter;
+use tauri_plugin_notification::NotificationExt;
 use runway_core::project::{Project, ProjectStatus};
 use runway_core::runtime::{self, RuntimeInfo};
-use runway_core::store::ProjectStore;
+use runway_core::scheduler::Schedule;
+use runway_core::store::{ExecutionLog, ProjectStore};
 use runway_core::target::Target;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
-use tokio::process::Child;
-use tokio::sync::Mutex;
 use uuid::Uuid;
-
-pub struct RunningProcess {
-    pub child: Child,
-    pub log_task_abort: tokio::task::AbortHandle,
-}
-
-pub type ProcessRegistry = Arc<Mutex<HashMap<Uuid, RunningProcess>>>;
 
 #[derive(Clone, Serialize)]
 pub struct LogEvent {
@@ -41,13 +31,37 @@ pub struct ProjectResponse {
     pub projects: Vec<Project>,
 }
 
-fn get_store() -> Result<ProjectStore, String> {
+pub(crate) fn get_store() -> Result<ProjectStore, String> {
     let data_dir = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("com.runway.app");
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let db_path = data_dir.join("runway.db");
     ProjectStore::open(db_path.to_str().unwrap_or("runway.db")).map_err(|e| e.to_string())
+}
+
+/// Get an AgentClient for the given target. None or "local" uses the embedded local agent.
+async fn get_agent_client(target_id: Option<&str>) -> Result<AgentClient, String> {
+    match target_id {
+        None | Some("local") | Some("") => {
+            runway_core::local_agent::get_or_start_local_agent()
+                .await
+                .map_err(|e| format!("Failed to start local agent: {e}"))
+        }
+        Some(tid) => {
+            let store = get_store()?;
+            let uuid: Uuid = tid.parse().map_err(|e: uuid::Error| e.to_string())?;
+            let targets = store.list_targets().map_err(|e| e.to_string())?;
+            let target = targets
+                .iter()
+                .find(|t| t.id == uuid)
+                .ok_or_else(|| format!("Target {tid} not found"))?;
+            let endpoint = target.grpc_endpoint();
+            AgentClient::connect(&endpoint)
+                .await
+                .map_err(|e| format!("Failed to connect to agent: {e}"))
+        }
+    }
 }
 
 #[tauri::command]
@@ -122,6 +136,15 @@ pub fn detect_runtime(path: String) -> RuntimeInfo {
 }
 
 #[tauri::command]
+pub fn update_project(id: String, name: String, entrypoint: Option<String>) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store
+        .update_project(uuid, &name, entrypoint.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn delete_project(id: String) -> Result<(), String> {
     let store = get_store()?;
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
@@ -131,7 +154,7 @@ pub fn delete_project(id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn run_project(
     id: String,
-    registry: tauri::State<'_, ProcessRegistry>,
+    target: Option<String>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
@@ -147,19 +170,36 @@ pub async fn run_project(
         .ok_or("Project has no entrypoint. Use 'Detect' to identify the runtime and entry file.")?
         .to_string();
 
-    // Prevent double-run
-    {
-        let reg = registry.lock().await;
-        if reg.contains_key(&uuid) {
-            return Err("Project is already running.".to_string());
-        }
-    }
+    let runtime_str = format!("{:?}", project.runtime).to_lowercase();
+    let is_remote = matches!(target.as_deref(), Some(t) if !t.is_empty() && t != "local");
 
-    let (child, mut rx) = executor::spawn_and_stream(project.runtime, &entrypoint, &project.path)
-        .await
-        .map_err(|e| format!("Failed to start process: {e}"))?;
+    // For remote targets, read the code from disk to send over gRPC
+    let code = if is_remote {
+        let code_path = std::path::Path::new(&project.path).join(&entrypoint);
+        Some(
+            std::fs::read(&code_path)
+                .map_err(|e| format!("Failed to read {}: {e}", code_path.display()))?,
+        )
+    } else {
+        None
+    };
 
-    // Record run start (updates status, last_run_at, run_count)
+    let working_dir = if is_remote {
+        "/tmp".to_string()
+    } else {
+        project.path.clone()
+    };
+
+    let mut client = get_agent_client(target.as_deref()).await?;
+
+    // Create execution log entry
+    let exec_log = ExecutionLog::new(uuid, "manual");
+    let exec_log_id = exec_log.id;
+    store
+        .insert_execution_log(&exec_log)
+        .map_err(|e| e.to_string())?;
+
+    // Record run start
     store
         .record_run_start(uuid)
         .map_err(|e| e.to_string())?;
@@ -173,63 +213,112 @@ pub async fn run_project(
         },
     );
 
-    let app_for_logs = app_handle.clone();
-    let app_for_exit = app_handle;
-    let project_id_for_logs = id.clone();
-    let registry_clone = registry.inner().clone();
+    let project_id_str = id.clone();
+    let project_name = project.name.clone();
+    let notify_on_complete = project.notify_on_complete;
 
-    let log_task = tokio::spawn(async move {
-        while let Some(line) = rx.recv().await {
-            let _ = app_for_logs.emit(
-                "project-log",
-                LogEvent {
-                    project_id: project_id_for_logs.clone(),
-                    stream: match line.stream {
-                        LogStream::Stdout => "stdout".into(),
-                        LogStream::Stderr => "stderr".into(),
+    // Spawn background task for streaming logs
+    tokio::spawn(async move {
+        let stream_result = client
+            .execute_streaming(
+                &project_id_str,
+                &runtime_str,
+                &entrypoint,
+                &working_dir,
+                code.as_deref(),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await;
+
+        match stream_result {
+            Ok(mut stream) => {
+                let mut exit_code = 0i32;
+                let mut collected_output = String::new();
+
+                while let Ok(Some(msg)) = stream.message().await {
+                    if msg.is_final {
+                        exit_code = msg.exit_code;
+                        continue;
+                    }
+
+                    // Collect output for execution log (cap at 64KB)
+                    if collected_output.len() < 65536 {
+                        collected_output.push_str(&msg.text);
+                    }
+
+                    let _ = app_handle.emit(
+                        "project-log",
+                        LogEvent {
+                            project_id: project_id_str.clone(),
+                            stream: msg.stream,
+                            text: msg.text,
+                            timestamp: msg.timestamp,
+                        },
+                    );
+                }
+
+                if let Ok(store) = get_store() {
+                    let _ = store.record_run_end(uuid, Some(exit_code));
+                    let _ = store.finish_execution_log(exec_log_id, exit_code, &collected_output);
+                }
+
+                let status = if exit_code == 0 { "idle" } else { "failed" };
+                let _ = app_handle.emit(
+                    "project-status-change",
+                    StatusEvent {
+                        project_id: project_id_str,
+                        status: status.into(),
+                        exit_code: Some(exit_code),
                     },
-                    text: line.text,
-                    timestamp: line.timestamp.to_rfc3339(),
-                },
-            );
-        }
+                );
 
-        // Channel closed — process exited. Clean up.
-        let mut reg = registry_clone.lock().await;
-        if let Some(mut proc) = reg.remove(&uuid) {
-            let exit_status = proc.child.wait().await.ok();
-            let exit_code = exit_status.and_then(|s| s.code());
-
-            if let Ok(store) = get_store() {
-                let _ = store.record_run_end(uuid, exit_code);
+                if notify_on_complete {
+                    let (title, body) = if exit_code == 0 {
+                        ("Runway — Run Complete".to_string(), format!("{project_name} finished successfully"))
+                    } else {
+                        ("Runway — Run Failed".to_string(), format!("{project_name} exited with code {exit_code}"))
+                    };
+                    let _ = app_handle.notification().builder().title(&title).body(&body).show();
+                }
             }
+            Err(e) => {
+                let error_msg = format!("Execution failed: {e}");
 
-            let status_str = match exit_code {
-                Some(0) => "idle",
-                _ => "failed",
-            };
-            let _ = app_for_exit.emit(
-                "project-status-change",
-                StatusEvent {
-                    project_id: uuid.to_string(),
-                    status: status_str.into(),
-                    exit_code,
-                },
-            );
+                let _ = app_handle.emit(
+                    "project-log",
+                    LogEvent {
+                        project_id: project_id_str.clone(),
+                        stream: "stderr".into(),
+                        text: error_msg.clone(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                    },
+                );
+
+                if let Ok(store) = get_store() {
+                    let _ = store.record_run_end(uuid, Some(1));
+                    let _ = store.finish_execution_log(exec_log_id, 1, &error_msg);
+                }
+
+                let _ = app_handle.emit(
+                    "project-status-change",
+                    StatusEvent {
+                        project_id: project_id_str,
+                        status: "failed".into(),
+                        exit_code: Some(1),
+                    },
+                );
+
+                if notify_on_complete {
+                    let _ = app_handle.notification()
+                        .builder()
+                        .title("Runway — Run Failed")
+                        .body(&format!("{project_name}: {error_msg}"))
+                        .show();
+                }
+            }
         }
     });
-
-    // Store child and abort handle in registry
-    {
-        let mut reg = registry.lock().await;
-        reg.insert(
-            uuid,
-            RunningProcess {
-                child,
-                log_task_abort: log_task.abort_handle(),
-            },
-        );
-    }
 
     Ok(())
 }
@@ -237,38 +326,37 @@ pub async fn run_project(
 #[tauri::command]
 pub async fn stop_project(
     id: String,
-    registry: tauri::State<'_, ProcessRegistry>,
+    target: Option<String>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
 
-    let mut proc = {
-        let mut reg = registry.lock().await;
-        reg.remove(&uuid).ok_or("Project is not running.")?
-    };
+    let mut client = get_agent_client(target.as_deref()).await?;
 
-    proc.child
-        .kill()
+    let stopped = client
+        .stop(&id)
         .await
-        .map_err(|e| format!("Failed to stop process: {e}"))?;
+        .map_err(|e| format!("Failed to stop project: {e}"))?;
 
-    proc.log_task_abort.abort();
+    if stopped {
+        let store = get_store()?;
+        store
+            .update_status(uuid, ProjectStatus::Stopped)
+            .map_err(|e| e.to_string())?;
 
-    let store = get_store()?;
-    store
-        .update_status(uuid, ProjectStatus::Stopped)
-        .map_err(|e| e.to_string())?;
+        let _ = app_handle.emit(
+            "project-status-change",
+            StatusEvent {
+                project_id: id,
+                status: "stopped".into(),
+                exit_code: None,
+            },
+        );
 
-    let _ = app_handle.emit(
-        "project-status-change",
-        StatusEvent {
-            project_id: id,
-            status: "stopped".into(),
-            exit_code: None,
-        },
-    );
-
-    Ok(())
+        Ok(())
+    } else {
+        Err("Project is not running.".into())
+    }
 }
 
 // --- Target commands ---
@@ -367,16 +455,225 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
     }
 }
 
+// --- Agent stats command ---
+
+#[derive(Clone, Serialize)]
+pub struct AgentStats {
+    pub agent_id: String,
+    pub version: String,
+    pub status: String,
+    pub uptime_seconds: u64,
+    pub cpu_usage: f64,
+    pub memory_mb: u64,
+    pub podman_version: Option<String>,
+    pub container_ready: bool,
+    pub running_projects: Vec<AgentRunningProject>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct AgentRunningProject {
+    pub project_id: String,
+    pub status: String,
+    pub started_at: String,
+}
+
 #[tauri::command]
-pub async fn run_project_remote(
-    id: String,
-    target_id: String,
-    app_handle: tauri::AppHandle,
-) -> Result<(), String> {
+pub async fn get_agent_stats(id: String) -> Result<AgentStats, String> {
     let store = get_store()?;
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
-    let target_uuid: Uuid = target_id.parse().map_err(|e: uuid::Error| e.to_string())?;
 
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    let target = targets
+        .iter()
+        .find(|t| t.id == uuid)
+        .ok_or_else(|| format!("Target {} not found", id))?;
+
+    let endpoint = target.grpc_endpoint();
+    let mut client = AgentClient::connect(&endpoint)
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?;
+
+    let health = client.health().await.map_err(|e| format!("Health RPC failed: {e}"))?;
+    let status = client.status().await.map_err(|e| format!("Status RPC failed: {e}"))?;
+
+    // Update target status while we're at it
+    let _ = store.update_target_status(
+        target.id,
+        runway_core::target::TargetStatus::Online,
+        Some(&health.version),
+    );
+
+    Ok(AgentStats {
+        agent_id: status.agent_id,
+        version: health.version,
+        status: status.status,
+        uptime_seconds: health.uptime_seconds,
+        cpu_usage: status.cpu_usage,
+        memory_mb: status.memory_bytes / 1024 / 1024,
+        podman_version: health.podman_version,
+        container_ready: health.container_ready,
+        running_projects: status
+            .running_projects
+            .into_iter()
+            .map(|p| AgentRunningProject {
+                project_id: p.project_id,
+                status: p.status,
+                started_at: p.started_at,
+            })
+            .collect(),
+        os: health.os,
+        arch: health.arch,
+    })
+}
+
+// --- Schedule commands ---
+
+#[derive(Clone, Serialize)]
+pub struct ScheduleInfo {
+    pub id: String,
+    pub project_id: String,
+    pub cron_expr: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_triggered_at: Option<String>,
+    pub next_run_at: Option<String>,
+}
+
+impl From<&Schedule> for ScheduleInfo {
+    fn from(s: &Schedule) -> Self {
+        Self {
+            id: s.id.to_string(),
+            project_id: s.project_id.to_string(),
+            cron_expr: s.cron_expr.clone(),
+            enabled: s.enabled,
+            created_at: s.created_at.to_rfc3339(),
+            last_triggered_at: s.last_triggered_at.map(|t| t.to_rfc3339()),
+            next_run_at: s.next_run_at.map(|t| t.to_rfc3339()),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_schedules(project_id: String) -> Result<Vec<ScheduleInfo>, String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let schedules = store
+        .get_schedules_for_project(uuid)
+        .map_err(|e| e.to_string())?;
+    Ok(schedules.iter().map(ScheduleInfo::from).collect())
+}
+
+#[tauri::command]
+pub fn add_schedule(project_id: String, cron_expr: String) -> Result<ScheduleInfo, String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let schedule = Schedule::new(uuid, cron_expr);
+    store
+        .insert_schedule(&schedule)
+        .map_err(|e| e.to_string())?;
+    Ok(ScheduleInfo::from(&schedule))
+}
+
+#[tauri::command]
+pub fn remove_schedule(id: String) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store.delete_schedule(uuid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn toggle_schedule(id: String, enabled: bool) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store
+        .set_schedule_enabled(uuid, enabled)
+        .map_err(|e| e.to_string())
+}
+
+// --- Execution log commands ---
+
+#[derive(Clone, Serialize)]
+pub struct ExecutionLogInfo {
+    pub id: String,
+    pub project_id: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub output: String,
+    pub trigger: String,
+}
+
+impl From<&ExecutionLog> for ExecutionLogInfo {
+    fn from(l: &ExecutionLog) -> Self {
+        Self {
+            id: l.id.to_string(),
+            project_id: l.project_id.to_string(),
+            started_at: l.started_at.to_rfc3339(),
+            finished_at: l.finished_at.map(|t| t.to_rfc3339()),
+            exit_code: l.exit_code,
+            output: l.output.clone(),
+            trigger: l.trigger.clone(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_execution_logs(
+    project_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<ExecutionLogInfo>, String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let logs = store
+        .list_execution_logs(uuid, limit.unwrap_or(20))
+        .map_err(|e| e.to_string())?;
+    Ok(logs.iter().map(ExecutionLogInfo::from).collect())
+}
+
+// --- Settings commands ---
+
+#[tauri::command]
+pub fn get_settings() -> Result<HashMap<String, String>, String> {
+    let store = get_store()?;
+    store.get_all_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_setting(key: String, value: String) -> Result<(), String> {
+    let store = get_store()?;
+    store.set_setting(&key, &value).map_err(|e| e.to_string())
+}
+
+// --- Project notification setting ---
+
+#[tauri::command]
+pub fn set_project_notify(id: String, enabled: bool) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store
+        .set_project_notify(uuid, enabled)
+        .map_err(|e| e.to_string())
+}
+
+// --- Project target assignment ---
+
+#[tauri::command]
+pub fn set_project_target(id: String, target_id: Option<String>) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store
+        .set_project_target(uuid, target_id.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+// --- Project file commands ---
+
+#[tauri::command]
+pub fn read_project_file(id: String) -> Result<String, String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
     let project = store
         .get(uuid)
         .map_err(|e| e.to_string())?
@@ -385,142 +682,77 @@ pub async fn run_project_remote(
     let entrypoint = project
         .entrypoint
         .as_deref()
-        .ok_or("Project has no entrypoint.")?
-        .to_string();
+        .ok_or("Project has no entrypoint")?;
 
-    let targets = store.list_targets().map_err(|e| e.to_string())?;
-    let target = targets
-        .iter()
-        .find(|t| t.id == target_uuid)
-        .ok_or_else(|| format!("Target {target_id} not found"))?;
-
-    let endpoint = target.grpc_endpoint();
-
-    // Read code from disk
-    let code_path = std::path::Path::new(&project.path).join(&entrypoint);
-    let code = std::fs::read(&code_path)
-        .map_err(|e| format!("Failed to read {}: {e}", code_path.display()))?;
-
-    let runtime_str = format!("{:?}", project.runtime).to_lowercase();
-
-    // Record run start
-    store.record_run_start(uuid).map_err(|e| e.to_string())?;
-
-    let _ = app_handle.emit(
-        "project-status-change",
-        StatusEvent {
-            project_id: id.clone(),
-            status: "running".into(),
-            exit_code: None,
-        },
-    );
-
-    // Connect and execute on remote agent
-    let mut client = AgentClient::connect(&endpoint)
-        .await
-        .map_err(|e| format!("Failed to connect to agent: {e}"))?;
-
-    let project_id_str = id.clone();
-
-    // Spawn background task for streaming logs
-    tokio::spawn(async move {
-        let result = client
-            .execute(
-                &project_id_str,
-                &runtime_str,
-                &entrypoint,
-                "/tmp",
-                Some(&code),
-            )
-            .await;
-
-        match result {
-            Ok(logs) => {
-                for line in &logs {
-                    let _ = app_handle.emit(
-                        "project-log",
-                        LogEvent {
-                            project_id: project_id_str.clone(),
-                            stream: match line.stream {
-                                LogStream::Stdout => "stdout".into(),
-                                LogStream::Stderr => "stderr".into(),
-                            },
-                            text: line.text.clone(),
-                            timestamp: line.timestamp.to_rfc3339(),
-                        },
-                    );
-                }
-
-                if let Ok(store) = get_store() {
-                    let _ = store.record_run_end(uuid, Some(0));
-                }
-
-                let _ = app_handle.emit(
-                    "project-status-change",
-                    StatusEvent {
-                        project_id: project_id_str,
-                        status: "idle".into(),
-                        exit_code: Some(0),
-                    },
-                );
-            }
-            Err(e) => {
-                let _ = app_handle.emit(
-                    "project-log",
-                    LogEvent {
-                        project_id: project_id_str.clone(),
-                        stream: "stderr".into(),
-                        text: format!("Remote execution failed: {e}"),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                    },
-                );
-
-                if let Ok(store) = get_store() {
-                    let _ = store.record_run_end(uuid, Some(1));
-                }
-
-                let _ = app_handle.emit(
-                    "project-status-change",
-                    StatusEvent {
-                        project_id: project_id_str,
-                        status: "failed".into(),
-                        exit_code: Some(1),
-                    },
-                );
-            }
-        }
-    });
-
-    Ok(())
+    let file_path = Path::new(&project.path).join(entrypoint);
+    std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read {}: {e}", file_path.display()))
 }
 
 #[tauri::command]
-pub async fn stop_project_remote(
-    id: String,
-    target_id: String,
-) -> Result<(), String> {
+pub fn write_project_file(id: String, content: String) -> Result<(), String> {
     let store = get_store()?;
-    let target_uuid: Uuid = target_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let project = store
+        .get(uuid)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Project {id} not found"))?;
 
-    let targets = store.list_targets().map_err(|e| e.to_string())?;
-    let target = targets
-        .iter()
-        .find(|t| t.id == target_uuid)
-        .ok_or_else(|| format!("Target {target_id} not found"))?;
+    let entrypoint = project
+        .entrypoint
+        .as_deref()
+        .ok_or("Project has no entrypoint")?;
 
-    let endpoint = target.grpc_endpoint();
-    let mut client = AgentClient::connect(&endpoint)
-        .await
-        .map_err(|e| format!("Failed to connect to agent: {e}"))?;
+    let file_path = Path::new(&project.path).join(entrypoint);
+    std::fs::write(&file_path, content)
+        .map_err(|e| format!("Failed to write {}: {e}", file_path.display()))
+}
 
-    let stopped = client
-        .stop(&id)
-        .await
-        .map_err(|e| format!("Failed to stop remote project: {e}"))?;
+// --- File import command ---
 
-    if stopped {
-        Ok(())
-    } else {
-        Err("Project is not running on the remote agent.".into())
+#[tauri::command]
+pub fn import_file(file_path: String) -> Result<Project, String> {
+    let src = Path::new(&file_path);
+
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    let allowed = ["py", "js", "ts", "go", "sh", "rs"];
+    if !allowed.contains(&ext) {
+        return Err(format!(
+            "Unsupported file type '.{ext}'. Supported: {}",
+            allowed.join(", ")
+        ));
     }
+
+    let filename = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid filename")?;
+
+    let project_name = src
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("imported")
+        .to_string();
+
+    let base = dirs_next::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("com.runway.app")
+        .join("projects")
+        .join(&project_name);
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    let dest = base.join(filename);
+    std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy file: {e}"))?;
+
+    let info = runtime::detect_runtime(&base);
+    let store = get_store()?;
+    let mut project = Project::new(project_name, base.to_string_lossy().to_string(), info.runtime);
+    project.entrypoint = info.entrypoint;
+    store.insert(&project).map_err(|e| e.to_string())?;
+
+    Ok(project)
 }

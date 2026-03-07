@@ -1,12 +1,38 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::project::{Project, ProjectStatus};
 use crate::runtime::Runtime;
 use crate::scheduler::Schedule;
 use crate::target::{Target, TargetKind, TargetStatus};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ExecutionLog {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub exit_code: Option<i32>,
+    pub output: String,
+    pub trigger: String, // "manual" or "schedule"
+}
+
+impl ExecutionLog {
+    pub fn new(project_id: Uuid, trigger: &str) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            project_id,
+            started_at: Utc::now(),
+            finished_at: None,
+            exit_code: None,
+            output: String::new(),
+            trigger: trigger.to_string(),
+        }
+    }
+}
 
 pub struct ProjectStore {
     conn: Connection,
@@ -55,6 +81,18 @@ impl ProjectStore {
             )?;
         }
 
+        // Migration: add notify_on_complete column
+        let has_notify = self
+            .conn
+            .prepare("SELECT notify_on_complete FROM projects LIMIT 0")
+            .is_ok();
+
+        if !has_notify {
+            self.conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN notify_on_complete INTEGER NOT NULL DEFAULT 1;",
+            )?;
+        }
+
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schedules (
                 id TEXT PRIMARY KEY,
@@ -65,6 +103,29 @@ impl ProjectStore {
                 last_triggered_at TEXT,
                 next_run_at TEXT
             );",
+        )?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS execution_logs (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                exit_code INTEGER,
+                output TEXT NOT NULL DEFAULT '',
+                trigger TEXT NOT NULL DEFAULT 'manual'
+            );",
+        )?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO settings (key, value) VALUES ('default_target', 'local');
+            INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_run_on_create', 'false');
+            INSERT OR IGNORE INTO settings (key, value) VALUES ('log_scrollback_lines', '10000');
+            INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', 'system');",
         )?;
 
         self.conn.execute_batch(
@@ -81,12 +142,47 @@ impl ProjectStore {
             );",
         )?;
 
+        // Migration: add deploy versioning columns
+        let has_deploy_version = self
+            .conn
+            .prepare("SELECT deploy_version FROM projects LIMIT 0")
+            .is_ok();
+
+        if !has_deploy_version {
+            self.conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN deploy_version INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE projects ADD COLUMN latest_image_tag TEXT;",
+            )?;
+        }
+
+        // Migration: add default_target column
+        let has_default_target = self
+            .conn
+            .prepare("SELECT default_target FROM projects LIMIT 0")
+            .is_ok();
+
+        if !has_default_target {
+            self.conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN default_target TEXT;",
+            )?;
+        }
+
+        // Environment variables table
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS project_env_vars (
+                project_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (project_id, key)
+            );",
+        )?;
+
         Ok(())
     }
 
     pub fn list(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count FROM projects ORDER BY updated_at DESC",
+            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete, default_target FROM projects ORDER BY updated_at DESC",
         )?;
 
         let projects = stmt
@@ -111,6 +207,8 @@ impl ProjectStore {
                         .and_then(|s| s.parse().ok()),
                     last_exit_code: row.get(9)?,
                     run_count: row.get::<_, Option<u32>>(10)?.unwrap_or(0),
+                    notify_on_complete: row.get::<_, Option<i32>>(11)?.unwrap_or(1) != 0,
+                    default_target: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -120,8 +218,8 @@ impl ProjectStore {
 
     pub fn insert(&self, project: &Project) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO projects (id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO projects (id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             (
                 project.id.to_string(),
                 &project.name,
@@ -134,6 +232,7 @@ impl ProjectStore {
                 project.last_run_at.map(|t| t.to_rfc3339()),
                 project.last_exit_code,
                 project.run_count,
+                project.notify_on_complete as i32,
             ),
         )?;
         Ok(())
@@ -141,7 +240,7 @@ impl ProjectStore {
 
     pub fn get(&self, id: Uuid) -> Result<Option<Project>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count FROM projects WHERE id = ?1",
+            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete, default_target FROM projects WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map([id.to_string()], |row| {
@@ -159,6 +258,8 @@ impl ProjectStore {
                     .and_then(|s| s.parse().ok()),
                 last_exit_code: row.get(9)?,
                 run_count: row.get::<_, Option<u32>>(10)?.unwrap_or(0),
+                notify_on_complete: row.get::<_, Option<i32>>(11)?.unwrap_or(1) != 0,
+                default_target: row.get(12)?,
             })
         })?;
 
@@ -195,6 +296,33 @@ impl ProjectStore {
         self.conn.execute(
             "UPDATE projects SET status = ?1, last_exit_code = ?2, updated_at = ?3 WHERE id = ?4",
             (status, exit_code, &now, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_project(&self, id: Uuid, name: &str, entrypoint: Option<&str>) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET name = ?1, entrypoint = ?2, updated_at = ?3 WHERE id = ?4",
+            (name, entrypoint, &now, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn set_project_notify(&self, id: Uuid, enabled: bool) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET notify_on_complete = ?1, updated_at = ?2 WHERE id = ?3",
+            (enabled as i32, &now, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn set_project_target(&self, id: Uuid, target_id: Option<&str>) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET default_target = ?1, updated_at = ?2 WHERE id = ?3",
+            (target_id, &now, id.to_string()),
         )?;
         Ok(())
     }
@@ -406,6 +534,153 @@ impl ProjectStore {
     pub fn delete_target(&self, id: Uuid) -> Result<()> {
         self.conn
             .execute("DELETE FROM targets WHERE id = ?1", [id.to_string()])?;
+        Ok(())
+    }
+
+    // --- Execution log methods ---
+
+    pub fn insert_execution_log(&self, log: &ExecutionLog) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO execution_logs (id, project_id, started_at, finished_at, exit_code, output, trigger)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                log.id.to_string(),
+                log.project_id.to_string(),
+                log.started_at.to_rfc3339(),
+                log.finished_at.map(|t| t.to_rfc3339()),
+                log.exit_code,
+                &log.output,
+                &log.trigger,
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_execution_log(
+        &self,
+        id: Uuid,
+        exit_code: i32,
+        output: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE execution_logs SET finished_at = ?1, exit_code = ?2, output = ?3 WHERE id = ?4",
+            (&now, exit_code, output, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn append_execution_output(&self, id: Uuid, text: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE execution_logs SET output = output || ?1 WHERE id = ?2",
+            (text, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn list_execution_logs(&self, project_id: Uuid, limit: u32) -> Result<Vec<ExecutionLog>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, started_at, finished_at, exit_code, output, trigger
+             FROM execution_logs WHERE project_id = ?1
+             ORDER BY started_at DESC LIMIT ?2",
+        )?;
+
+        let logs = stmt
+            .query_map(rusqlite::params![project_id.to_string(), limit], |row| {
+                Ok(ExecutionLog {
+                    id: row.get::<_, String>(0)?.parse().unwrap_or_default(),
+                    project_id: row.get::<_, String>(1)?.parse().unwrap_or_default(),
+                    started_at: row.get::<_, String>(2)?.parse().unwrap_or_default(),
+                    finished_at: row
+                        .get::<_, Option<String>>(3)?
+                        .and_then(|s| s.parse().ok()),
+                    exit_code: row.get(4)?,
+                    output: row.get(5)?,
+                    trigger: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(logs)
+    }
+
+    // --- Settings methods ---
+
+    pub fn get_all_settings(&self) -> Result<HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT key, value FROM settings")?;
+        let map = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(map)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            (key, value),
+        )?;
+        Ok(())
+    }
+
+    // --- Deploy version methods ---
+
+    pub fn increment_deploy_version(&self, project_id: Uuid) -> Result<u32> {
+        self.conn.execute(
+            "UPDATE projects SET deploy_version = deploy_version + 1 WHERE id = ?1",
+            [project_id.to_string()],
+        )?;
+        let version: u32 = self.conn.query_row(
+            "SELECT deploy_version FROM projects WHERE id = ?1",
+            [project_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(version)
+    }
+
+    pub fn set_latest_image_tag(&self, project_id: Uuid, tag: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE projects SET latest_image_tag = ?2 WHERE id = ?1",
+            (project_id.to_string(), tag),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_latest_image_tag(&self, project_id: Uuid) -> Result<Option<String>> {
+        let tag = self.conn.query_row(
+            "SELECT latest_image_tag FROM projects WHERE id = ?1",
+            [project_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(tag)
+    }
+
+    // --- Environment variable methods ---
+
+    pub fn set_env_var(&self, project_id: Uuid, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO project_env_vars (project_id, key, value) VALUES (?1, ?2, ?3)",
+            (project_id.to_string(), key, value),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_env_vars(&self, project_id: Uuid) -> Result<HashMap<String, String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT key, value FROM project_env_vars WHERE project_id = ?1",
+        )?;
+        let map = stmt
+            .query_map([project_id.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(map)
+    }
+
+    pub fn delete_env_var(&self, project_id: Uuid, key: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM project_env_vars WHERE project_id = ?1 AND key = ?2",
+            (project_id.to_string(), key),
+        )?;
         Ok(())
     }
 }

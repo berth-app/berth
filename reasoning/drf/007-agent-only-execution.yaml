@@ -1,0 +1,75 @@
+id: "007"
+title: Agent-Only Execution Architecture
+status: decided
+date: "2026-03-07"
+deciders: [codex-simulated, gemini-simulated, claude]
+format_version: "1.0"
+
+context:
+  question: "Should Runway unify all execution through AgentClient→AgentService, or keep separate local (ProcessRegistry) and remote (gRPC) paths?"
+  constraints:
+    - Local and remote execution had divergent code paths
+    - ProcessRegistry in Tauri duplicated process management logic in agent
+    - MCP and CLI needed to kill processes but couldn't reach ProcessRegistry
+    - Scheduler bypassed agent entirely, calling executor directly
+    - Phase 4 (Lambda) needs a single extensible execution interface
+
+options:
+  - id: agent-only
+    name: Agent-Only (unified execution)
+    pros:
+      - Single code path for local and remote — less surface area for bugs
+      - MCP and CLI can actually stop processes (via AgentClient)
+      - Scheduler works through same path as UI and CLI
+      - Natural extension point for Lambda/Workers (broader gRPC interface)
+      - AgentServiceImpl in runway-core is testable without Tauri
+    cons:
+      - Adds UDS complexity for local execution
+      - Lockfile coordination needed between CLI and GUI
+      - Slight overhead for in-process gRPC (negligible in practice)
+
+  - id: hybrid
+    name: Hybrid (local direct + remote gRPC)
+    pros:
+      - Simpler local path (no UDS/gRPC overhead)
+      - Less refactoring needed
+    cons:
+      - Two execution paths to maintain
+      - MCP/CLI still can't stop local processes
+      - Scheduler remains a third path
+
+  - id: keep-current
+    name: Keep Current (ProcessRegistry + remote gRPC)
+    pros:
+      - No refactoring work
+      - Known working for local execution
+    cons:
+      - Three execution paths (Tauri, MCP/CLI direct, remote gRPC)
+      - MCP stop is broken (can't reach ProcessRegistry)
+      - Scheduler is a fourth path
+
+decision:
+  choice: agent-only
+  vote: "Agent-Only 2-1 (Codex + Gemini vs Claude)"
+  rationale: >
+    Unified execution eliminates the divergent code paths that caused MCP stop
+    to silently fail and scheduler to bypass the agent. The UDS overhead is
+    negligible, and lockfile coordination is a solved problem. This sets up
+    Phase 4 cleanly — Lambda/Workers targets just need new AgentService RPCs.
+
+implementation:
+  - AgentServiceImpl moved from runway-agent to runway-core (shared crate)
+  - New modules: agent_service.rs, uds.rs, local_agent.rs in runway-core
+  - Local execution via embedded in-process agent on Unix Domain Socket (~/.runway/agent.sock)
+  - Lockfile coordination (~/.runway/agent.lock) prevents socket conflicts
+  - ProcessRegistry removed from Tauri commands
+  - Proto enhanced: ExecuteResponse now includes exit_code + is_final fields
+  - AgentClient gained connect_uds() and execute_streaming() methods
+  - CLI supports --target flag on run/stop/deploy/logs commands
+  - MCP tools use local agent for execution and stop
+  - Scheduler uses local agent instead of direct executor calls
+  - Frontend unified: no more run_project_remote/stop_project_remote
+
+related:
+  - drf/002-agent-language.yaml
+  - drf/005-mcp-as-core.yaml
