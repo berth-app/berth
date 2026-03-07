@@ -16,7 +16,7 @@ Phases 1-3 complete. Phase 4 (cloud targets + polish) is next.
 **CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets.
 **Remote agents:** Persistent agent with SQLite store (`~/.runway/agent.db`), 14 gRPC RPCs + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
 **NATS command channel:** All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. `AgentTransport` trait abstracts gRPC vs NATS — transport selected per target based on `nats_enabled` flag.
-**Phase 4 progress:** macOS notifications on run complete/fail (per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector.
+**Phase 4 progress:** macOS notifications on run complete/fail (manual + scheduled, local + remote, per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector.
 **Built but not wired:** mTLS certificate infrastructure (tls.rs), Keychain credential storage (credentials.rs).
 
 ### Persistent Remote Agent (March 7, 2026)
@@ -212,7 +212,7 @@ runway agent install ubuntu@my-server.com
 - [ ] AWS credential management (stored in Keychain, assumed roles)
 - [ ] Cloudflare Workers target (stretch goal)
 - [ ] Deployment history and rollback
-- [ ] Notification system: macOS notifications for failures, completions
+- [x] Notification system: macOS notifications for failures, completions (manual + scheduled + remote via NATS)
 - [ ] Settings, onboarding flow, empty states
 - [ ] Code signing, notarization, DMG packaging, Homebrew cask
 

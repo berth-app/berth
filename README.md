@@ -8,7 +8,7 @@ Runway is a Tauri-based macOS app that lets developers deploy and manage code --
 ## Features
 
 - **Paste & Deploy** -- Paste code, pick a runtime, hit Run. Zero config.
-- **Remote Agents** -- Deploy a single Rust binary to any Linux server. Persistent execution history, agent-side scheduling, store-and-forward events, remote self-upgrade.
+- **Remote Agents** -- Deploy a single Rust binary to any Linux server. Persistent execution history, agent-side scheduling, store-and-forward events, remote self-upgrade. Communicates via NATS — no direct network connection or open ports needed.
 - **MCP Server** -- 17 tools via JSON-RPC 2.0. Claude Code can deploy, run, stop, and monitor projects programmatically.
 - **CLI** -- Full command parity with the GUI and MCP server.
 - **Runtime Detection** -- Auto-detects Python, Node, Go, Rust, Shell. Parses requirements.txt, package.json, go.mod, Cargo.toml.
@@ -33,7 +33,8 @@ mac-rundeck/
 ### Communication
 
 - **Local**: Embedded agent via Unix Domain Socket (`~/.runway/agent.sock`)
-- **Remote**: gRPC over HTTP/2 (port 50051) to persistent agent on Linux
+- **Remote (NATS)**: All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. Works behind NAT, firewalls, and across different networks. `AgentTransport` trait abstracts transport selection per target.
+- **Remote (gRPC)**: Fallback for targets without NATS — gRPC over HTTP/2 (port 50051)
 - **MCP**: stdio transport (Claude Code spawns it)
 - **LAN Discovery**: mDNS (`_runway._tcp.local.`)
 
@@ -67,7 +68,7 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-ExecStart=/usr/local/bin/runway-agent --listen-all --port 50051
+ExecStart=/usr/local/bin/runway-agent --listen-all --port 50051 --nats-url tls://connect.ngs.global --nats-creds /path/to/nats.creds --nats-agent-id my-server
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
@@ -112,7 +113,8 @@ The remote agent (`runway-agent`) is a persistent Rust binary with:
 
 - **SQLite store** (`~/.runway/agent.db`) -- 5 tables: deployments, executions, execution_logs, events, schedules
 - **14 gRPC RPCs** -- Deploy, Execute, Stop, Health, Status, StreamLogs, GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade
-- **Agent-side scheduler** -- Runs cron jobs every 30s, even when the app is disconnected
+- **NATS command channel** -- All RPCs available over NATS relay. Desktop sends commands to `runway.<agent_id>.cmd.<type>`, agent responds via `runway.<agent_id>.resp.<request_id>`. Zero inbound ports required.
+- **Agent-side scheduler** -- Runs cron jobs every 30s, even when the app is disconnected. Triggers macOS notifications on the desktop via NATS events.
 - **Store-and-forward events** -- Agent queues events, app polls when connected
 - **Remote upgrade** -- Upload new binary via gRPC, agent verifies and restarts via systemd
 - **Dependency install** -- Deploy RPC auto-runs `pip install`, `npm install`, `go mod download`
@@ -138,7 +140,7 @@ See [docs/remote-agent.html](docs/remote-agent.html) for full technical referenc
 
 ## Status
 
-Phases 1-3 complete. Phase 4 (AWS Lambda + polish) is next.
+Phases 1-3 complete. Phase 4 in progress — NATS command channel, macOS notifications (manual + scheduled + remote), execution history, theme system, in-app code editor done. AWS Lambda target is next.
 
 ## License
 

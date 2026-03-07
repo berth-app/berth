@@ -89,8 +89,8 @@ Phase 3 is marked complete in CLAUDE.md but has loose ends:
 - [ ] **P2** Rollback: re-deploy a previous version
 
 ### Notifications
-- [x] **P1** macOS notifications on manual run complete/fail via `tauri-plugin-notification` (plugin loaded, not used)
-- [ ] **P1** macOS notifications on scheduled run complete/fail
+- [x] **P1** macOS notifications on manual run complete/fail via `tauri-plugin-notification`
+- [x] **P1** macOS notifications on scheduled run complete/fail (local scheduler + NATS `schedule_triggered` + `execution_completed`)
 - [ ] **P1** macOS notification on agent offline (during ping or failed connection)
 - [x] **P2** Notification preferences per project (toggle in ProjectDetail)
 - [ ] **P2** Notification sound customization

@@ -5,9 +5,28 @@ use tauri::image::Image;
 use tauri::tray::TrayIconBuilder;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 use runway_core::nats_relay::NatsConfig;
 use runway_core::nats_subscriber::NatsSubscriber;
+
+/// Send a macOS notification for a completed run if the project has notify_on_complete enabled.
+fn notify_if_enabled(app: &tauri::AppHandle, project_id: &str, exit_code: Option<i32>) {
+    if let Ok(store) = commands::get_store() {
+        if let Ok(projects) = store.list() {
+            if let Some(project) = projects.iter().find(|p| p.id.to_string() == project_id) {
+                if project.notify_on_complete {
+                    let (title, body) = if exit_code == Some(0) {
+                        ("Runway — Run Complete", format!("{} finished successfully", project.name))
+                    } else {
+                        ("Runway — Run Failed", format!("{} failed (exit code {:?})", project.name, exit_code))
+                    };
+                    let _ = app.notification().builder().title(title).body(&body).show();
+                }
+            }
+        }
+    }
+}
 
 fn rebuild_tray_menu(app: &tauri::AppHandle) {
     let projects = match commands::get_store().and_then(|s| s.list().map_err(|e| e.to_string())) {
@@ -99,6 +118,8 @@ fn start_scheduler(app_handle: tauri::AppHandle) {
                                 "exit_code": exit_code,
                             }),
                         );
+
+                        notify_if_enabled(&app_handle, &project_id.to_string(), exit_code);
                     }
 
                     if !results.is_empty() {
@@ -213,20 +234,38 @@ fn start_nats_subscriber(app_handle: tauri::AppHandle) {
                                 let data: serde_json::Value = serde_json::from_str(&event.data).unwrap_or_default();
                                 let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
                                 let exit_code = data.get("exit_code").and_then(|v| v.as_i64()).map(|v| v as i32);
+                                let project_id = event.project_id.unwrap_or_default();
                                 let _ = evt_app.emit(
                                     "project-status-change",
                                     commands::StatusEvent {
-                                        project_id: event.project_id.unwrap_or_default(),
+                                        project_id: project_id.clone(),
                                         status: status.into(),
                                         exit_code,
                                     },
                                 );
+                                notify_if_enabled(&evt_app, &project_id, exit_code);
                             }
                             "schedule_triggered" => {
+                                let data: serde_json::Value = serde_json::from_str(&event.data).unwrap_or_default();
+                                let exit_code = data.get("exit_code").and_then(|v| v.as_i64()).map(|v| v as i32);
+                                let status = if exit_code == Some(0) { "idle" } else { "failed" };
+                                let project_id = event.project_id.clone().unwrap_or_default();
+
+                                let _ = evt_app.emit(
+                                    "project-status-change",
+                                    commands::StatusEvent {
+                                        project_id: project_id.clone(),
+                                        status: status.into(),
+                                        exit_code,
+                                    },
+                                );
+
                                 let _ = evt_app.emit("schedule-executed", serde_json::json!({
-                                    "project_id": event.project_id,
+                                    "project_id": &project_id,
                                     "via": "nats",
                                 }));
+
+                                notify_if_enabled(&evt_app, &project_id, exit_code);
                             }
                             _ => {}
                         }
