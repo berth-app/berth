@@ -9,6 +9,7 @@ use runway_core::runtime::Runtime;
 use runway_core::container;
 
 use crate::agent_store::AgentStore;
+use crate::nats_publisher::{self, NatsPublisher};
 
 fn parse_runtime(s: &str) -> Runtime {
     match s {
@@ -22,7 +23,7 @@ fn parse_runtime(s: &str) -> Runtime {
 }
 
 /// Agent-side scheduler tick. Checks for due schedules, executes them using the latest deployment.
-pub async fn tick(store: &Arc<Mutex<AgentStore>>) {
+pub async fn tick(store: &Arc<Mutex<AgentStore>>, nats: &Option<Arc<NatsPublisher>>) {
     let due_schedules = {
         let store = store.lock().await;
         match store.list_due_schedules() {
@@ -97,6 +98,8 @@ pub async fn tick(store: &Arc<Mutex<AgentStore>>) {
                         };
                         let st = store.lock().await;
                         let _ = st.append_log_line(&execution_id, s, stream_str, &line.text, &line.timestamp);
+                        drop(st);
+                        nats_publisher::maybe_publish_log_line(nats, &sched.project_id, &execution_id, stream_str, &line.text, s).await;
                     }
                     match child.wait().await {
                         Ok(status) => Ok(status.code().unwrap_or(-1)),
@@ -118,6 +121,8 @@ pub async fn tick(store: &Arc<Mutex<AgentStore>>) {
                         };
                         let st = store.lock().await;
                         let _ = st.append_log_line(&execution_id, s, stream_str, &line.text, &line.timestamp);
+                        drop(st);
+                        nats_publisher::maybe_publish_log_line(nats, &sched.project_id, &execution_id, stream_str, &line.text, s).await;
                     }
                     match child.wait().await {
                         Ok(status) => Ok(status.code().unwrap_or(-1)),
@@ -143,6 +148,12 @@ pub async fn tick(store: &Arc<Mutex<AgentStore>>) {
         };
 
         // Record execution end and emit event
+        let data = serde_json::json!({
+            "schedule_id": sched.id,
+            "exit_code": code,
+            "status": status,
+        })
+        .to_string();
         {
             let store = store.lock().await;
             let _ = store.finish_execution(&execution_id, code, status);
@@ -150,14 +161,10 @@ pub async fn tick(store: &Arc<Mutex<AgentStore>>) {
                 "schedule_triggered",
                 Some(&sched.project_id),
                 Some(&execution_id),
-                &serde_json::json!({
-                    "schedule_id": sched.id,
-                    "exit_code": code,
-                    "status": status,
-                })
-                .to_string(),
+                &data,
             );
         }
+        nats_publisher::maybe_publish_event(nats, "schedule_triggered", Some(&sched.project_id), Some(&execution_id), &data).await;
 
         // Advance schedule
         let next = runway_core::scheduler::parse_next_run(&sched.cron_expr, now);

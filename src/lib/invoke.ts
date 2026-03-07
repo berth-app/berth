@@ -90,6 +90,8 @@ export interface TargetInfo {
   status: string;
   agent_version: string | null;
   last_seen_at: string | null;
+  nats_agent_id: string | null;
+  nats_enabled: boolean;
 }
 
 export async function listTargets(): Promise<TargetInfo[]> {
@@ -99,13 +101,31 @@ export async function listTargets(): Promise<TargetInfo[]> {
 export async function addTarget(
   name: string,
   host: string,
-  port: number
+  port: number,
+  natsAgentId?: string
 ): Promise<TargetInfo> {
-  return tauriInvoke<TargetInfo>("add_target", { name, host, port });
+  return tauriInvoke<TargetInfo>("add_target", {
+    name,
+    host,
+    port,
+    nats_agent_id: natsAgentId || null,
+  });
 }
 
 export async function removeTarget(id: string): Promise<void> {
   return tauriInvoke("remove_target", { id });
+}
+
+export async function updateTargetNats(
+  id: string,
+  natsAgentId: string,
+  natsEnabled: boolean
+): Promise<void> {
+  return tauriInvoke("update_target_nats", {
+    id,
+    nats_agent_id: natsAgentId,
+    nats_enabled: natsEnabled,
+  });
 }
 
 export async function pingTarget(id: string): Promise<TargetInfo> {

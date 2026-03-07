@@ -6,6 +6,9 @@ use tauri::tray::TrayIconBuilder;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{Emitter, Manager};
 
+use runway_core::nats_relay::NatsConfig;
+use runway_core::nats_subscriber::NatsSubscriber;
+
 fn rebuild_tray_menu(app: &tauri::AppHandle) {
     let projects = match commands::get_store().and_then(|s| s.list().map_err(|e| e.to_string())) {
         Ok(p) => p,
@@ -109,6 +112,132 @@ fn start_scheduler(app_handle: tauri::AppHandle) {
     });
 }
 
+/// Start NATS subscriber if configured. Bridges NATS messages to Tauri events.
+fn start_nats_subscriber(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // Read NATS config from settings
+        let (nats_url, nats_creds) = match commands::get_store() {
+            Ok(store) => {
+                let settings = store.get_all_settings().unwrap_or_default();
+                let url = settings.get("nats_url").cloned();
+                let creds = settings.get("nats_creds").cloned();
+                (url, creds)
+            }
+            Err(_) => (None, None),
+        };
+
+        let nats_url = match nats_url {
+            Some(url) if !url.is_empty() => url,
+            _ => return, // NATS not configured
+        };
+
+        // Get install_id (generate if first launch)
+        let install_id = match commands::get_store() {
+            Ok(store) => {
+                let settings = store.get_all_settings().unwrap_or_default();
+                match settings.get("install_id") {
+                    Some(id) => id.clone(),
+                    None => {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let _ = store.set_setting("install_id", &id);
+                        id
+                    }
+                }
+            }
+            Err(_) => return,
+        };
+
+        let config = NatsConfig {
+            url: nats_url,
+            creds_path: nats_creds,
+            agent_id: String::new(), // not used for subscriber
+        };
+
+        let subscriber = match NatsSubscriber::connect(&config, &install_id).await {
+            Ok(sub) => sub,
+            Err(e) => {
+                tracing::warn!("Failed to connect to NATS (running without relay): {e}");
+                return;
+            }
+        };
+
+        tracing::info!("NATS subscriber connected, bridging events to UI");
+
+        // Store the NATS client for command channel use
+        commands::set_nats_client(subscriber.client().clone()).await;
+
+        // Get agent IDs from remote targets
+        let agent_ids: Vec<String> = match commands::get_store() {
+            Ok(store) => store
+                .list_targets()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| t.kind == runway_core::target::TargetKind::Remote)
+                .filter_map(|t| t.nats_agent_id)
+                .collect(),
+            Err(_) => vec![],
+        };
+
+        if agent_ids.is_empty() {
+            tracing::info!("No remote targets with NATS agent IDs configured");
+            return;
+        }
+
+        // Subscribe to heartbeats (returns a channel, doesn't need subscriber after)
+        let hb_rx = subscriber.subscribe_heartbeats(&agent_ids).await;
+        if let Ok(mut rx) = hb_rx {
+            let hb_app = app_handle.clone();
+            tokio::spawn(async move {
+                while let Some(hb) = rx.recv().await {
+                    let _ = hb_app.emit("agent-heartbeat", serde_json::json!({
+                        "agent_id": hb.agent_id,
+                        "status": "online",
+                        "cpu_usage": hb.cpu_usage,
+                        "memory_bytes": hb.memory_bytes,
+                        "uptime_seconds": hb.uptime_seconds,
+                        "version": hb.version,
+                    }));
+                }
+            });
+        }
+
+        // Subscribe to events
+        let evt_app = app_handle.clone();
+        match subscriber.subscribe_events(&agent_ids).await {
+            Ok(mut stream) => {
+                use futures::StreamExt;
+                tokio::spawn(async move {
+                    while let Some(event) = stream.next().await {
+                        match event.event_type.as_str() {
+                            "execution_completed" | "execution_stopped" => {
+                                let data: serde_json::Value = serde_json::from_str(&event.data).unwrap_or_default();
+                                let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
+                                let exit_code = data.get("exit_code").and_then(|v| v.as_i64()).map(|v| v as i32);
+                                let _ = evt_app.emit(
+                                    "project-status-change",
+                                    commands::StatusEvent {
+                                        project_id: event.project_id.unwrap_or_default(),
+                                        status: status.into(),
+                                        exit_code,
+                                    },
+                                );
+                            }
+                            "schedule_triggered" => {
+                                let _ = evt_app.emit("schedule-executed", serde_json::json!({
+                                    "project_id": event.project_id,
+                                    "via": "nats",
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+            Err(e) => tracing::warn!("Failed to subscribe to NATS events: {e}"),
+        }
+    });
+}
+
 fn show_window_and_navigate(app: &tauri::AppHandle, payload: &str) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -183,6 +312,9 @@ pub fn run() {
             // Start background scheduler loop
             start_scheduler(app.handle().clone());
 
+            // Start NATS subscriber (bridges remote agent events to UI)
+            start_nats_subscriber(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -197,6 +329,7 @@ pub fn run() {
             list_targets,
             add_target,
             remove_target,
+            update_target_nats,
             ping_target,
             get_agent_stats,
             list_schedules,

@@ -3,6 +3,7 @@ use std::path::Path;
 use runway_core::project::Project;
 use runway_core::runtime;
 use runway_core::agent_client::AgentClient;
+use runway_core::agent_transport::AgentTransport;
 use runway_core::scheduler::Schedule;
 use runway_core::target::Target;
 use runway_core::store::ProjectStore;
@@ -438,7 +439,7 @@ async fn handle_deploy(args: &Value) -> CallToolResult {
     let _ = store.record_run_start(project.id);
     let runtime_str = format!("{:?}", project.runtime).to_lowercase();
 
-    let mut client = match runway_core::local_agent::get_or_start_local_agent().await {
+    let client = match runway_core::local_agent::get_or_start_local_agent().await {
         Ok(c) => c,
         Err(e) => return CallToolResult::error(format!("Failed to start local agent: {e}")),
     };
@@ -510,7 +511,7 @@ async fn handle_run(args: &Value) -> CallToolResult {
     let _ = store.record_run_start(project.id);
     let runtime_str = format!("{:?}", project.runtime).to_lowercase();
 
-    let mut client = match runway_core::local_agent::get_or_start_local_agent().await {
+    let client = match runway_core::local_agent::get_or_start_local_agent().await {
         Ok(c) => c,
         Err(e) => return CallToolResult::error(format!("Failed to start local agent: {e}")),
     };
@@ -566,7 +567,7 @@ async fn handle_stop(args: &Value) -> CallToolResult {
         Err(e) => return CallToolResult::error(e),
     };
 
-    let mut client = match runway_core::local_agent::get_or_start_local_agent().await {
+    let client = match runway_core::local_agent::get_or_start_local_agent().await {
         Ok(c) => c,
         Err(e) => return CallToolResult::error(format!("Failed to connect to agent: {e}")),
     };
@@ -899,7 +900,7 @@ async fn handle_list_agents() -> CallToolResult {
     for target in &targets {
         let endpoint = target.grpc_endpoint();
         let health = match AgentClient::connect(&endpoint).await {
-            Ok(mut client) => match client.health().await {
+            Ok(client) => match client.health().await {
                 Ok(h) => {
                     let _ = store.update_target_status(
                         target.id,

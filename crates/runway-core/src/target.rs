@@ -13,6 +13,8 @@ pub struct Target {
     pub created_at: DateTime<Utc>,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub agent_version: Option<String>,
+    pub nats_agent_id: Option<String>,
+    pub nats_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +45,8 @@ impl Target {
             created_at: Utc::now(),
             last_seen_at: Some(Utc::now()),
             agent_version: None,
+            nats_agent_id: None,
+            nats_enabled: false,
         }
     }
 
@@ -57,6 +61,8 @@ impl Target {
             created_at: Utc::now(),
             last_seen_at: None,
             agent_version: None,
+            nats_agent_id: None,
+            nats_enabled: false,
         }
     }
 

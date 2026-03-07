@@ -1,4 +1,6 @@
 use runway_core::agent_client::AgentClient;
+use runway_core::agent_transport::AgentTransport;
+use runway_core::nats_cmd_client::NatsAgentClient;
 use tauri::Emitter;
 use tauri_plugin_notification::NotificationExt;
 use runway_core::project::{Project, ProjectStatus};
@@ -9,6 +11,7 @@ use runway_core::target::Target;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
@@ -40,28 +43,87 @@ pub(crate) fn get_store() -> Result<ProjectStore, String> {
     ProjectStore::open(db_path.to_str().unwrap_or("runway.db")).map_err(|e| e.to_string())
 }
 
-/// Get an AgentClient for the given target. None or "local" uses the embedded local agent.
-async fn get_agent_client(target_id: Option<&str>) -> Result<AgentClient, String> {
+/// Get a transport for the given target. None or "local" uses the embedded local agent via gRPC.
+/// Remote targets with `nats_enabled` use NATS command channel; otherwise gRPC.
+async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransport>, String> {
     match target_id {
         None | Some("local") | Some("") => {
-            runway_core::local_agent::get_or_start_local_agent()
+            let client = runway_core::local_agent::get_or_start_local_agent()
                 .await
-                .map_err(|e| format!("Failed to start local agent: {e}"))
+                .map_err(|e| format!("Failed to start local agent: {e}"))?;
+            Ok(Box::new(client))
         }
         Some(tid) => {
             let store = get_store()?;
             let uuid: Uuid = tid.parse().map_err(|e: uuid::Error| e.to_string())?;
             let targets = store.list_targets().map_err(|e| e.to_string())?;
             let target = targets
-                .iter()
+                .into_iter()
                 .find(|t| t.id == uuid)
                 .ok_or_else(|| format!("Target {tid} not found"))?;
+
+            // Use NATS transport if enabled and agent_id is set
+            if target.nats_enabled {
+                if let Some(ref agent_id) = target.nats_agent_id {
+                    let nats_client = get_nats_client().await?;
+                    return Ok(Box::new(NatsAgentClient::new(nats_client, agent_id.clone())));
+                }
+            }
+
+            // Fall back to gRPC
             let endpoint = target.grpc_endpoint();
-            AgentClient::connect(&endpoint)
+            let client = AgentClient::connect(&endpoint)
                 .await
-                .map_err(|e| format!("Failed to connect to agent: {e}"))
+                .map_err(|e| format!("Failed to connect to agent: {e}"))?;
+            Ok(Box::new(client))
         }
     }
+}
+
+/// Get the shared NATS client, or connect on demand from settings.
+async fn get_nats_client() -> Result<async_nats::Client, String> {
+    // Try reading from global state (set by start_nats_subscriber in lib.rs)
+    if let Some(client) = nats_client_lock().lock().await.clone() {
+        return Ok(client);
+    }
+
+    // If no client yet, connect from settings
+    let store = get_store()?;
+    let settings = store.get_all_settings().unwrap_or_default();
+    let nats_url = settings
+        .get("nats_url")
+        .cloned()
+        .ok_or("NATS not configured. Set nats_url in Settings.")?;
+    let nats_creds = settings.get("nats_creds").cloned();
+
+    let mut opts = async_nats::ConnectOptions::new();
+    if let Some(ref creds_path) = nats_creds {
+        opts = opts
+            .credentials_file(creds_path)
+            .await
+            .map_err(|e| format!("Failed to load NATS credentials: {e}"))?;
+    }
+    let client = opts
+        .connect(&nats_url)
+        .await
+        .map_err(|e| format!("Failed to connect to NATS: {e}"))?;
+
+    // Cache for next time
+    *nats_client_lock().lock().await = Some(client.clone());
+
+    Ok(client)
+}
+
+static NATS_CLIENT: std::sync::OnceLock<Mutex<Option<async_nats::Client>>> =
+    std::sync::OnceLock::new();
+
+fn nats_client_lock() -> &'static Mutex<Option<async_nats::Client>> {
+    NATS_CLIENT.get_or_init(|| Mutex::new(None))
+}
+
+/// Set the NATS client (called from lib.rs when subscriber connects).
+pub async fn set_nats_client(client: async_nats::Client) {
+    *nats_client_lock().lock().await = Some(client);
 }
 
 #[tauri::command]
@@ -190,7 +252,7 @@ pub async fn run_project(
         project.path.clone()
     };
 
-    let mut client = get_agent_client(target.as_deref()).await?;
+    let client = get_agent_client(target.as_deref()).await?;
 
     // Create execution log entry
     let exec_log = ExecutionLog::new(uuid, "manual");
@@ -219,24 +281,26 @@ pub async fn run_project(
 
     // Spawn background task for streaming logs
     tokio::spawn(async move {
-        let stream_result = client
-            .execute_streaming(
-                &project_id_str,
-                &runtime_str,
-                &entrypoint,
-                &working_dir,
-                code.as_deref(),
-                None,
-                std::collections::HashMap::new(),
-            )
-            .await;
+        use runway_core::agent_transport::ExecuteParams;
+
+        let params = ExecuteParams {
+            project_id: project_id_str.clone(),
+            runtime: runtime_str,
+            entrypoint,
+            working_dir,
+            code,
+            image_tag: None,
+            env_vars: std::collections::HashMap::new(),
+        };
+
+        let stream_result = client.execute_streaming(&params).await;
 
         match stream_result {
-            Ok(mut stream) => {
+            Ok(mut rx) => {
                 let mut exit_code = 0i32;
                 let mut collected_output = String::new();
 
-                while let Ok(Some(msg)) = stream.message().await {
+                while let Some(msg) = rx.recv().await {
                     if msg.is_final {
                         exit_code = msg.exit_code;
                         continue;
@@ -331,7 +395,7 @@ pub async fn stop_project(
 ) -> Result<(), String> {
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
 
-    let mut client = get_agent_client(target.as_deref()).await?;
+    let client = get_agent_client(target.as_deref()).await?;
 
     let stopped = client
         .stop(&id)
@@ -371,6 +435,8 @@ pub struct TargetInfo {
     pub status: String,
     pub agent_version: Option<String>,
     pub last_seen_at: Option<String>,
+    pub nats_agent_id: Option<String>,
+    pub nats_enabled: bool,
 }
 
 impl From<&Target> for TargetInfo {
@@ -384,6 +450,8 @@ impl From<&Target> for TargetInfo {
             status: format!("{:?}", t.status).to_lowercase(),
             agent_version: t.agent_version.clone(),
             last_seen_at: t.last_seen_at.map(|ts| ts.to_rfc3339()),
+            nats_agent_id: t.nats_agent_id.clone(),
+            nats_enabled: t.nats_enabled,
         }
     }
 }
@@ -396,9 +464,15 @@ pub fn list_targets() -> Result<Vec<TargetInfo>, String> {
 }
 
 #[tauri::command]
-pub fn add_target(name: String, host: String, port: u16) -> Result<TargetInfo, String> {
+pub fn add_target(name: String, host: String, port: u16, nats_agent_id: Option<String>) -> Result<TargetInfo, String> {
     let store = get_store()?;
-    let target = Target::new_remote(name, host, port);
+    let mut target = Target::new_remote(name, host, port);
+    if let Some(ref agent_id) = nats_agent_id {
+        if !agent_id.is_empty() {
+            target.nats_agent_id = Some(agent_id.clone());
+            target.nats_enabled = true;
+        }
+    }
     store.insert_target(&target).map_err(|e| e.to_string())?;
     Ok(TargetInfo::from(&target))
 }
@@ -408,6 +482,14 @@ pub fn remove_target(id: String) -> Result<(), String> {
     let store = get_store()?;
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
     store.delete_target(uuid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_target_nats(id: String, nats_agent_id: String, nats_enabled: bool) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let agent_id = if nats_agent_id.is_empty() { None } else { Some(nats_agent_id.as_str()) };
+    store.update_target_nats(uuid, agent_id, nats_enabled).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -421,9 +503,9 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
         .find(|t| t.id == uuid)
         .ok_or_else(|| format!("Target {} not found", id))?;
 
-    let endpoint = target.grpc_endpoint();
-    match AgentClient::connect(&endpoint).await {
-        Ok(mut client) => match client.health().await {
+    let transport = get_agent_client(Some(&id)).await;
+    match transport {
+        Ok(client) => match client.health().await {
             Ok(health) => {
                 let _ = store.update_target_status(
                     target.id,
@@ -490,10 +572,7 @@ pub async fn get_agent_stats(id: String) -> Result<AgentStats, String> {
         .find(|t| t.id == uuid)
         .ok_or_else(|| format!("Target {} not found", id))?;
 
-    let endpoint = target.grpc_endpoint();
-    let mut client = AgentClient::connect(&endpoint)
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
+    let client = get_agent_client(Some(&id)).await?;
 
     let health = client.health().await.map_err(|e| format!("Health RPC failed: {e}"))?;
     let status = client.status().await.map_err(|e| format!("Status RPC failed: {e}"))?;

@@ -3,8 +3,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use tonic::transport::Channel;
 
+use crate::agent_transport::{AgentTransport, DeployParams, DeployResponseLine, ExecuteParams, ExecuteResponseLine};
 use crate::executor::{LogLine, LogStream};
 
 pub mod proto {
@@ -87,6 +89,7 @@ pub struct ExecuteResult {
 }
 
 /// gRPC client for communicating with a remote Runway agent.
+#[derive(Clone)]
 pub struct AgentClient {
     inner: AgentServiceClient<Channel>,
 }
@@ -115,126 +118,9 @@ impl AgentClient {
         Ok(Self { inner })
     }
 
-    /// Check agent health (version, status, uptime).
-    pub async fn health(&mut self) -> Result<AgentHealth> {
-        let response = self
-            .inner
-            .health(proto::HealthRequest {})
-            .await
-            .context("Health RPC failed — the agent may be unreachable or unhealthy")?
-            .into_inner();
-
-        let podman_version = if response.podman_version.is_empty() {
-            None
-        } else {
-            Some(response.podman_version)
-        };
-
-        let os = if response.os.is_empty() {
-            None
-        } else {
-            Some(response.os)
-        };
-        let arch = if response.arch.is_empty() {
-            None
-        } else {
-            Some(response.arch)
-        };
-
-        Ok(AgentHealth {
-            version: response.agent_version,
-            status: response.status,
-            uptime_seconds: response.uptime_seconds,
-            podman_version,
-            container_ready: response.container_ready,
-            os,
-            arch,
-        })
-    }
-
-    /// Deploy source code to an agent (build container or setup environment).
-    /// Returns the raw gRPC stream for real-time build/setup output.
-    pub async fn deploy_streaming(
-        &mut self,
-        project_id: &str,
-        runtime: &str,
-        entrypoint: &str,
-        source_archive: &[u8],
-        containerfile: &str,
-        version: u32,
-        setup_commands: Vec<String>,
-    ) -> Result<tonic::Streaming<proto::DeployResponse>> {
-        let request = proto::DeployRequest {
-            project_id: project_id.to_string(),
-            runtime: runtime.to_string(),
-            entrypoint: entrypoint.to_string(),
-            source_archive: source_archive.to_vec(),
-            containerfile: containerfile.to_string(),
-            version,
-            setup_commands,
-        };
-
-        let response =
-            tokio::time::timeout(Duration::from_secs(600), self.inner.deploy(request))
-                .await
-                .context("Deploy RPC timed out after 10 minutes")?
-                .context("Deploy RPC failed — check the agent logs for details")?;
-
-        Ok(response.into_inner())
-    }
-
-    /// Deploy source code and collect the result.
-    pub async fn deploy(
-        &mut self,
-        project_id: &str,
-        runtime: &str,
-        entrypoint: &str,
-        source_archive: &[u8],
-        containerfile: &str,
-        version: u32,
-        setup_commands: Vec<String>,
-    ) -> Result<DeployResult> {
-        let mut stream = self
-            .deploy_streaming(
-                project_id,
-                runtime,
-                entrypoint,
-                source_archive,
-                containerfile,
-                version,
-                setup_commands,
-            )
-            .await?;
-
-        let mut result = DeployResult {
-            image_tag: None,
-            version,
-            success: false,
-        };
-
-        while let Some(msg) =
-            tokio::time::timeout(Duration::from_secs(600), stream.message())
-                .await
-                .context("Timed out waiting for deploy stream")?
-                .context("Error reading deploy stream")?
-        {
-            if msg.is_final {
-                result.success = msg.success;
-                if !msg.image_tag.is_empty() {
-                    result.image_tag = Some(msg.image_tag);
-                }
-                result.version = msg.version;
-            }
-        }
-
-        Ok(result)
-    }
-
     /// Execute a project on an agent and return the raw gRPC stream.
-    ///
-    /// Callers can process log lines one at a time for real-time streaming.
-    pub async fn execute_streaming(
-        &mut self,
+    pub async fn execute_streaming_raw(
+        &self,
         project_id: &str,
         runtime: &str,
         entrypoint: &str,
@@ -260,7 +146,7 @@ impl AgentClient {
             container_name,
         };
 
-        let response = tokio::time::timeout(Duration::from_secs(300), self.inner.execute(request))
+        let response = tokio::time::timeout(Duration::from_secs(300), self.inner.clone().execute(request))
             .await
             .context("Execute RPC timed out after 5 minutes")?
             .context("Execute RPC failed — check the agent logs for details")?;
@@ -268,12 +154,77 @@ impl AgentClient {
         Ok(response.into_inner())
     }
 
-    /// Execute a project on an agent and collect all streaming log output.
-    ///
-    /// Returns logs and exit code. Uses a 5-minute timeout per message
-    /// to avoid hanging on stuck processes.
+    /// Deploy source code to an agent (build container or setup environment).
+    pub async fn deploy_streaming_raw(
+        &self,
+        project_id: &str,
+        runtime: &str,
+        entrypoint: &str,
+        source_archive: &[u8],
+        containerfile: &str,
+        version: u32,
+        setup_commands: Vec<String>,
+    ) -> Result<tonic::Streaming<proto::DeployResponse>> {
+        let request = proto::DeployRequest {
+            project_id: project_id.to_string(),
+            runtime: runtime.to_string(),
+            entrypoint: entrypoint.to_string(),
+            source_archive: source_archive.to_vec(),
+            containerfile: containerfile.to_string(),
+            version,
+            setup_commands,
+        };
+
+        let response =
+            tokio::time::timeout(Duration::from_secs(600), self.inner.clone().deploy(request))
+                .await
+                .context("Deploy RPC timed out after 10 minutes")?
+                .context("Deploy RPC failed — check the agent logs for details")?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Poll for events from the remote agent (store-and-forward).
+    pub async fn get_events(&self, since_id: i64, limit: u32) -> Result<Vec<RemoteEvent>> {
+        let response = self
+            .inner
+            .clone()
+            .get_events(proto::GetEventsRequest { since_id, limit })
+            .await
+            .context("GetEvents RPC failed")?
+            .into_inner();
+
+        Ok(response
+            .events
+            .into_iter()
+            .map(|e| RemoteEvent {
+                id: e.id,
+                event_type: e.event_type,
+                project_id: e.project_id,
+                execution_id: e.execution_id,
+                data: e.data,
+                created_at: e.created_at,
+            })
+            .collect())
+    }
+
+    /// Acknowledge events, allowing the agent to prune them.
+    pub async fn ack_events(&self, up_to_id: i64) -> Result<i64> {
+        let response = self
+            .inner
+            .clone()
+            .ack_events(proto::AckEventsRequest { up_to_id })
+            .await
+            .context("AckEvents RPC failed")?
+            .into_inner();
+
+        Ok(response.pruned_count)
+    }
+
+    // Convenience methods with positional args that delegate to AgentTransport trait.
+
     pub async fn execute(
-        &mut self,
+        &self,
         project_id: &str,
         runtime: &str,
         entrypoint: &str,
@@ -282,60 +233,79 @@ impl AgentClient {
         image_tag: Option<&str>,
         env_vars: HashMap<String, String>,
     ) -> Result<ExecuteResult> {
-        let mut stream = self
-            .execute_streaming(project_id, runtime, entrypoint, working_dir, code, image_tag, env_vars)
-            .await?;
-
-        let mut logs = Vec::new();
-        let mut exit_code = 0i32;
-
-        while let Some(msg) = tokio::time::timeout(Duration::from_secs(300), stream.message())
-            .await
-            .context("Timed out waiting for execute stream data")?
-            .context("Error reading from execute stream")?
-        {
-            if msg.is_final {
-                exit_code = msg.exit_code;
-                continue;
-            }
-
-            let stream_type = match msg.stream.as_str() {
-                "stderr" => LogStream::Stderr,
-                _ => LogStream::Stdout,
-            };
-
-            let timestamp = chrono::DateTime::parse_from_rfc3339(&msg.timestamp)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .unwrap_or_else(|_| chrono::Utc::now());
-
-            logs.push(LogLine {
-                stream: stream_type,
-                text: msg.text,
-                timestamp,
-            });
-        }
-
-        Ok(ExecuteResult { logs, exit_code })
+        let params = ExecuteParams {
+            project_id: project_id.to_string(),
+            runtime: runtime.to_string(),
+            entrypoint: entrypoint.to_string(),
+            working_dir: working_dir.to_string(),
+            code: code.map(|c| c.to_vec()),
+            image_tag: image_tag.map(|s| s.to_string()),
+            env_vars,
+        };
+        AgentTransport::execute(self, &params).await
     }
 
-    /// Stop a running project on the remote agent. Returns true if stopped successfully.
-    pub async fn stop(&mut self, project_id: &str) -> Result<bool> {
+    pub async fn execute_streaming(
+        &self,
+        project_id: &str,
+        runtime: &str,
+        entrypoint: &str,
+        working_dir: &str,
+        code: Option<&[u8]>,
+        image_tag: Option<&str>,
+        env_vars: HashMap<String, String>,
+    ) -> Result<tonic::Streaming<proto::ExecuteResponse>> {
+        self.execute_streaming_raw(project_id, runtime, entrypoint, working_dir, code, image_tag, env_vars).await
+    }
+
+    pub async fn deploy_streaming(
+        &self,
+        project_id: &str,
+        runtime: &str,
+        entrypoint: &str,
+        source_archive: &[u8],
+        containerfile: &str,
+        version: u32,
+        setup_commands: Vec<String>,
+    ) -> Result<tonic::Streaming<proto::DeployResponse>> {
+        self.deploy_streaming_raw(project_id, runtime, entrypoint, source_archive, containerfile, version, setup_commands).await
+    }
+}
+
+#[async_trait]
+impl AgentTransport for AgentClient {
+    async fn health(&self) -> Result<AgentHealth> {
         let response = self
             .inner
-            .stop(proto::StopRequest {
-                project_id: project_id.to_string(),
-            })
+            .clone()
+            .health(proto::HealthRequest {})
             .await
-            .context("Stop RPC failed — the project may already be stopped or the agent is unreachable")?
+            .context("Health RPC failed — the agent may be unreachable or unhealthy")?
             .into_inner();
 
-        Ok(response.success)
+        let podman_version = if response.podman_version.is_empty() {
+            None
+        } else {
+            Some(response.podman_version)
+        };
+        let os = if response.os.is_empty() { None } else { Some(response.os) };
+        let arch = if response.arch.is_empty() { None } else { Some(response.arch) };
+
+        Ok(AgentHealth {
+            version: response.agent_version,
+            status: response.status,
+            uptime_seconds: response.uptime_seconds,
+            podman_version,
+            container_ready: response.container_ready,
+            os,
+            arch,
+        })
     }
 
-    /// Get the status of the remote agent and its running projects.
-    pub async fn status(&mut self) -> Result<AgentStatus> {
+    async fn status(&self) -> Result<AgentStatus> {
         let response = self
             .inner
+            .clone()
             .status(proto::StatusRequest {
                 project_id: String::new(),
             })
@@ -362,16 +332,98 @@ impl AgentClient {
         })
     }
 
-    // --- New persistent agent client methods ---
-
-    /// Get execution history from the remote agent.
-    pub async fn get_executions(
-        &mut self,
-        project_id: &str,
-        limit: u32,
-    ) -> Result<Vec<RemoteExecution>> {
+    async fn stop(&self, project_id: &str) -> Result<bool> {
         let response = self
             .inner
+            .clone()
+            .stop(proto::StopRequest {
+                project_id: project_id.to_string(),
+            })
+            .await
+            .context("Stop RPC failed — the project may already be stopped or the agent is unreachable")?
+            .into_inner();
+
+        Ok(response.success)
+    }
+
+    async fn execute_streaming(
+        &self,
+        params: &ExecuteParams,
+    ) -> Result<tokio::sync::mpsc::Receiver<ExecuteResponseLine>> {
+        let mut stream = self
+            .execute_streaming_raw(
+                &params.project_id,
+                &params.runtime,
+                &params.entrypoint,
+                &params.working_dir,
+                params.code.as_deref(),
+                params.image_tag.as_deref(),
+                params.env_vars.clone(),
+            )
+            .await?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+
+        tokio::spawn(async move {
+            while let Ok(Some(msg)) = stream.message().await {
+                let line = ExecuteResponseLine {
+                    stream: msg.stream,
+                    text: msg.text,
+                    timestamp: msg.timestamp,
+                    exit_code: msg.exit_code,
+                    is_final: msg.is_final,
+                };
+                if tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
+    async fn deploy_streaming(
+        &self,
+        params: &DeployParams,
+    ) -> Result<tokio::sync::mpsc::Receiver<DeployResponseLine>> {
+        let mut stream = self
+            .deploy_streaming_raw(
+                &params.project_id,
+                &params.runtime,
+                &params.entrypoint,
+                &params.source_archive,
+                &params.containerfile,
+                params.version,
+                params.setup_commands.clone(),
+            )
+            .await?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+
+        tokio::spawn(async move {
+            while let Ok(Some(msg)) = stream.message().await {
+                let line = DeployResponseLine {
+                    phase: msg.phase,
+                    text: msg.text,
+                    timestamp: msg.timestamp,
+                    image_tag: msg.image_tag,
+                    version: msg.version,
+                    is_final: msg.is_final,
+                    success: msg.success,
+                };
+                if tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
+    async fn get_executions(&self, project_id: &str, limit: u32) -> Result<Vec<RemoteExecution>> {
+        let response = self
+            .inner
+            .clone()
             .get_executions(proto::GetExecutionsRequest {
                 project_id: project_id.to_string(),
                 limit,
@@ -396,14 +448,10 @@ impl AgentClient {
             .collect())
     }
 
-    /// Get stored execution logs from the remote agent.
-    pub async fn get_execution_logs(
-        &mut self,
-        execution_id: &str,
-        since_seq: i64,
-    ) -> Result<Vec<LogLine>> {
+    async fn get_execution_logs(&self, execution_id: &str, since_seq: i64) -> Result<Vec<LogLine>> {
         let response = self
             .inner
+            .clone()
             .get_execution_logs(proto::GetExecutionLogsRequest {
                 execution_id: execution_id.to_string(),
                 since_seq,
@@ -437,49 +485,10 @@ impl AgentClient {
         Ok(logs)
     }
 
-    /// Poll for events from the remote agent (store-and-forward).
-    pub async fn get_events(&mut self, since_id: i64, limit: u32) -> Result<Vec<RemoteEvent>> {
+    async fn add_schedule(&self, project_id: &str, cron_expr: &str) -> Result<(String, String)> {
         let response = self
             .inner
-            .get_events(proto::GetEventsRequest { since_id, limit })
-            .await
-            .context("GetEvents RPC failed")?
-            .into_inner();
-
-        Ok(response
-            .events
-            .into_iter()
-            .map(|e| RemoteEvent {
-                id: e.id,
-                event_type: e.event_type,
-                project_id: e.project_id,
-                execution_id: e.execution_id,
-                data: e.data,
-                created_at: e.created_at,
-            })
-            .collect())
-    }
-
-    /// Acknowledge events, allowing the agent to prune them.
-    pub async fn ack_events(&mut self, up_to_id: i64) -> Result<i64> {
-        let response = self
-            .inner
-            .ack_events(proto::AckEventsRequest { up_to_id })
-            .await
-            .context("AckEvents RPC failed")?
-            .into_inner();
-
-        Ok(response.pruned_count)
-    }
-
-    /// Add a schedule on the remote agent.
-    pub async fn add_remote_schedule(
-        &mut self,
-        project_id: &str,
-        cron_expr: &str,
-    ) -> Result<(String, String)> {
-        let response = self
-            .inner
+            .clone()
             .add_schedule(proto::AddScheduleRequest {
                 project_id: project_id.to_string(),
                 cron_expr: cron_expr.to_string(),
@@ -491,10 +500,10 @@ impl AgentClient {
         Ok((response.schedule_id, response.next_run_at))
     }
 
-    /// Remove a schedule from the remote agent.
-    pub async fn remove_remote_schedule(&mut self, schedule_id: &str) -> Result<bool> {
+    async fn remove_schedule(&self, schedule_id: &str) -> Result<bool> {
         let response = self
             .inner
+            .clone()
             .remove_schedule(proto::RemoveScheduleRequest {
                 schedule_id: schedule_id.to_string(),
             })
@@ -505,13 +514,10 @@ impl AgentClient {
         Ok(response.success)
     }
 
-    /// List schedules on the remote agent.
-    pub async fn list_remote_schedules(
-        &mut self,
-        project_id: &str,
-    ) -> Result<Vec<RemoteSchedule>> {
+    async fn list_schedules(&self, project_id: &str) -> Result<Vec<RemoteSchedule>> {
         let response = self
             .inner
+            .clone()
             .list_schedules(proto::ListSchedulesRequest {
                 project_id: project_id.to_string(),
             })
@@ -534,10 +540,9 @@ impl AgentClient {
             .collect())
     }
 
-    /// Upgrade the remote agent binary.
-    pub async fn upgrade(&mut self, binary_data: &[u8]) -> Result<(bool, String, String)> {
+    async fn upgrade(&self, binary_data: &[u8]) -> Result<(bool, String, String)> {
         let total_size = binary_data.len() as u64;
-        let chunk_size = 1024 * 1024; // 1MB chunks
+        let chunk_size = 1024 * 1024;
 
         let chunks: Vec<proto::UpgradeChunk> = binary_data
             .chunks(chunk_size)
@@ -552,6 +557,7 @@ impl AgentClient {
 
         let response = self
             .inner
+            .clone()
             .upgrade(stream)
             .await
             .context("Upgrade RPC failed")?

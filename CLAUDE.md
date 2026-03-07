@@ -11,10 +11,11 @@ Runway is a Tauri-based macOS app that lets developers deploy and manage code �
 
 Phases 1-3 complete. Phase 4 (cloud targets + polish) is next.
 
-**Working end-to-end:** Project CRUD, runtime detection, agent-based Run/Stop with log streaming (local via UDS, remote via TCP gRPC), Paste & Deploy, xterm.js terminal, menu bar tray, cron scheduling.
+**Working end-to-end:** Project CRUD, runtime detection, agent-based Run/Stop with log streaming (local via UDS, remote via NATS), Paste & Deploy, xterm.js terminal, menu bar tray, cron scheduling.
 **MCP server:** 17 tools (stdio transport), Claude Code verified end-to-end.
 **CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets.
-**Remote agents:** Persistent agent with SQLite store (`~/.runway/agent.db`), 14 gRPC RPCs, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
+**Remote agents:** Persistent agent with SQLite store (`~/.runway/agent.db`), 14 gRPC RPCs + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
+**NATS command channel:** All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. `AgentTransport` trait abstracts gRPC vs NATS — transport selected per target based on `nats_enabled` flag.
 **Phase 4 progress:** macOS notifications on run complete/fail (per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector.
 **Built but not wired:** mTLS certificate infrastructure (tls.rs), Keychain credential storage (credentials.rs).
 
@@ -28,6 +29,16 @@ The remote agent (`runway-agent`) was redesigned from a stateless gRPC server to
 - **Dependency install**: Deploy RPC runs `pip install`, `npm install`, `go mod download` during deployment
 - **AgentClient** (`agent_client.rs`): 8 new client methods + types (RemoteExecution, RemoteEvent, RemoteSchedule)
 - **Deployment**: Built natively on remote server, runs as systemd service with auto-restart
+
+### NATS Command Channel (March 7, 2026)
+Remote agent communication fully routed through NATS — no direct network connection needed between desktop and agent:
+- **AgentTransport trait** (`agent_transport.rs`): Unified async trait with health/status/stop/execute_streaming/deploy_streaming + schedule ops. Both `AgentClient` (gRPC) and `NatsAgentClient` (NATS) implement it.
+- **NatsAgentClient** (`nats_cmd_client.rs`): Desktop-side NATS command client. Uses request-reply for simple RPCs, publish+subscribe for streaming (Execute, Deploy, Logs).
+- **NatsCommandHandler** (`nats_cmd_handler.rs`): Agent-side NATS command subscriber. Listens on `runway.<agent_id>.cmd.>`, dispatches to `PersistentAgentService::do_*()` methods.
+- **Transport selection**: `get_agent_client()` returns `Box<dyn AgentTransport>`. If target has `nats_enabled=true` + `nats_agent_id`, routes through NATS; otherwise falls back to gRPC.
+- **Subject hierarchy**: `runway.<agent_id>.cmd.<type>` for commands, `runway.<agent_id>.resp.<request_id>` for streaming responses, plus existing event/log/heartbeat subjects via JetStream.
+- **Target UI**: Add Target form includes optional "NATS Agent ID" field. Green "NATS" badge on enabled targets. `update_target_nats` Tauri command for toggling.
+- **Zero inbound ports**: Both desktop and agent connect outbound to `tls://connect.ngs.global`. Works behind NAT, firewalls, different networks.
 
 See `tasks.md` for detailed pending work. The app runs via `cargo tauri dev` on macOS.
 
@@ -68,7 +79,8 @@ runway-mcp/          # MCP server implementation (Rust)
 
 ### Communication
 - Local agent: Unix domain socket or localhost gRPC
-- Remote agent: gRPC over TLS with mTLS client certificates
+- Remote agent: NATS command channel (primary) — both sides connect outbound to Synadia Cloud, zero inbound ports
+- Remote agent fallback: gRPC over TLS with mTLS client certificates (when NATS not configured)
 - LAN discovery: mDNS via `zeroconf` crate
 - MCP: stdio transport (Claude Code spawns it) or HTTP via `axum`
 
@@ -270,3 +282,4 @@ runway agent install ubuntu@my-server.com
 | Pricing model | Freemium | Free local use, Pro for remote + cloud targets |
 | Backend storage | SQLite (rusqlite) | 3-way debate: SQLite won 3-0 over YAML/JSON. AI agents get JSON via MCP, not flat files (DRF 006) |
 | Execution architecture | Agent-only (no direct executor) | 4-round 3-way debate: Agent-Only won 2-1. Unified local+remote through AgentClient→AgentService. UDS for local, TCP gRPC for remote (DRF 007) |
+| Remote transport | NATS command channel (primary) | Zero inbound ports, works behind NAT. AgentTransport trait unifies gRPC and NATS. gRPC fallback for targets without NATS |

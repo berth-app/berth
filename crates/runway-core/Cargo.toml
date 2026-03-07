@@ -27,9 +27,17 @@ tokio-stream = "0.1"
 tower = "0.5"
 hyper-util = "0.1"
 libc = "0.2"
+async-nats = { workspace = true, optional = true }
+futures = { version = "0.3", optional = true }
+base64 = { version = "0.22", optional = true }
+async-trait = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+
+[features]
+default = []
+nats = ["async-nats", "futures", "base64"]
 
 [build-dependencies]
 tonic-build = { workspace = true }

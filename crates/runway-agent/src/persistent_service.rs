@@ -10,11 +10,14 @@ use uuid::Uuid;
 
 use runway_core::agent_client::proto::agent_service_server::AgentService;
 use runway_core::agent_client::proto::*;
-use runway_core::executor::{self, LogStream};
+use runway_core::agent_client::{RemoteExecution, RemoteSchedule};
+use runway_core::agent_transport::{ExecuteResponseLine, DeployResponseLine};
+use runway_core::executor::{self, LogLine, LogStream};
 use runway_core::runtime::Runtime;
 use runway_core::{archive, container, setup};
 
 use crate::agent_store::{AgentStore, Deployment, Execution};
+use crate::nats_publisher::{self, NatsPublisher};
 
 fn gethostname() -> String {
     System::host_name().unwrap_or_else(|| "unknown".into())
@@ -41,10 +44,11 @@ pub struct PersistentAgentService {
     start_time: std::time::Instant,
     deploys_dir: PathBuf,
     podman_version: Option<String>,
+    nats: Option<Arc<NatsPublisher>>,
 }
 
 impl PersistentAgentService {
-    pub fn new(store: Arc<Mutex<AgentStore>>) -> Self {
+    pub fn new(store: Arc<Mutex<AgentStore>>, nats: Option<Arc<NatsPublisher>>) -> Self {
         let deploys_dir = dirs_next::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join(".runway/deploys");
@@ -62,6 +66,7 @@ impl PersistentAgentService {
             start_time: std::time::Instant::now(),
             deploys_dir,
             podman_version,
+            nats,
         }
     }
 
@@ -71,6 +76,492 @@ impl PersistentAgentService {
             .join(format!("v{version}"))
     }
 
+    // --- Core logic methods (shared between gRPC and NATS handlers) ---
+
+    pub fn do_health(&self) -> HealthInfo {
+        HealthInfo {
+            version: env!("CARGO_PKG_VERSION").into(),
+            status: "healthy".into(),
+            uptime_seconds: self.start_time.elapsed().as_secs(),
+            podman_version: self.podman_version.clone().unwrap_or_default(),
+            container_ready: self.podman_version.is_some(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+        }
+    }
+
+    pub async fn do_status(&self) -> StatusInfo {
+        let procs = self.processes.lock().await;
+        let projects: Vec<ProjectStatusInfo> = procs
+            .iter()
+            .map(|(id, child)| ProjectStatusInfo {
+                project_id: id.clone(),
+                status: "running".into(),
+                started_at: child.started_at.to_rfc3339(),
+            })
+            .collect();
+
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+
+        StatusInfo {
+            agent_id: gethostname(),
+            status: "running".into(),
+            cpu_usage: sys.global_cpu_usage() as f64,
+            memory_bytes: sys.used_memory(),
+            projects,
+        }
+    }
+
+    pub async fn do_stop(&self, project_id: &str) -> (bool, String) {
+        let mut procs = self.processes.lock().await;
+
+        if let Some(child) = procs.remove(project_id) {
+            match child.kind {
+                ProcessKind::BareProcess { abort_handle } => {
+                    abort_handle.abort();
+                }
+                ProcessKind::Container {
+                    container_name,
+                    abort_handle,
+                } => {
+                    let _ = container::stop_container(&container_name).await;
+                    abort_handle.abort();
+                }
+            }
+
+            let data = serde_json::json!({"project_id": project_id}).to_string();
+            {
+                let store = self.store.lock().await;
+                let _ = store.insert_event("execution_stopped", Some(project_id), None, &data);
+            }
+            nats_publisher::maybe_publish_event(&self.nats, "execution_stopped", Some(project_id), None, &data).await;
+
+            (true, format!("Stopped project {project_id}"))
+        } else {
+            (false, format!("Project {project_id} is not running"))
+        }
+    }
+
+    pub async fn do_execute(
+        &self,
+        project_id: &str,
+        runtime_str: &str,
+        entrypoint: &str,
+        working_dir: &str,
+        code: Option<&[u8]>,
+        image_tag: Option<&str>,
+        env_vars: HashMap<String, String>,
+        container_name: Option<&str>,
+    ) -> Result<tokio::sync::mpsc::Receiver<ExecuteResponseLine>, String> {
+        let runtime = parse_runtime(runtime_str);
+        let use_container = image_tag.map_or(false, |t| !t.is_empty());
+        let project_id = project_id.to_string();
+
+        let execution_id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now();
+        {
+            let store = self.store.lock().await;
+            let _ = store.insert_execution(&Execution {
+                id: execution_id.clone(),
+                project_id: project_id.clone(),
+                deployment_id: None,
+                started_at: now,
+                finished_at: None,
+                exit_code: None,
+                trigger: "manual".into(),
+                status: "running".into(),
+            });
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let processes = self.processes.clone();
+        let store = self.store.clone();
+        let nats = self.nats.clone();
+
+        if use_container {
+            let image_tag = image_tag.unwrap().to_string();
+            let container_name = container_name
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("runway-{project_id}"));
+
+            let (mut child, mut child_rx) =
+                container::run_container(&image_tag, &container_name, &env_vars)
+                    .await
+                    .map_err(|e| format!("Failed to run container: {e}"))?;
+
+            let container_name_clone = container_name.clone();
+            let exec_id = execution_id.clone();
+            let pid = project_id.clone();
+            let nats_clone = nats.clone();
+            let task = tokio::spawn(async move {
+                let mut seq: i64 = 0;
+                while let Some(line) = child_rx.recv().await {
+                    let stream_str = match line.stream {
+                        LogStream::Stdout => "stdout",
+                        LogStream::Stderr => "stderr",
+                    };
+                    {
+                        let s = store.lock().await;
+                        let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
+                    }
+                    nats_publisher::maybe_publish_log_line(&nats_clone, &pid, &exec_id, stream_str, &line.text, seq).await;
+
+                    let resp = ExecuteResponseLine {
+                        stream: stream_str.into(),
+                        text: line.text,
+                        timestamp: line.timestamp.to_rfc3339(),
+                        exit_code: 0,
+                        is_final: false,
+                    };
+                    if tx.send(resp).await.is_err() { break; }
+                    seq += 1;
+                }
+
+                let exit_code = match child.wait().await {
+                    Ok(status) => status.code().unwrap_or(-1),
+                    Err(_) => -1,
+                };
+
+                let status_str = if exit_code == 0 { "completed" } else { "failed" };
+                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
+                {
+                    let s = store.lock().await;
+                    let _ = s.finish_execution(&exec_id, exit_code, status_str);
+                    let _ = s.insert_event("execution_completed", Some(&pid), Some(&exec_id), &data);
+                }
+                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&pid), Some(&exec_id), &data).await;
+
+                let _ = tx.send(ExecuteResponseLine {
+                    stream: String::new(),
+                    text: String::new(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    exit_code,
+                    is_final: true,
+                }).await;
+
+                let mut procs = processes.lock().await;
+                procs.remove(&pid);
+            });
+
+            {
+                let mut procs = self.processes.lock().await;
+                procs.insert(
+                    project_id,
+                    RunningChild {
+                        kind: ProcessKind::Container {
+                            container_name: container_name_clone,
+                            abort_handle: task.abort_handle(),
+                        },
+                        started_at: chrono::Utc::now(),
+                    },
+                );
+            }
+        } else {
+            let (actual_working_dir, actual_entrypoint) = if let Some(code_bytes) = code {
+                let tmp = std::env::temp_dir().join(format!("runway-agent-{}", Uuid::new_v4()));
+                std::fs::create_dir_all(&tmp).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+                let ep = if entrypoint.is_empty() { "main.py" } else { entrypoint };
+                std::fs::write(tmp.join(ep), code_bytes)
+                    .map_err(|e| format!("Failed to write code: {e}"))?;
+                (tmp.to_string_lossy().to_string(), ep.to_string())
+            } else {
+                (working_dir.to_string(), entrypoint.to_string())
+            };
+
+            let env_ref = if env_vars.is_empty() { None } else { Some(&env_vars) };
+
+            let (mut child, mut child_rx) =
+                executor::spawn_and_stream(runtime, &actual_entrypoint, &actual_working_dir, env_ref)
+                    .await
+                    .map_err(|e| format!("Failed to spawn: {e}"))?;
+
+            let exec_id = execution_id.clone();
+            let pid = project_id.clone();
+            let nats_clone = nats.clone();
+            let task = tokio::spawn(async move {
+                let mut seq: i64 = 0;
+                while let Some(line) = child_rx.recv().await {
+                    let stream_str = match line.stream {
+                        LogStream::Stdout => "stdout",
+                        LogStream::Stderr => "stderr",
+                    };
+                    {
+                        let s = store.lock().await;
+                        let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
+                    }
+                    nats_publisher::maybe_publish_log_line(&nats_clone, &pid, &exec_id, stream_str, &line.text, seq).await;
+
+                    let resp = ExecuteResponseLine {
+                        stream: stream_str.into(),
+                        text: line.text,
+                        timestamp: line.timestamp.to_rfc3339(),
+                        exit_code: 0,
+                        is_final: false,
+                    };
+                    if tx.send(resp).await.is_err() { break; }
+                    seq += 1;
+                }
+
+                let exit_code = match child.wait().await {
+                    Ok(status) => status.code().unwrap_or(-1),
+                    Err(_) => -1,
+                };
+
+                let status_str = if exit_code == 0 { "completed" } else { "failed" };
+                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
+                {
+                    let s = store.lock().await;
+                    let _ = s.finish_execution(&exec_id, exit_code, status_str);
+                    let _ = s.insert_event("execution_completed", Some(&pid), Some(&exec_id), &data);
+                }
+                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&pid), Some(&exec_id), &data).await;
+
+                let _ = tx.send(ExecuteResponseLine {
+                    stream: String::new(),
+                    text: String::new(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    exit_code,
+                    is_final: true,
+                }).await;
+
+                let mut procs = processes.lock().await;
+                procs.remove(&pid);
+            });
+
+            {
+                let mut procs = self.processes.lock().await;
+                procs.insert(
+                    project_id,
+                    RunningChild {
+                        kind: ProcessKind::BareProcess {
+                            abort_handle: task.abort_handle(),
+                        },
+                        started_at: chrono::Utc::now(),
+                    },
+                );
+            }
+        }
+
+        Ok(rx)
+    }
+
+    pub async fn do_deploy(
+        &self,
+        project_id: &str,
+        runtime: &str,
+        entrypoint: &str,
+        source_archive: &[u8],
+        containerfile: &str,
+        version: u32,
+        setup_commands: Vec<String>,
+    ) -> Result<tokio::sync::mpsc::Receiver<DeployResponseLine>, String> {
+        let deploy_dir = self.deploy_dir(project_id, version);
+        std::fs::create_dir_all(&deploy_dir)
+            .map_err(|e| format!("Failed to create deploy dir: {e}"))?;
+        archive::extract(source_archive, &deploy_dir)
+            .map_err(|e| format!("Failed to extract archive: {e}"))?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let _ = tx.send(DeployResponseLine {
+            phase: "extracting".into(),
+            text: format!("Extracting source to {}", deploy_dir.display()),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            image_tag: String::new(),
+            version,
+            is_final: false,
+            success: false,
+        }).await;
+
+        let use_container = self.podman_version.is_some() && !containerfile.is_empty();
+        let store = self.store.clone();
+        let deploy_dir_str = deploy_dir.to_string_lossy().to_string();
+        let nats = self.nats.clone();
+        let project_id = project_id.to_string();
+        let runtime = runtime.to_string();
+        let entrypoint = entrypoint.to_string();
+        let containerfile = containerfile.to_string();
+
+        if use_container {
+            tokio::spawn(async move {
+                let _ = tx.send(DeployResponseLine { phase: "building".into(), text: "Building container image...".into(), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: false, success: false }).await;
+
+                let (build_tx, mut build_rx) = tokio::sync::mpsc::channel(256);
+                let build_task = tokio::spawn({
+                    let pid = project_id.clone();
+                    let dd = deploy_dir.clone();
+                    let cf = containerfile.clone();
+                    async move { container::build_image(&pid, version, &cf, &dd, build_tx).await }
+                });
+
+                while let Some(line) = build_rx.recv().await {
+                    let _ = tx.send(DeployResponseLine { phase: "building".into(), text: line.text, timestamp: line.timestamp.to_rfc3339(), image_tag: String::new(), version, is_final: false, success: false }).await;
+                }
+
+                match build_task.await {
+                    Ok(Ok(image_tag)) => {
+                        {
+                            let s = store.lock().await;
+                            let _ = s.insert_deployment(&Deployment { id: Uuid::new_v4().to_string(), project_id: project_id.clone(), version, runtime, entrypoint, working_dir: deploy_dir_str, image_tag: Some(image_tag.clone()), status: "deployed".into(), deployed_at: chrono::Utc::now() });
+                            let data = serde_json::json!({"version": version, "image_tag": &image_tag, "success": true}).to_string();
+                            let _ = s.insert_event("deploy_completed", Some(&project_id), None, &data);
+                            let _ = s.prune_old_deployments(&project_id, 5);
+                        }
+                        nats_publisher::maybe_publish_event(&nats, "deploy_completed", Some(&project_id), None, &serde_json::json!({"version": version, "image_tag": &image_tag, "success": true}).to_string()).await;
+                        let _ = tx.send(DeployResponseLine { phase: "ready".into(), text: format!("Image built: {image_tag}"), timestamp: chrono::Utc::now().to_rfc3339(), image_tag, version, is_final: true, success: true }).await;
+                    }
+                    Ok(Err(e)) => {
+                        let _ = tx.send(DeployResponseLine { phase: "error".into(), text: format!("Build failed: {e}"), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: true, success: false }).await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(DeployResponseLine { phase: "error".into(), text: format!("Build task panicked: {e}"), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: true, success: false }).await;
+                    }
+                }
+            });
+        } else {
+            tokio::spawn(async move {
+                if setup_commands.is_empty() {
+                    {
+                        let s = store.lock().await;
+                        let _ = s.insert_deployment(&Deployment { id: Uuid::new_v4().to_string(), project_id: project_id.clone(), version, runtime, entrypoint, working_dir: deploy_dir_str, image_tag: None, status: "deployed".into(), deployed_at: chrono::Utc::now() });
+                        let data = serde_json::json!({"version": version, "success": true}).to_string();
+                        let _ = s.insert_event("deploy_completed", Some(&project_id), None, &data);
+                        let _ = s.prune_old_deployments(&project_id, 5);
+                    }
+                    nats_publisher::maybe_publish_event(&nats, "deploy_completed", Some(&project_id), None, &serde_json::json!({"version": version, "success": true}).to_string()).await;
+                    let _ = tx.send(DeployResponseLine { phase: "ready".into(), text: "No setup needed".into(), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: true, success: true }).await;
+                    return;
+                }
+
+                let _ = tx.send(DeployResponseLine { phase: "setup".into(), text: "Running setup commands...".into(), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: false, success: false }).await;
+
+                let (setup_tx, mut setup_rx) = tokio::sync::mpsc::channel(256);
+                let setup_task = tokio::spawn({
+                    let dir = deploy_dir.clone();
+                    let cmds = setup_commands.clone();
+                    async move { setup::run_setup_commands(&dir, &cmds, setup_tx).await }
+                });
+
+                while let Some(line) = setup_rx.recv().await {
+                    let _ = tx.send(DeployResponseLine { phase: "setup".into(), text: line.text, timestamp: line.timestamp.to_rfc3339(), image_tag: String::new(), version, is_final: false, success: false }).await;
+                }
+
+                match setup_task.await {
+                    Ok(Ok(())) => {
+                        {
+                            let s = store.lock().await;
+                            let _ = s.insert_deployment(&Deployment { id: Uuid::new_v4().to_string(), project_id: project_id.clone(), version, runtime, entrypoint, working_dir: deploy_dir_str, image_tag: None, status: "deployed".into(), deployed_at: chrono::Utc::now() });
+                            let data = serde_json::json!({"version": version, "success": true}).to_string();
+                            let _ = s.insert_event("deploy_completed", Some(&project_id), None, &data);
+                            let _ = s.prune_old_deployments(&project_id, 5);
+                        }
+                        nats_publisher::maybe_publish_event(&nats, "deploy_completed", Some(&project_id), None, &serde_json::json!({"version": version, "success": true}).to_string()).await;
+                        let _ = tx.send(DeployResponseLine { phase: "ready".into(), text: "Setup complete".into(), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: true, success: true }).await;
+                    }
+                    Ok(Err(e)) => {
+                        let _ = tx.send(DeployResponseLine { phase: "error".into(), text: format!("Setup failed: {e}"), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: true, success: false }).await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(DeployResponseLine { phase: "error".into(), text: format!("Setup task panicked: {e}"), timestamp: chrono::Utc::now().to_rfc3339(), image_tag: String::new(), version, is_final: true, success: false }).await;
+                    }
+                }
+            });
+        }
+
+        Ok(rx)
+    }
+
+    pub async fn do_get_executions(&self, project_id: &str, limit: u32) -> Result<Vec<RemoteExecution>, String> {
+        let store = self.store.lock().await;
+        let executions = store.list_executions(project_id, limit).map_err(|e| e.to_string())?;
+        Ok(executions.into_iter().map(|e| RemoteExecution {
+            id: e.id,
+            project_id: e.project_id,
+            deployment_id: e.deployment_id.unwrap_or_default(),
+            started_at: e.started_at.to_rfc3339(),
+            finished_at: e.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+            exit_code: e.exit_code.unwrap_or(0),
+            trigger: e.trigger,
+            status: e.status,
+        }).collect())
+    }
+
+    pub async fn do_get_execution_logs(&self, execution_id: &str, since_seq: i64) -> Result<Vec<LogLine>, String> {
+        let store = self.store.lock().await;
+        let logs = store.get_logs(execution_id, since_seq).map_err(|e| e.to_string())?;
+        Ok(logs.into_iter().map(|l| {
+            let stream = match l.stream.as_str() {
+                "stderr" => LogStream::Stderr,
+                _ => LogStream::Stdout,
+            };
+            LogLine { stream, text: l.text, timestamp: l.timestamp }
+        }).collect())
+    }
+
+    pub async fn do_add_schedule(&self, project_id: &str, cron_expr: &str) -> Result<(String, String), String> {
+        let now = chrono::Utc::now();
+        let next = runway_core::scheduler::parse_next_run(cron_expr, now);
+        if next.is_none() {
+            return Err(format!("Invalid cron expression: {cron_expr}"));
+        }
+        let id = Uuid::new_v4().to_string();
+        let schedule = crate::agent_store::AgentSchedule {
+            id: id.clone(),
+            project_id: project_id.to_string(),
+            cron_expr: cron_expr.to_string(),
+            enabled: true,
+            created_at: now,
+            last_triggered_at: None,
+            next_run_at: next,
+        };
+        let store = self.store.lock().await;
+        store.insert_schedule(&schedule).map_err(|e| e.to_string())?;
+        Ok((id, next.map(|t| t.to_rfc3339()).unwrap_or_default()))
+    }
+
+    pub async fn do_remove_schedule(&self, schedule_id: &str) -> Result<bool, String> {
+        let store = self.store.lock().await;
+        store.delete_schedule(schedule_id).map_err(|e| e.to_string())
+    }
+
+    pub async fn do_list_schedules(&self, project_id: &str) -> Result<Vec<RemoteSchedule>, String> {
+        let store = self.store.lock().await;
+        let schedules = store.list_schedules(project_id).map_err(|e| e.to_string())?;
+        Ok(schedules.into_iter().map(|s| RemoteSchedule {
+            id: s.id,
+            project_id: s.project_id,
+            cron_expr: s.cron_expr,
+            enabled: s.enabled,
+            created_at: s.created_at.to_rfc3339(),
+            last_triggered_at: s.last_triggered_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+            next_run_at: s.next_run_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+        }).collect())
+    }
+}
+
+pub struct HealthInfo {
+    pub version: String,
+    pub status: String,
+    pub uptime_seconds: u64,
+    pub podman_version: String,
+    pub container_ready: bool,
+    pub os: String,
+    pub arch: String,
+}
+
+pub struct StatusInfo {
+    pub agent_id: String,
+    pub status: String,
+    pub cpu_usage: f64,
+    pub memory_bytes: u64,
+    pub projects: Vec<ProjectStatusInfo>,
+}
+
+pub struct ProjectStatusInfo {
+    pub project_id: String,
+    pub status: String,
+    pub started_at: String,
 }
 
 fn parse_runtime(s: &str) -> Runtime {
@@ -132,6 +623,7 @@ impl AgentService for PersistentAgentService {
             let runtime_clone = runtime.clone();
             let entrypoint_clone = entrypoint.clone();
             let deploy_dir_str_clone = deploy_dir_str.clone();
+            let nats_clone = self.nats.clone();
 
             tokio::spawn(async move {
                 let _ = tx_build
@@ -187,14 +679,16 @@ impl AgentService for PersistentAgentService {
                                 status: "deployed".into(),
                                 deployed_at: chrono::Utc::now(),
                             });
+                            let data = serde_json::json!({"version": version, "image_tag": &image_tag, "success": true}).to_string();
                             let _ = s.insert_event(
                                 "deploy_completed",
                                 Some(&project_id_clone),
                                 None,
-                                &serde_json::json!({"version": version, "image_tag": &image_tag, "success": true}).to_string(),
+                                &data,
                             );
                             let _ = s.prune_old_deployments(&project_id_clone, 5);
                         }
+                        nats_publisher::maybe_publish_event(&nats_clone, "deploy_completed", Some(&project_id_clone), None, &serde_json::json!({"version": version, "image_tag": &image_tag, "success": true}).to_string()).await;
 
                         let _ = tx_build
                             .send(Ok(DeployResponse {
@@ -245,6 +739,7 @@ impl AgentService for PersistentAgentService {
             let runtime_clone = runtime.clone();
             let entrypoint_clone = entrypoint.clone();
             let deploy_dir_str_clone = deploy_dir_str.clone();
+            let nats_clone = self.nats.clone();
 
             tokio::spawn(async move {
                 if setup_commands.is_empty() {
@@ -262,14 +757,16 @@ impl AgentService for PersistentAgentService {
                             status: "deployed".into(),
                             deployed_at: chrono::Utc::now(),
                         });
+                        let data = serde_json::json!({"version": version, "success": true}).to_string();
                         let _ = s.insert_event(
                             "deploy_completed",
                             Some(&project_id_clone),
                             None,
-                            &serde_json::json!({"version": version, "success": true}).to_string(),
+                            &data,
                         );
                         let _ = s.prune_old_deployments(&project_id_clone, 5);
                     }
+                    nats_publisher::maybe_publish_event(&nats_clone, "deploy_completed", Some(&project_id_clone), None, &serde_json::json!({"version": version, "success": true}).to_string()).await;
 
                     let _ = tx
                         .send(Ok(DeployResponse {
@@ -335,14 +832,16 @@ impl AgentService for PersistentAgentService {
                                 status: "deployed".into(),
                                 deployed_at: chrono::Utc::now(),
                             });
+                            let data = serde_json::json!({"version": version, "success": true}).to_string();
                             let _ = s.insert_event(
                                 "deploy_completed",
                                 Some(&project_id_clone),
                                 None,
-                                &serde_json::json!({"version": version, "success": true}).to_string(),
+                                &data,
                             );
                             let _ = s.prune_old_deployments(&project_id_clone, 5);
                         }
+                        nats_publisher::maybe_publish_event(&nats_clone, "deploy_completed", Some(&project_id_clone), None, &serde_json::json!({"version": version, "success": true}).to_string()).await;
 
                         let _ = tx
                             .send(Ok(DeployResponse {
@@ -421,6 +920,7 @@ impl AgentService for PersistentAgentService {
         let (tx, stream_rx) = tokio::sync::mpsc::channel(256);
         let processes = self.processes.clone();
         let store = self.store.clone();
+        let nats = self.nats.clone();
 
         if use_container {
             let container_name = if req.container_name.is_empty() {
@@ -436,6 +936,7 @@ impl AgentService for PersistentAgentService {
 
             let container_name_clone = container_name.clone();
             let exec_id = execution_id.clone();
+            let nats_clone = nats.clone();
             let task = tokio::spawn(async move {
                 let mut seq: i64 = 0;
                 while let Some(line) = rx.recv().await {
@@ -449,6 +950,7 @@ impl AgentService for PersistentAgentService {
                         let s = store.lock().await;
                         let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
                     }
+                    nats_publisher::maybe_publish_log_line(&nats_clone, &project_id, &exec_id, stream_str, &line.text, seq).await;
 
                     let resp = ExecuteResponse {
                         stream: stream_str.into(),
@@ -470,6 +972,7 @@ impl AgentService for PersistentAgentService {
 
                 // Finalize execution
                 let status_str = if exit_code == 0 { "completed" } else { "failed" };
+                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
                 {
                     let s = store.lock().await;
                     let _ = s.finish_execution(&exec_id, exit_code, status_str);
@@ -477,9 +980,10 @@ impl AgentService for PersistentAgentService {
                         "execution_completed",
                         Some(&project_id),
                         Some(&exec_id),
-                        &serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string(),
+                        &data,
                     );
                 }
+                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&project_id), Some(&exec_id), &data).await;
 
                 let final_resp = ExecuteResponse {
                     stream: String::new(),
@@ -537,6 +1041,7 @@ impl AgentService for PersistentAgentService {
                     .map_err(|e| Status::internal(format!("Failed to spawn: {e}")))?;
 
             let exec_id = execution_id.clone();
+            let nats_clone = nats.clone();
             let task = tokio::spawn(async move {
                 let mut seq: i64 = 0;
                 while let Some(line) = rx.recv().await {
@@ -550,6 +1055,7 @@ impl AgentService for PersistentAgentService {
                         let s = store.lock().await;
                         let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
                     }
+                    nats_publisher::maybe_publish_log_line(&nats_clone, &project_id, &exec_id, stream_str, &line.text, seq).await;
 
                     let resp = ExecuteResponse {
                         stream: stream_str.into(),
@@ -570,6 +1076,7 @@ impl AgentService for PersistentAgentService {
                 };
 
                 let status_str = if exit_code == 0 { "completed" } else { "failed" };
+                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
                 {
                     let s = store.lock().await;
                     let _ = s.finish_execution(&exec_id, exit_code, status_str);
@@ -577,9 +1084,10 @@ impl AgentService for PersistentAgentService {
                         "execution_completed",
                         Some(&project_id),
                         Some(&exec_id),
-                        &serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string(),
+                        &data,
                     );
                 }
+                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&project_id), Some(&exec_id), &data).await;
 
                 let final_resp = ExecuteResponse {
                     stream: String::new(),
@@ -674,15 +1182,17 @@ impl AgentService for PersistentAgentService {
             }
 
             // Emit stop event
+            let data = serde_json::json!({"project_id": &project_id}).to_string();
             {
                 let store = self.store.lock().await;
                 let _ = store.insert_event(
                     "execution_stopped",
                     Some(&project_id),
                     None,
-                    &serde_json::json!({"project_id": &project_id}).to_string(),
+                    &data,
                 );
             }
+            nats_publisher::maybe_publish_event(&self.nats, "execution_stopped", Some(&project_id), None, &data).await;
 
             Ok(Response::new(StopResponse {
                 success: true,
@@ -978,19 +1488,20 @@ impl AgentService for PersistentAgentService {
                 })?;
 
                 // Emit upgrade event
+                let data = serde_json::json!({
+                    "old_version": env!("CARGO_PKG_VERSION"),
+                    "new_version": &new_version,
+                }).to_string();
                 {
                     let store = self.store.lock().await;
                     let _ = store.insert_event(
                         "agent_upgraded",
                         None,
                         None,
-                        &serde_json::json!({
-                            "old_version": env!("CARGO_PKG_VERSION"),
-                            "new_version": &new_version,
-                        })
-                        .to_string(),
+                        &data,
                     );
                 }
+                nats_publisher::maybe_publish_event(&self.nats, "agent_upgraded", None, None, &data).await;
 
                 // Schedule restart via systemd (after response is sent)
                 tokio::spawn(async {

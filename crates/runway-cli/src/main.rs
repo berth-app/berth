@@ -2,6 +2,7 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 use runway_core::agent_client::AgentClient;
+use runway_core::agent_transport::AgentTransport;
 use runway_core::project::Project;
 use runway_core::runtime;
 use runway_core::scheduler::{self, Schedule};
@@ -253,7 +254,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let working_dir = if is_remote { "/tmp" } else { &project.path };
 
-            let mut client = get_agent_client(&target).await?;
+            let client = get_agent_client(&target).await?;
             let mut stream = client
                 .execute_streaming(
                     &project.id.to_string(),
@@ -302,7 +303,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let working_dir = if is_remote { "/tmp" } else { &p.path };
 
-            let mut client = get_agent_client(&target).await?;
+            let client = get_agent_client(&target).await?;
             let mut stream = client
                 .execute_streaming(
                     &p.id.to_string(),
@@ -334,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
             let store = get_store()?;
             let p = find_project(&store, &project)?;
 
-            let mut client = get_agent_client(&target).await?;
+            let client = get_agent_client(&target).await?;
             let stopped = client.stop(&p.id.to_string()).await?;
 
             if stopped {
@@ -357,7 +358,7 @@ async fn main() -> anyhow::Result<()> {
 
             let runtime_str = format!("{:?}", p.runtime).to_lowercase();
 
-            let mut client = get_agent_client(&target).await?;
+            let client = get_agent_client(&target).await?;
             let mut stream = client
                 .execute_streaming(
                     &p.id.to_string(),
@@ -503,7 +504,7 @@ async fn main() -> anyhow::Result<()> {
                     let endpoint = target.grpc_endpoint();
                     println!("Pinging {} ...", endpoint);
                     match AgentClient::connect(&endpoint).await {
-                        Ok(mut client) => match client.health().await {
+                        Ok(client) => match client.health().await {
                             Ok(health) => {
                                 store.update_target_status(
                                     target.id,

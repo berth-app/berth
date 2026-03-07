@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::agent_transport::AgentTransport;
 use crate::store::{ExecutionLog, ProjectStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,7 +163,7 @@ async fn run_with_timeout(
     working_dir: &str,
     timeout_secs: u64,
 ) -> Result<i32, String> {
-    let mut client = crate::local_agent::get_or_start_local_agent()
+    let client = crate::local_agent::get_or_start_local_agent()
         .await
         .map_err(|e| e.to_string())?;
 

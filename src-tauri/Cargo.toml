@@ -15,7 +15,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-runway-core = { path = "../crates/runway-core" }
+runway-core = { path = "../crates/runway-core", features = ["nats"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
@@ -29,3 +29,5 @@ dirs-next = "2"
 uuid = { workspace = true }
 tonic = { workspace = true }
 chrono = { workspace = true }
+futures = "0.3"
+async-nats = { workspace = true }

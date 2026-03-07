@@ -14,6 +14,12 @@ pub mod scheduler;
 pub mod setup;
 pub mod store;
 pub mod target;
+pub mod agent_transport;
+pub mod nats_relay;
+#[cfg(feature = "nats")]
+pub mod nats_subscriber;
+#[cfg(feature = "nats")]
+pub mod nats_cmd_client;
 pub mod tls;
 pub mod uds;
 

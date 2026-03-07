@@ -167,6 +167,18 @@ impl ProjectStore {
             )?;
         }
 
+        // Migration: add NATS columns to targets
+        let has_nats_agent_id = self
+            .conn
+            .prepare("SELECT nats_agent_id FROM targets LIMIT 0")
+            .is_ok();
+        if !has_nats_agent_id {
+            self.conn.execute_batch(
+                "ALTER TABLE targets ADD COLUMN nats_agent_id TEXT;
+                 ALTER TABLE targets ADD COLUMN nats_enabled INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+
         // Environment variables table
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS project_env_vars (
@@ -445,8 +457,8 @@ impl ProjectStore {
 
     pub fn insert_target(&self, target: &Target) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO targets (id, name, kind, host, port, status, created_at, last_seen_at, agent_version)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO targets (id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             (
                 target.id.to_string(),
                 &target.name,
@@ -457,6 +469,8 @@ impl ProjectStore {
                 target.created_at.to_rfc3339(),
                 target.last_seen_at.map(|t| t.to_rfc3339()),
                 &target.agent_version,
+                &target.nats_agent_id,
+                target.nats_enabled as i32,
             ),
         )?;
         Ok(())
@@ -464,7 +478,7 @@ impl ProjectStore {
 
     pub fn list_targets(&self) -> Result<Vec<Target>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version FROM targets ORDER BY name ASC",
+            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled FROM targets ORDER BY name ASC",
         )?;
 
         let targets = stmt
@@ -481,6 +495,8 @@ impl ProjectStore {
                         .get::<_, Option<String>>(7)?
                         .and_then(|s| s.parse().ok()),
                     agent_version: row.get(8)?,
+                    nats_agent_id: row.get(9)?,
+                    nats_enabled: row.get::<_, i32>(10).unwrap_or(0) != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -490,7 +506,7 @@ impl ProjectStore {
 
     pub fn get_target_by_name(&self, name: &str) -> Result<Option<Target>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version FROM targets WHERE name = ?1",
+            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled FROM targets WHERE name = ?1",
         )?;
 
         let mut rows = stmt.query_map([name], |row| {
@@ -506,6 +522,8 @@ impl ProjectStore {
                     .get::<_, Option<String>>(7)?
                     .and_then(|s| s.parse().ok()),
                 agent_version: row.get(8)?,
+                nats_agent_id: row.get(9)?,
+                nats_enabled: row.get::<_, i32>(10).unwrap_or(0) != 0,
             })
         })?;
 
@@ -527,6 +545,14 @@ impl ProjectStore {
                 agent_version,
                 id.to_string(),
             ),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_target_nats(&self, id: Uuid, agent_id: Option<&str>, enabled: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE targets SET nats_agent_id = ?1, nats_enabled = ?2 WHERE id = ?3",
+            (agent_id, enabled as i32, id.to_string()),
         )?;
         Ok(())
     }

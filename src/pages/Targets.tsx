@@ -7,6 +7,7 @@ import {
   removeTarget,
   pingTarget,
   getAgentStats,
+  updateTargetNats,
 } from "../lib/invoke";
 import { useToast } from "../components/Toast";
 
@@ -92,6 +93,7 @@ export default function Targets({ onBack }: Props) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("50051");
+  const [natsAgentId, setNatsAgentId] = useState("");
   const [pinging, setPinging] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [stats, setStats] = useState<Record<string, AgentStats>>({});
@@ -116,11 +118,12 @@ export default function Targets({ onBack }: Props) {
   const handleAdd = async () => {
     if (!name.trim() || !host.trim()) return;
     try {
-      await addTarget(name.trim(), host.trim(), parseInt(port) || 50051);
-      toast(`Target '${name}' added`, "success");
+      await addTarget(name.trim(), host.trim(), parseInt(port) || 50051, natsAgentId.trim() || undefined);
+      toast(`Target '${name}' added${natsAgentId.trim() ? " (NATS enabled)" : ""}`, "success");
       setName("");
       setHost("");
       setPort("50051");
+      setNatsAgentId("");
       setShowAdd(false);
       refresh();
     } catch (e) {
@@ -251,6 +254,18 @@ export default function Targets({ onBack }: Props) {
                 className="w-full px-3 py-1.5 bg-runway-surface border border-runway-border rounded text-sm text-runway-text focus:border-runway-accent outline-none"
               />
             </div>
+            <div className="flex-1">
+              <label className="text-xs text-runway-muted block mb-1">
+                NATS Agent ID <span className="text-runway-muted/50">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={natsAgentId}
+                onChange={(e) => setNatsAgentId(e.target.value)}
+                placeholder="hostname or agent ID"
+                className="w-full px-3 py-1.5 bg-runway-surface border border-runway-border rounded text-sm text-runway-text focus:border-runway-accent outline-none"
+              />
+            </div>
             <button
               onClick={handleAdd}
               disabled={!name.trim() || !host.trim()}
@@ -325,6 +340,11 @@ export default function Targets({ onBack }: Props) {
                         {t.host}:{t.port}
                       </span>
                     </div>
+                    {t.nats_enabled && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-500">
+                        NATS
+                      </span>
+                    )}
                     {t.agent_version && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-runway-accent/10 text-runway-accent">
                         v{t.agent_version}
