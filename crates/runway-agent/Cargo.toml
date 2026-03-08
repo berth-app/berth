@@ -1,6 +1,6 @@
 [package]
 name = "runway-agent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [[bin]]
@@ -26,3 +26,4 @@ sysinfo = "0.33"
 async-nats = { workspace = true }
 base64 = "0.22"
 futures = "0.3"
+sha2 = { workspace = true }

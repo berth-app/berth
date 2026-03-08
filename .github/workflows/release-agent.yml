@@ -1,0 +1,65 @@
+name: Release Agent
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset: runway-agent-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            asset: runway-agent-linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build runway-agent
+        run: cross build --release --target ${{ matrix.target }} -p runway-agent
+
+      - name: Rename binary
+        run: cp target/${{ matrix.target }}/release/runway-agent ${{ matrix.asset }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "Runway Agent ${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/runway-agent-linux-x86_64/runway-agent-linux-x86_64 \
+            artifacts/runway-agent-linux-aarch64/runway-agent-linux-aarch64

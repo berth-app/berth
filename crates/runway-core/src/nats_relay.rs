@@ -98,6 +98,12 @@ pub enum NatsCommandKind {
     AddSchedule { project_id: String, cron_expr: String },
     RemoveSchedule { schedule_id: String },
     ListSchedules { project_id: String },
+    UpgradeStart {
+        total_size: u64,
+        chunk_count: u32,
+        checksum_sha256: String,
+    },
+    Rollback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +130,8 @@ pub enum NatsResponseBody {
         container_ready: bool,
         os: String,
         arch: String,
+        #[serde(default)]
+        probation_status: String,
     },
     Status {
         agent_id: String,
@@ -170,6 +178,19 @@ pub enum NatsResponseBody {
     },
     Schedules {
         schedules: Vec<NatsScheduleInfo>,
+    },
+    UpgradeReady {
+        upload_subject: String,
+    },
+    UpgradeResult {
+        success: bool,
+        new_version: String,
+        message: String,
+    },
+    Rollback {
+        success: bool,
+        restored_version: String,
+        message: String,
     },
     Empty,
 }

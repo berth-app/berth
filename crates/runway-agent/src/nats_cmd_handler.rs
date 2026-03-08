@@ -50,10 +50,11 @@ impl NatsCommandHandler {
 
             let client = self.client.clone();
             let service = self.service.clone();
+            let agent_id = self.agent_id.clone();
             let reply_to = msg.reply.map(|s| s.to_string()).unwrap_or_else(|| cmd.reply_to.clone());
 
             tokio::spawn(async move {
-                handle_command(client, service, cmd, reply_to).await;
+                handle_command(client, service, cmd, reply_to, agent_id).await;
             });
         }
     }
@@ -64,6 +65,7 @@ async fn handle_command(
     service: Arc<PersistentAgentService>,
     cmd: NatsCommand,
     reply_to: String,
+    agent_id: String,
 ) {
     let request_id = cmd.request_id.clone();
 
@@ -81,6 +83,7 @@ async fn handle_command(
                     container_ready: info.container_ready,
                     os: info.os,
                     arch: info.arch,
+                    probation_status: info.probation_status,
                 },
             };
             send_reply(&client, &reply_to, &resp).await;
@@ -367,6 +370,171 @@ async fn handle_command(
                     send_reply(&client, &reply_to, &resp).await;
                 }
             }
+        }
+
+        NatsCommandKind::Rollback => {
+            match service.do_rollback().await {
+                Ok((success, restored_version, message)) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Ok,
+                        body: NatsResponseBody::Rollback {
+                            success,
+                            restored_version,
+                            message,
+                        },
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                }
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(e),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                }
+            }
+        }
+
+        NatsCommandKind::UpgradeStart {
+            total_size,
+            chunk_count: _,
+            checksum_sha256,
+        } => {
+            // Create a unique subject for receiving binary chunks
+            let upload_subject = format!("runway.{}.upload.{}", agent_id, request_id);
+
+            // Subscribe to chunk subject before replying
+            let mut chunk_sub = match client.subscribe(upload_subject.clone()).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(format!("Failed to subscribe for chunks: {e}")),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                    return;
+                }
+            };
+
+            // Reply with UpgradeReady
+            let ready_resp = NatsResponse {
+                request_id: request_id.clone(),
+                status: NatsResponseStatus::Ok,
+                body: NatsResponseBody::UpgradeReady {
+                    upload_subject: upload_subject.clone(),
+                },
+            };
+            send_reply(&client, &reply_to, &ready_resp).await;
+
+            // Collect chunks with timeout
+            let mut data = Vec::with_capacity(total_size as usize);
+            let mut received_chunks = 0u32;
+
+            let chunk_timeout = tokio::time::Duration::from_secs(120);
+            loop {
+                match tokio::time::timeout(chunk_timeout, chunk_sub.next()).await {
+                    Ok(Some(msg)) => {
+                        let chunk_msg: serde_json::Value = match serde_json::from_slice(&msg.payload) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!("Failed to parse upgrade chunk: {e}");
+                                continue;
+                            }
+                        };
+
+                        // Check for done marker
+                        if chunk_msg.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            break;
+                        }
+
+                        // Decode base64 chunk data
+                        if let Some(b64_data) = chunk_msg.get("data").and_then(|v| v.as_str()) {
+                            match base64::engine::general_purpose::STANDARD.decode(b64_data) {
+                                Ok(chunk_bytes) => {
+                                    data.extend_from_slice(&chunk_bytes);
+                                    received_chunks += 1;
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to decode chunk {}: {e}", received_chunks);
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        let resp = NatsResponse {
+                            request_id: request_id.clone(),
+                            status: NatsResponseStatus::Error("Chunk stream ended unexpectedly".into()),
+                            body: NatsResponseBody::Empty,
+                        };
+                        let result_subject = runway_core::nats_relay::resp_subject(
+                            &agent_id,
+                            &request_id,
+                        );
+                        send_reply(&client, &result_subject, &resp).await;
+                        return;
+                    }
+                    Err(_) => {
+                        let resp = NatsResponse {
+                            request_id: request_id.clone(),
+                            status: NatsResponseStatus::Error("Chunk transfer timed out".into()),
+                            body: NatsResponseBody::Empty,
+                        };
+                        let result_subject = runway_core::nats_relay::resp_subject(
+                            &agent_id,
+                            &request_id,
+                        );
+                        send_reply(&client, &result_subject, &resp).await;
+                        return;
+                    }
+                }
+            }
+
+            tracing::info!("Received {} chunks, {} bytes total", received_chunks, data.len());
+
+            // Verify SHA-256 checksum
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(&data);
+            let actual_checksum = format!("{:x}", hasher.finalize());
+
+            let result_subject = runway_core::nats_relay::resp_subject(
+                &agent_id,
+                &request_id,
+            );
+
+            if actual_checksum != checksum_sha256 {
+                let resp = NatsResponse {
+                    request_id,
+                    status: NatsResponseStatus::Error(format!(
+                        "Checksum mismatch: expected {checksum_sha256}, got {actual_checksum}"
+                    )),
+                    body: NatsResponseBody::Empty,
+                };
+                send_reply(&client, &result_subject, &resp).await;
+                return;
+            }
+
+            // Perform the upgrade
+            let resp = match service.do_upgrade_from_bytes(data).await {
+                Ok((success, new_version, message)) => NatsResponse {
+                    request_id,
+                    status: NatsResponseStatus::Ok,
+                    body: NatsResponseBody::UpgradeResult {
+                        success,
+                        new_version,
+                        message,
+                    },
+                },
+                Err(e) => NatsResponse {
+                    request_id,
+                    status: NatsResponseStatus::Error(e),
+                    body: NatsResponseBody::Empty,
+                },
+            };
+            send_reply(&client, &result_subject, &resp).await;
         }
 
         NatsCommandKind::ListSchedules { project_id } => {

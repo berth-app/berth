@@ -89,6 +89,7 @@ impl AgentTransport for NatsAgentClient {
                 container_ready,
                 os,
                 arch,
+                probation_status,
             } => Ok(AgentHealth {
                 version,
                 status,
@@ -97,6 +98,7 @@ impl AgentTransport for NatsAgentClient {
                 container_ready,
                 os: if os.is_empty() { None } else { Some(os) },
                 arch: if arch.is_empty() { None } else { Some(arch) },
+                probation_status,
             }),
             _ => anyhow::bail!("Unexpected response type for health"),
         }
@@ -407,8 +409,98 @@ impl AgentTransport for NatsAgentClient {
         }
     }
 
-    async fn upgrade(&self, _binary_data: &[u8]) -> Result<(bool, String, String)> {
-        // Upgrade over NATS not supported yet — use gRPC direct connection
-        anyhow::bail!("Upgrade over NATS not supported — use direct gRPC connection")
+    async fn upgrade(&self, binary_data: &[u8]) -> Result<(bool, String, String)> {
+        use sha2::{Sha256, Digest};
+
+        let chunk_size = 768 * 1024; // 768KB — well under NATS 1MB limit
+        let total_size = binary_data.len() as u64;
+        let chunk_count = ((binary_data.len() + chunk_size - 1) / chunk_size) as u32;
+
+        let mut hasher = Sha256::new();
+        hasher.update(binary_data);
+        let checksum = format!("{:x}", hasher.finalize());
+
+        // Step 1: Send UpgradeStart command
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let command = NatsCommand {
+            request_id: request_id.clone(),
+            reply_to: String::new(),
+            cmd: NatsCommandKind::UpgradeStart {
+                total_size,
+                chunk_count,
+                checksum_sha256: checksum,
+            },
+        };
+
+        let payload = serde_json::to_vec(&command).context("Failed to serialize upgrade command")?;
+        let subject = cmd_subject(&self.agent_id, "upgrade");
+
+        // Use request-reply for the initial handshake
+        let msg = tokio::time::timeout(
+            Duration::from_secs(15),
+            self.client.request(subject, payload.into()),
+        )
+        .await
+        .context("Upgrade handshake timed out")?
+        .context("Upgrade handshake failed")?;
+
+        let ready_resp: NatsResponse = serde_json::from_slice(&msg.payload)
+            .context("Failed to deserialize upgrade ready response")?;
+
+        let upload_subject = match &ready_resp.body {
+            NatsResponseBody::UpgradeReady { upload_subject } => upload_subject.clone(),
+            _ => anyhow::bail!("Unexpected response to UpgradeStart"),
+        };
+
+        // Step 2: Subscribe to result subject before sending chunks
+        let result_subject = resp_subject(&self.agent_id, &request_id);
+        let mut result_sub = self.client.subscribe(result_subject).await
+            .context("Failed to subscribe to upgrade result")?;
+
+        // Step 3: Send binary chunks
+        for (i, chunk) in binary_data.chunks(chunk_size).enumerate() {
+            let chunk_payload = serde_json::json!({
+                "seq": i,
+                "data": base64::engine::general_purpose::STANDARD.encode(chunk),
+            });
+            let chunk_bytes = serde_json::to_vec(&chunk_payload)?;
+            self.client.publish(upload_subject.clone(), chunk_bytes.into()).await
+                .context("Failed to publish upgrade chunk")?;
+        }
+
+        // Step 4: Send "done" marker
+        let done_payload = serde_json::json!({"seq": -1, "done": true});
+        let done_bytes = serde_json::to_vec(&done_payload)?;
+        self.client.publish(upload_subject, done_bytes.into()).await
+            .context("Failed to publish upgrade done marker")?;
+
+        // Step 5: Wait for result (longer timeout for upgrade — binary verification + restart)
+        let result_msg = tokio::time::timeout(
+            Duration::from_secs(120),
+            result_sub.next(),
+        )
+        .await
+        .context("Upgrade timed out waiting for result")?
+        .context("Upgrade result stream ended unexpectedly")?;
+
+        let result_resp: NatsResponse = serde_json::from_slice(&result_msg.payload)
+            .context("Failed to deserialize upgrade result")?;
+
+        match result_resp.body {
+            NatsResponseBody::UpgradeResult { success, new_version, message } => {
+                Ok((success, new_version, message))
+            }
+            _ => anyhow::bail!("Unexpected upgrade result response type"),
+        }
+    }
+
+    async fn rollback(&self) -> Result<(bool, String, String)> {
+        let resp = self.request_reply("rollback", NatsCommandKind::Rollback).await?;
+        match resp.body {
+            NatsResponseBody::Rollback { success, restored_version, message } => {
+                Ok((success, restored_version, message))
+            }
+            _ => anyhow::bail!("Unexpected response type for rollback"),
+        }
     }
 }

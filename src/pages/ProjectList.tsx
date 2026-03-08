@@ -2,6 +2,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  Play,
+  Square,
+  Pencil,
+  Trash2,
+  Download,
+  Plus,
+  Search,
+} from "lucide-react";
+import {
   listProjects,
   deleteProject,
   updateProject,
@@ -20,14 +29,12 @@ import { useToast } from "../components/Toast";
 interface Props {
   onSelect: (id: string) => void;
   onNewProject: () => void;
-  onTargets?: () => void;
-  onSettings?: () => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  idle: "bg-runway-muted",
+  idle: "bg-runway-text-tertiary",
   running: "bg-runway-success",
-  stopped: "bg-runway-border",
+  stopped: "bg-runway-text-tertiary",
   failed: "bg-runway-error",
 };
 
@@ -47,6 +54,15 @@ const RUNTIME_ICONS: Record<string, string> = {
   unknown: "?",
 };
 
+const RUNTIME_COLORS: Record<string, string> = {
+  python: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+  node: "bg-green-500/10 text-green-400 border-green-500/20",
+  go: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+  rust: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+  shell: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+  unknown: "bg-runway-surface-2 text-runway-text-tertiary border-runway-border",
+};
+
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   if (diff < 60000) return "just now";
@@ -57,21 +73,14 @@ function timeAgo(dateStr: string): string {
 
 function LoadingSkeleton() {
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-runway-border">
-        <div className="skeleton h-4 w-16" />
-        <div className="skeleton h-7 w-14 rounded-md" />
+    <div className="h-full flex flex-col p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="skeleton h-8 w-48 rounded-runway-sm" />
+        <div className="skeleton h-8 w-24 rounded-runway-sm" />
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex flex-col gap-3">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="flex items-center gap-3 px-4 py-3 border-b border-runway-border">
-            <div className="skeleton w-8 h-8 rounded-lg shrink-0" />
-            <div className="flex-1 flex flex-col gap-1.5">
-              <div className="skeleton h-3.5 w-32" />
-              <div className="skeleton h-3 w-48" />
-            </div>
-            <div className="skeleton h-5 w-14 rounded-full" />
-          </div>
+          <div key={i} className="skeleton h-16 w-full rounded-runway-lg" />
         ))}
       </div>
     </div>
@@ -95,10 +104,14 @@ function EditProjectModal({
   const { toast } = useToast();
   const nameRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { nameRef.current?.focus(); }, []);
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
@@ -109,7 +122,10 @@ function EditProjectModal({
       const info: RuntimeInfo = await detectRuntime(project.path);
       setRuntime(info.runtime);
       if (info.entrypoint) setEntrypoint(info.entrypoint);
-      toast(`Detected ${info.runtime} (${Math.round(info.confidence * 100)}%)`, "success");
+      toast(
+        `Detected ${info.runtime} (${Math.round(info.confidence * 100)}%)`,
+        "success"
+      );
     } catch (e) {
       toast(`Detection failed: ${e}`, "error");
     } finally {
@@ -123,7 +139,11 @@ function EditProjectModal({
     setSaving(true);
     try {
       await updateProject(project.id, trimmedName, entrypoint.trim() || null);
-      onSaved({ name: trimmedName, entrypoint: entrypoint.trim() || null, runtime });
+      onSaved({
+        name: trimmedName,
+        entrypoint: entrypoint.trim() || null,
+        runtime,
+      });
       toast("Project updated", "success");
       onClose();
     } catch (e) {
@@ -134,39 +154,72 @@ function EditProjectModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="w-[380px] rounded-xl bg-runway-bg border border-runway-border p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold mb-4">Edit Project</h3>
-        <div className="mb-3">
-          <label className="block text-xs font-medium text-runway-muted mb-1">Name</label>
-          <input ref={nameRef} type="text" value={name} onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
-            className="w-full px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-text focus:outline-none focus:border-runway-accent transition-colors" />
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-base font-semibold text-runway-text-primary mb-5">
+          Edit Project
+        </h3>
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+            Name
+          </label>
+          <input
+            ref={nameRef}
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSave();
+            }}
+            className="input"
+          />
         </div>
-        <div className="mb-3">
-          <label className="block text-xs font-medium text-runway-muted mb-1">Entrypoint</label>
-          <input type="text" value={entrypoint} onChange={(e) => setEntrypoint(e.target.value)}
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+            Entrypoint
+          </label>
+          <input
+            type="text"
+            value={entrypoint}
+            onChange={(e) => setEntrypoint(e.target.value)}
             placeholder="main.py, index.js, etc."
-            className="w-full px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent transition-colors" />
+            className="input"
+          />
         </div>
-        <div className="mb-3">
-          <label className="block text-xs font-medium text-runway-muted mb-1">Runtime</label>
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+            Runtime
+          </label>
           <div className="flex items-center gap-2">
-            <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-sm text-runway-muted">{runtime}</div>
-            <button onClick={handleDetect} disabled={detecting}
-              className="px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-xs text-runway-accent hover:bg-runway-border transition-colors disabled:opacity-50">
+            <div className="input flex-1 !cursor-default text-runway-text-secondary">
+              {runtime}
+            </div>
+            <button
+              onClick={handleDetect}
+              disabled={detecting}
+              className="btn btn-secondary btn-sm"
+            >
               {detecting ? "..." : "Re-detect"}
             </button>
           </div>
         </div>
-        <div className="mb-4">
-          <label className="block text-xs font-medium text-runway-muted mb-1">Path</label>
-          <div className="px-3 py-2 rounded-lg bg-runway-surface border border-runway-border text-xs text-runway-muted truncate">{project.path}</div>
+        <div className="mb-5">
+          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+            Path
+          </label>
+          <div className="input !cursor-default text-runway-text-tertiary text-xs truncate">
+            {project.path}
+          </div>
         </div>
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs font-medium text-runway-muted hover:text-runway-text border border-runway-border hover:border-runway-accent/30 transition-colors">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !name.trim()}
-            className="px-4 py-1.5 rounded-md text-xs font-medium text-white bg-runway-accent hover:opacity-90 transition-opacity disabled:opacity-50">
+          <button onClick={onClose} className="btn btn-secondary">
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !name.trim()}
+            className="btn btn-primary"
+          >
             {saving ? "Saving..." : "Save"}
           </button>
         </div>
@@ -175,10 +228,15 @@ function EditProjectModal({
   );
 }
 
-export default function ProjectList({ onSelect, onNewProject, onTargets, onSettings }: Props) {
+export default function ProjectList({ onSelect, onNewProject }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
-  const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [search, setSearch] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -186,18 +244,30 @@ export default function ProjectList({ onSelect, onNewProject, onTargets, onSetti
   const { toast } = useToast();
 
   const refresh = useCallback(() => {
-    listProjects().then(setProjects).catch(console.error).finally(() => setLoading(false));
+    listProjects()
+      .then(setProjects)
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { refresh(); listTargets().then(setTargets).catch(console.error); }, [refresh]);
+  useEffect(() => {
+    refresh();
+    listTargets().then(setTargets).catch(console.error);
+  }, [refresh]);
 
   useEffect(() => {
     const unlisten = listen<StatusEvent>("project-status-change", (event) => {
-      setProjects((prev) => prev.map((p) =>
-        p.id === event.payload.project_id ? { ...p, status: event.payload.status } : p
-      ));
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === event.payload.project_id
+            ? { ...p, status: event.payload.status }
+            : p
+        )
+      );
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   useEffect(() => {
@@ -207,7 +277,6 @@ export default function ProjectList({ onSelect, onNewProject, onTargets, onSetti
     return () => window.removeEventListener("click", handler);
   }, [contextMenu]);
 
-  // Drag-and-drop file import
   useEffect(() => {
     const unlisten = getCurrentWindow().onDragDropEvent((event) => {
       if (event.payload.type === "enter") {
@@ -228,10 +297,15 @@ export default function ProjectList({ onSelect, onNewProject, onTargets, onSetti
         }
       }
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [toast, onSelect, refresh]);
 
-  const askDelete = useCallback((id: string) => { setConfirmDeleteId(id); setContextMenu(null); }, []);
+  const askDelete = useCallback((id: string) => {
+    setConfirmDeleteId(id);
+    setContextMenu(null);
+  }, []);
 
   const confirmDelete = useCallback(async () => {
     if (!confirmDeleteId) return;
@@ -240,54 +314,93 @@ export default function ProjectList({ onSelect, onNewProject, onTargets, onSetti
       await deleteProject(confirmDeleteId);
       setProjects((prev) => prev.filter((p) => p.id !== confirmDeleteId));
       toast(`Deleted ${project?.name ?? "project"}`, "info");
-    } catch (e) { toast(String(e), "error"); }
+    } catch (e) {
+      toast(String(e), "error");
+    }
     setConfirmDeleteId(null);
   }, [confirmDeleteId, projects, toast]);
 
-  const handleRun = useCallback(async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    try { await runProject(id); toast("Project started", "success"); }
-    catch (err) { toast(String(err), "error"); }
-  }, [toast]);
+  const handleRun = useCallback(
+    async (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      try {
+        await runProject(id);
+        toast("Project started", "success");
+      } catch (err) {
+        toast(String(err), "error");
+      }
+    },
+    [toast]
+  );
 
-  const handleStop = useCallback(async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    try { await stopProject(id); toast("Project stopped", "info"); }
-    catch (err) { toast(String(err), "error"); }
-  }, [toast]);
+  const handleStop = useCallback(
+    async (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      try {
+        await stopProject(id);
+        toast("Project stopped", "info");
+      } catch (err) {
+        toast(String(err), "error");
+      }
+    },
+    [toast]
+  );
 
-  const startEditing = useCallback((id: string) => {
-    const project = projects.find((p) => p.id === id);
-    if (project) setEditingProject(project);
-    setContextMenu(null);
-  }, [projects]);
+  const startEditing = useCallback(
+    (id: string) => {
+      const project = projects.find((p) => p.id === id);
+      if (project) setEditingProject(project);
+      setContextMenu(null);
+    },
+    [projects]
+  );
 
-  const handleEditSaved = useCallback((updated: Partial<Project>) => {
-    if (!editingProject) return;
-    setProjects((prev) => prev.map((p) => p.id === editingProject.id ? { ...p, ...updated } : p));
-  }, [editingProject]);
+  const handleEditSaved = useCallback(
+    (updated: Partial<Project>) => {
+      if (!editingProject) return;
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === editingProject.id ? { ...p, ...updated } : p
+        )
+      );
+    },
+    [editingProject]
+  );
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, id: string) => {
-    e.preventDefault(); e.stopPropagation();
-    setContextMenu({ id, x: e.clientX, y: e.clientY });
-  }, []);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, id: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({ id, x: e.clientX, y: e.clientY });
+    },
+    []
+  );
 
   if (loading) return <LoadingSkeleton />;
+
+  const filtered = search
+    ? projects.filter((p) =>
+        p.name.toLowerCase().includes(search.toLowerCase())
+      )
+    : projects;
 
   if (projects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-5 px-6">
-        <div className="w-16 h-16 rounded-2xl bg-runway-surface border border-runway-border flex items-center justify-center">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-runway-muted">
-            <path d="M12 5v14M5 12h14" strokeLinecap="round" />
-          </svg>
+        <div className="w-16 h-16 rounded-runway-xl bg-runway-accent-bg flex items-center justify-center">
+          <Plus size={28} strokeWidth={1.5} className="text-runway-accent" />
         </div>
         <div className="text-center">
-          <div className="text-base font-semibold text-runway-text mb-1">No projects yet</div>
-          <p className="text-sm text-runway-muted max-w-[260px]">Paste code from Claude Code, Cursor, or any AI tool and deploy it instantly.</p>
+          <div className="text-base font-semibold text-runway-text-primary mb-1">
+            No projects yet
+          </div>
+          <p className="text-sm text-runway-text-secondary max-w-[280px]">
+            Paste code from Claude Code, Cursor, or any AI tool and deploy it
+            instantly.
+          </p>
         </div>
-        <button onClick={onNewProject} className="px-5 py-2.5 rounded-lg bg-runway-accent text-white text-sm font-medium hover:opacity-90 transition-opacity">
-          Paste &amp; Deploy
+        <button onClick={onNewProject} className="btn btn-primary btn-lg">
+          Paste & Deploy
         </button>
       </div>
     );
@@ -295,152 +408,265 @@ export default function ProjectList({ onSelect, onNewProject, onTargets, onSetti
 
   return (
     <div className="h-full flex flex-col relative">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-runway-border">
-        <h1 className="text-sm font-semibold">
-          Projects<span className="ml-1.5 text-xs font-normal text-runway-muted">{projects.length}</span>
-        </h1>
-        <div className="flex gap-2">
-          {onSettings && (
-            <button onClick={onSettings} title="Settings"
-              className="p-1.5 rounded-md border border-runway-border text-runway-muted hover:text-runway-text hover:border-runway-accent transition-colors">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
-              </svg>
-            </button>
-          )}
-          {onTargets && (
-            <button onClick={onTargets} className="px-3 py-1.5 rounded-md border border-runway-border text-runway-muted text-xs font-medium hover:text-runway-text hover:border-runway-accent transition-colors">Targets</button>
-          )}
-          <button onClick={onNewProject} className="px-3 py-1.5 rounded-md bg-runway-accent text-white text-xs font-medium hover:opacity-90 transition-opacity">+ New</button>
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 px-5 py-4 shrink-0">
+        <div className="relative flex-1 max-w-[280px]">
+          <Search
+            size={14}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-runway-text-tertiary"
+          />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search projects..."
+            className="input !pl-8 !py-1.5 !text-sm"
+          />
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-runway-text-tertiary">
+            {projects.length} project{projects.length !== 1 ? "s" : ""}
+          </span>
+          <button onClick={onNewProject} className="btn btn-primary">
+            <Plus size={14} strokeWidth={2} />
+            New
+          </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        {projects.map((project) => {
-          const isRunning = project.status === "running";
-          return (
-            <div key={project.id} onContextMenu={(e) => handleContextMenu(e, project.id)}
-              className="relative w-full flex items-center gap-3 px-4 py-3 border-b border-runway-border hover:bg-runway-surface/50 transition-colors text-left group cursor-pointer"
-              onClick={() => onSelect(project.id)}>
-              <div className="w-8 h-8 rounded-lg bg-runway-surface border border-runway-border flex items-center justify-center text-xs font-bold text-runway-muted shrink-0 group-hover:border-runway-accent/30 transition-colors">
-                {RUNTIME_ICONS[project.runtime] ?? "?"}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium truncate">{project.name}</span>
-                  {(() => {
-                    const targetName = project.default_target
-                      ? targets.find((t) => t.id === project.default_target)?.name ?? "Remote"
-                      : "Local";
-                    const isRemote = !!project.default_target;
-                    return (
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border leading-none ${
-                        isRemote
-                          ? "bg-runway-accent/10 border-runway-accent/30 text-runway-accent"
-                          : "bg-runway-surface border-runway-border text-runway-muted"
-                      }`}>
-                        {targetName}
+
+      {/* Project list */}
+      <div className="flex-1 overflow-y-auto px-5 pb-4">
+        <div className="flex flex-col gap-2">
+          {filtered.map((project, i) => {
+            const isRunning = project.status === "running";
+            return (
+              <div
+                key={project.id}
+                onContextMenu={(e) => handleContextMenu(e, project.id)}
+                className="glass-card flex items-center gap-3 px-4 py-3 cursor-pointer group animate-card-enter"
+                style={{ animationDelay: `${i * 30}ms` }}
+                onClick={() => onSelect(project.id)}
+              >
+                {/* Runtime badge */}
+                <div
+                  className={`w-9 h-9 rounded-runway-sm border flex items-center justify-center text-xs font-bold shrink-0 ${
+                    RUNTIME_COLORS[project.runtime] ?? RUNTIME_COLORS.unknown
+                  }`}
+                >
+                  {RUNTIME_ICONS[project.runtime] ?? "?"}
+                </div>
+
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-runway-text-primary truncate">
+                      {project.name}
+                    </span>
+                    {(() => {
+                      const targetName = project.default_target
+                        ? targets.find((t) => t.id === project.default_target)
+                            ?.name ?? "Remote"
+                        : "Local";
+                      const isRemote = !!project.default_target;
+                      return (
+                        <span
+                          className={`badge ${
+                            isRemote ? "badge-accent" : "badge-neutral"
+                          }`}
+                        >
+                          {targetName}
+                        </span>
+                      );
+                    })()}
+                    {project.run_count > 0 && (
+                      <span className="text-[10px] text-runway-text-tertiary">
+                        {project.run_count} run
+                        {project.run_count !== 1 ? "s" : ""}
                       </span>
-                    );
-                  })()}
-                  {project.run_count > 0 && (
-                    <span className="text-[10px] text-runway-muted">{project.run_count} run{project.run_count !== 1 ? "s" : ""}</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-runway-text-secondary truncate mt-0.5">
+                    {project.entrypoint ?? project.path}
+                  </div>
+                </div>
+
+                {/* Hover actions */}
+                <div className="hidden group-hover:flex items-center gap-1 shrink-0">
+                  {isRunning ? (
+                    <button
+                      onClick={(e) => handleStop(e, project.id)}
+                      title="Stop"
+                      className="btn btn-ghost btn-icon"
+                    >
+                      <Square
+                        size={14}
+                        fill="currentColor"
+                        className="text-runway-error"
+                      />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => handleRun(e, project.id)}
+                      title="Run"
+                      className="btn btn-ghost btn-icon"
+                    >
+                      <Play
+                        size={14}
+                        fill="currentColor"
+                        className="text-runway-success"
+                      />
+                    </button>
                   )}
-                </div>
-                <div className="text-xs text-runway-muted truncate">{project.entrypoint ?? project.path}</div>
-              </div>
-              {/* Hover actions */}
-              <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-                {isRunning ? (
-                  <button onClick={(e) => handleStop(e, project.id)} title="Stop"
-                    className="p-1.5 rounded hover:bg-runway-border/50 text-runway-error hover:text-runway-error transition-colors">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditing(project.id);
+                    }}
+                    title="Edit"
+                    className="btn btn-ghost btn-icon"
+                  >
+                    <Pencil size={14} />
                   </button>
-                ) : (
-                  <button onClick={(e) => handleRun(e, project.id)} title="Run"
-                    className="p-1.5 rounded hover:bg-runway-success/10 text-runway-success hover:text-runway-success transition-colors">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      askDelete(project.id);
+                    }}
+                    title="Delete"
+                    className="btn btn-ghost btn-icon hover:!text-runway-error"
+                  >
+                    <Trash2 size={14} />
                   </button>
-                )}
-                <button onClick={(e) => { e.stopPropagation(); startEditing(project.id); }} title="Edit"
-                  className="p-1.5 rounded hover:bg-runway-border/50 text-runway-muted hover:text-runway-text transition-colors">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-                  </svg>
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); askDelete(project.id); }} title="Delete"
-                  className="p-1.5 rounded hover:bg-red-500/10 text-runway-muted hover:text-red-400 transition-colors">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                  </svg>
-                </button>
-              </div>
-              {/* Status (hidden on hover) */}
-              <div className="flex flex-col items-end gap-0.5 shrink-0 group-hover:hidden">
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${STATUS_COLORS[project.status] ?? STATUS_COLORS.idle} ${isRunning ? "animate-pulse-soft" : ""}`} />
-                  <span className="text-xs text-runway-muted">{STATUS_LABELS[project.status] ?? "Idle"}</span>
                 </div>
-                <span className="text-[10px] text-runway-muted/60">{timeAgo(project.updated_at)}</span>
+
+                {/* Status (hidden on hover) */}
+                <div className="flex flex-col items-end gap-0.5 shrink-0 group-hover:hidden">
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className={`w-2 h-2 rounded-full ${
+                        STATUS_COLORS[project.status] ?? STATUS_COLORS.idle
+                      } ${isRunning ? "animate-pulse-soft" : ""}`}
+                    />
+                    <span className="text-xs text-runway-text-secondary">
+                      {STATUS_LABELS[project.status] ?? "Idle"}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-runway-text-tertiary">
+                    {timeAgo(project.updated_at)}
+                  </span>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {/* Drag-and-drop overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-runway-accent/10 border-2 border-dashed border-runway-accent rounded-lg animate-fade-in pointer-events-none">
+        <div className="absolute inset-4 z-40 flex items-center justify-center border-2 border-dashed border-runway-accent rounded-runway-xl animate-fade-in pointer-events-none bg-runway-accent-bg">
           <div className="flex flex-col items-center gap-2">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-runway-accent">
-              <path d="M12 3v12m0 0l-4-4m4 4l4-4" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M3 17v2a2 2 0 002 2h14a2 2 0 002-2v-2" strokeLinecap="round" />
-            </svg>
-            <span className="text-sm font-medium text-runway-accent">Drop file to import</span>
-            <span className="text-xs text-runway-muted">.py, .js, .ts, .go, .sh, .rs</span>
+            <Download size={32} strokeWidth={1.5} className="text-runway-accent" />
+            <span className="text-sm font-medium text-runway-accent">
+              Drop file to import
+            </span>
+            <span className="text-xs text-runway-text-secondary">
+              .py, .js, .ts, .go, .sh, .rs
+            </span>
           </div>
         </div>
       )}
 
+      {/* Context menu */}
       {contextMenu && (
-        <div className="fixed z-50 min-w-[140px] py-1 rounded-lg bg-runway-surface border border-runway-border shadow-lg"
-          style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="context-menu fixed z-50"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {(() => {
             const p = projects.find((p) => p.id === contextMenu.id);
             const running = p?.status === "running";
-            return (<>
-              {running ? (
-                <button onClick={(e) => { handleStop(e, contextMenu.id); setContextMenu(null); }}
-                  className="w-full px-3 py-1.5 text-left text-xs text-runway-text hover:bg-runway-border/50 transition-colors">Stop</button>
-              ) : (
-                <button onClick={(e) => { handleRun(e, contextMenu.id); setContextMenu(null); }}
-                  className="w-full px-3 py-1.5 text-left text-xs text-runway-text hover:bg-runway-border/50 transition-colors">Run</button>
-              )}
-              <button onClick={() => startEditing(contextMenu.id)}
-                className="w-full px-3 py-1.5 text-left text-xs text-runway-text hover:bg-runway-border/50 transition-colors">Edit</button>
-              <button onClick={() => askDelete(contextMenu.id)}
-                className="w-full px-3 py-1.5 text-left text-xs text-red-400 hover:bg-red-500/10 transition-colors">Delete</button>
-            </>);
+            return (
+              <>
+                {running ? (
+                  <button
+                    onClick={(e) => {
+                      handleStop(e, contextMenu.id);
+                      setContextMenu(null);
+                    }}
+                    className="context-menu-item"
+                  >
+                    <Square size={14} />
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      handleRun(e, contextMenu.id);
+                      setContextMenu(null);
+                    }}
+                    className="context-menu-item"
+                  >
+                    <Play size={14} />
+                    Run
+                  </button>
+                )}
+                <button
+                  onClick={() => startEditing(contextMenu.id)}
+                  className="context-menu-item"
+                >
+                  <Pencil size={14} />
+                  Edit
+                </button>
+                <button
+                  onClick={() => askDelete(contextMenu.id)}
+                  className="context-menu-item context-menu-item--danger"
+                >
+                  <Trash2 size={14} />
+                  Delete
+                </button>
+              </>
+            );
           })()}
         </div>
       )}
 
       {editingProject && (
-        <EditProjectModal project={editingProject} onClose={() => setEditingProject(null)} onSaved={handleEditSaved} />
+        <EditProjectModal
+          project={editingProject}
+          onClose={() => setEditingProject(null)}
+          onSaved={handleEditSaved}
+        />
       )}
 
       {confirmDeleteId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setConfirmDeleteId(null)}>
-          <div className="w-[300px] rounded-xl bg-runway-bg border border-runway-border p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold mb-1">Delete project?</h3>
-            <p className="text-xs text-runway-muted mb-4">
-              <span className="font-medium text-runway-text">{projects.find((p) => p.id === confirmDeleteId)?.name}</span>{" "}
+        <div
+          className="modal-overlay"
+          onClick={() => setConfirmDeleteId(null)}
+        >
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-runway-text-primary mb-1">
+              Delete project?
+            </h3>
+            <p className="text-sm text-runway-text-secondary mb-5">
+              <span className="font-medium text-runway-text-primary">
+                {projects.find((p) => p.id === confirmDeleteId)?.name}
+              </span>{" "}
               will be removed. This cannot be undone.
             </p>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setConfirmDeleteId(null)}
-                className="px-3 py-1.5 rounded-md text-xs font-medium text-runway-muted hover:text-runway-text border border-runway-border hover:border-runway-accent/30 transition-colors">Cancel</button>
-              <button onClick={confirmDelete}
-                className="px-3 py-1.5 rounded-md text-xs font-medium text-white bg-red-500 hover:bg-red-600 transition-colors">Delete</button>
+              <button
+                onClick={() => setConfirmDeleteId(null)}
+                className="btn btn-secondary"
+              >
+                Cancel
+              </button>
+              <button onClick={confirmDelete} className="btn btn-danger">
+                Delete
+              </button>
             </div>
           </div>
         </div>

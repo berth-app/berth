@@ -1,6 +1,6 @@
 [package]
 name = "runway-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -31,13 +31,15 @@ async-nats = { workspace = true, optional = true }
 futures = { version = "0.3", optional = true }
 base64 = { version = "0.22", optional = true }
 async-trait = "0.1"
+semver = { workspace = true }
+sha2 = { version = "0.10", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
 [features]
 default = []
-nats = ["async-nats", "futures", "base64"]
+nats = ["async-nats", "futures", "base64", "sha2"]
 
 [build-dependencies]
 tonic-build = { workspace = true }

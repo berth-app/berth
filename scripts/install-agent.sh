@@ -14,6 +14,9 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 AGENT_USER="runway"
 AGENT_PORT="50051"
 BASE_URL="https://get.runway.dev/releases/latest"
+ROLLBACK_SCRIPT_URL="${BASE_URL}/runway-agent-rollback.sh"
+ROLLBACK_SCRIPT_DIR="/usr/local/lib/runway"
+ROLLBACK_SCRIPT_PATH="${ROLLBACK_SCRIPT_DIR}/rollback.sh"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,6 +62,13 @@ uninstall() {
   if [ -f "${INSTALL_PATH}" ]; then
     info "Removing binary ${INSTALL_PATH}..."
     rm -f "${INSTALL_PATH}"
+  fi
+
+  # Remove the rollback script
+  if [ -f "${ROLLBACK_SCRIPT_PATH}" ]; then
+    info "Removing rollback script ${ROLLBACK_SCRIPT_PATH}..."
+    rm -f "${ROLLBACK_SCRIPT_PATH}"
+    rmdir "${ROLLBACK_SCRIPT_DIR}" 2>/dev/null || true
   fi
 
   # Optionally remove the runway user
@@ -148,6 +158,33 @@ create_user() {
 }
 
 # ---------------------------------------------------------------------------
+# Install the auto-rollback script
+# ---------------------------------------------------------------------------
+
+install_rollback_script() {
+  info "Installing rollback script to ${ROLLBACK_SCRIPT_PATH}..."
+  install -d "${ROLLBACK_SCRIPT_DIR}"
+
+  # Prefer bundled script next to the installer, otherwise download
+  local local_script
+  local_script="$(dirname "$0")/runway-agent-rollback.sh"
+  if [ -f "${local_script}" ]; then
+    install -m 755 "${local_script}" "${ROLLBACK_SCRIPT_PATH}"
+  elif command -v curl &>/dev/null; then
+    curl -fsSL -o "${ROLLBACK_SCRIPT_PATH}" "${ROLLBACK_SCRIPT_URL}"
+    chmod 755 "${ROLLBACK_SCRIPT_PATH}"
+  elif command -v wget &>/dev/null; then
+    wget -qO "${ROLLBACK_SCRIPT_PATH}" "${ROLLBACK_SCRIPT_URL}"
+    chmod 755 "${ROLLBACK_SCRIPT_PATH}"
+  else
+    err "Cannot install rollback script (no curl/wget)."
+    exit 1
+  fi
+
+  ok "Rollback script installed to ${ROLLBACK_SCRIPT_PATH}"
+}
+
+# ---------------------------------------------------------------------------
 # Create and enable the systemd service
 # ---------------------------------------------------------------------------
 
@@ -163,8 +200,11 @@ After=network.target
 Type=simple
 User=${AGENT_USER}
 ExecStart=${INSTALL_PATH} --port ${AGENT_PORT}
+ExecStopPost=+${ROLLBACK_SCRIPT_PATH} %e
 Restart=always
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=120
 Environment=RUST_LOG=info
 
 [Install]
@@ -188,6 +228,7 @@ main() {
   detect_arch
   download_binary
   create_user
+  install_rollback_script
   install_service
 
   echo ""

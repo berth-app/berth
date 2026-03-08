@@ -260,3 +260,42 @@ export async function importFile(filePath: string): Promise<Project> {
   return tauriInvoke<Project>("import_file", { filePath });
 }
 
+// --- Agent Upgrade ---
+
+export interface UpgradeCheck {
+  available: boolean;
+  current_version: string;
+  latest_version: string;
+  arch: string | null;
+}
+
+export interface UpgradeResult {
+  target_id: string;
+  target_name: string;
+  success: boolean;
+  new_version: string;
+  message: string;
+}
+
+export interface RollbackResult {
+  success: boolean;
+  restored_version: string;
+  message: string;
+}
+
+export async function checkAgentUpgrade(id: string): Promise<UpgradeCheck> {
+  return tauriInvoke<UpgradeCheck>("check_agent_upgrade", { id });
+}
+
+export async function upgradeAgent(id: string): Promise<UpgradeResult> {
+  return tauriInvoke<UpgradeResult>("upgrade_agent", { id });
+}
+
+export async function rollbackAgent(id: string): Promise<RollbackResult> {
+  return tauriInvoke<RollbackResult>("rollback_agent", { id });
+}
+
+export async function upgradeAllAgents(): Promise<UpgradeResult[]> {
+  return tauriInvoke<UpgradeResult[]>("upgrade_all_agents");
+}
+

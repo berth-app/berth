@@ -4,24 +4,29 @@ import ProjectList from "./pages/ProjectList";
 import ProjectDetail from "./pages/ProjectDetail";
 import PasteAndDeploy from "./pages/PasteAndDeploy";
 import Targets from "./pages/Targets";
-import Settings, { applyTheme } from "./pages/Settings";
+import Settings from "./pages/Settings";
 import { ToastProvider } from "./components/Toast";
+import Sidebar from "./components/Sidebar";
 import { getSettings } from "./lib/invoke";
+import { setTheme, initThemeListener } from "./lib/theme";
 
 type View = "list" | "detail" | "paste" | "targets" | "settings";
 
 export default function App() {
   const [view, setView] = useState<View>("list");
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    null
+  );
 
-  // Apply theme on startup
   useEffect(() => {
     getSettings()
-      .then((s) => applyTheme(s.theme ?? "system"))
+      .then((s) =>
+        setTheme(s.theme_palette ?? "default", s.theme ?? "system")
+      )
       .catch(() => {});
+    initThemeListener();
   }, []);
 
-  // Listen for tray navigation events
   useEffect(() => {
     const unlistenNav = listen<string>("navigate", (event) => {
       setView(event.payload as View);
@@ -36,28 +41,26 @@ export default function App() {
     };
   }, []);
 
+  function handleSelectProject(id: string) {
+    setSelectedProjectId(id);
+    setView("detail");
+  }
+
   return (
     <ToastProvider>
-      <div className="h-screen flex flex-col">
-        {/* Titlebar drag region */}
-        <div
-          data-tauri-drag-region
-          className="h-8 flex items-center justify-center bg-runway-surface border-b border-runway-border shrink-0"
-        >
-          <span className="text-xs font-medium text-runway-muted">Runway</span>
-        </div>
-
-        {/* Main content */}
-        <div className="flex-1 overflow-hidden">
+      <div className="h-screen flex">
+        <Sidebar
+          view={view}
+          setView={setView}
+          selectedProjectId={selectedProjectId}
+          onSelectProject={handleSelectProject}
+          onNewProject={() => setView("paste")}
+        />
+        <main className="flex-1 overflow-hidden animate-page-enter bg-runway-bg">
           {view === "list" && (
             <ProjectList
-              onSelect={(id) => {
-                setSelectedProjectId(id);
-                setView("detail");
-              }}
+              onSelect={handleSelectProject}
               onNewProject={() => setView("paste")}
-              onTargets={() => setView("targets")}
-              onSettings={() => setView("settings")}
             />
           )}
           {view === "detail" && selectedProjectId && (
@@ -75,13 +78,9 @@ export default function App() {
               }}
             />
           )}
-          {view === "targets" && (
-            <Targets onBack={() => setView("list")} />
-          )}
-          {view === "settings" && (
-            <Settings onBack={() => setView("list")} />
-          )}
-        </div>
+          {view === "targets" && <Targets />}
+          {view === "settings" && <Settings />}
+        </main>
       </div>
     </ToastProvider>
   );

@@ -6,9 +6,10 @@ import "@xterm/xterm/css/xterm.css";
 
 interface Props {
   logs: Array<{ stream: string; text: string }>;
+  flush?: boolean;
 }
 
-export default function Terminal({ logs }: Props) {
+export default function Terminal({ logs, flush }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -27,11 +28,11 @@ export default function Terminal({ logs }: Props) {
       scrollback: 10000,
       convertEol: true,
       theme: {
-        background: "#2c2c2e",
+        background: "#232326",
         foreground: "#f5f5f7",
         cursor: "#f5f5f7",
         selectionBackground: "#0a84ff44",
-        black: "#1c1c1e",
+        black: "#1a1a1c",
         red: "#ff453a",
         green: "#30d158",
         yellow: "#ffd60a",
@@ -39,7 +40,7 @@ export default function Terminal({ logs }: Props) {
         magenta: "#bf5af2",
         cyan: "#64d2ff",
         white: "#f5f5f7",
-        brightBlack: "#8e8e93",
+        brightBlack: "#636366",
         brightRed: "#ff6961",
         brightGreen: "#4ade80",
         brightYellow: "#ffe566",
@@ -89,8 +90,7 @@ export default function Terminal({ logs }: Props) {
   return (
     <div
       ref={containerRef}
-      className="flex-1 rounded-lg overflow-hidden border border-runway-border"
-      style={{ minHeight: 200 }}
+      className={`flex-1 overflow-hidden ${flush ? "" : "rounded-runway-lg glass-card-static"}`}
     />
   );
 }

@@ -1,5 +1,16 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import {
+  Play,
+  Square,
+  Trash2,
+  Bell,
+  Clock,
+  History,
+  X,
+  ChevronDown,
+  Settings,
+} from "lucide-react";
 import {
   runProject,
   stopProject,
@@ -31,10 +42,10 @@ interface Props {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  idle: "bg-runway-muted",
-  running: "bg-green-500",
-  stopped: "bg-runway-muted",
-  failed: "bg-red-500",
+  idle: "bg-runway-text-tertiary",
+  running: "bg-runway-success",
+  stopped: "bg-runway-text-tertiary",
+  failed: "bg-runway-error",
 };
 
 function timeAgo(dateStr: string | null): string {
@@ -47,16 +58,32 @@ function timeAgo(dateStr: string | null): string {
 }
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "—";
+  if (!dateStr) return "--";
   return new Date(dateStr).toLocaleString(undefined, {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
-// --- Schedule Section ---
-function ScheduleSection({ projectId }: { projectId: string }) {
+function humanizeCron(expr: string): string {
+  if (expr === "@hourly") return "Every hour";
+  if (expr === "@daily") return "Daily at midnight";
+  if (expr === "@weekly") return "Weekly on Sunday";
+  const everyMatch = expr.match(/^@every\s+(\d+)\s*(s|m|h)$/);
+  if (everyMatch) {
+    const [, n, unit] = everyMatch;
+    const units: Record<string, string> = { s: "second", m: "minute", h: "hour" };
+    return `Every ${n} ${units[unit]}${Number(n) > 1 ? "s" : ""}`;
+  }
+  return expr;
+}
+
+// ─── Schedule Panel ────────────────────────────────────────────────
+
+function SchedulePanel({ projectId }: { projectId: string }) {
   const [schedules, setSchedules] = useState<ScheduleInfo[]>([]);
-  const [showAdd, setShowAdd] = useState(false);
   const [cronExpr, setCronExpr] = useState("");
   const [adding, setAdding] = useState(false);
   const { toast } = useToast();
@@ -65,21 +92,27 @@ function ScheduleSection({ projectId }: { projectId: string }) {
     listSchedules(projectId).then(setSchedules).catch(console.error);
   }, [projectId]);
 
-  useEffect(() => { refresh(); }, [refresh]);
-
-  // Auto-refresh when a schedule executes
   useEffect(() => {
-    const unlisten = listen<{ project_id: string; success: boolean; exit_code: number | null }>(
-      "schedule-executed",
-      (event) => {
-        if (event.payload.project_id === projectId) {
-          refresh();
-          const msg = event.payload.success ? "Schedule ran successfully" : `Schedule failed (exit ${event.payload.exit_code})`;
-          toast(msg, event.payload.success ? "success" : "error");
-        }
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const unlisten = listen<{
+      project_id: string;
+      success: boolean;
+      exit_code: number | null;
+    }>("schedule-executed", (event) => {
+      if (event.payload.project_id === projectId) {
+        refresh();
+        const msg = event.payload.success
+          ? "Schedule ran successfully"
+          : `Schedule failed (exit ${event.payload.exit_code})`;
+        toast(msg, event.payload.success ? "success" : "error");
       }
-    );
-    return () => { unlisten.then((fn) => fn()); };
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [projectId, refresh, toast]);
 
   async function handleAdd() {
@@ -90,7 +123,6 @@ function ScheduleSection({ projectId }: { projectId: string }) {
       await addSchedule(projectId, expr);
       toast("Schedule added", "success");
       setCronExpr("");
-      setShowAdd(false);
       refresh();
     } catch (e) {
       toast(`Failed: ${e}`, "error");
@@ -118,141 +150,167 @@ function ScheduleSection({ projectId }: { projectId: string }) {
     }
   }
 
+  const quickPresets = ["@every 5m", "@hourly", "@daily"];
+
   return (
-    <div className="rounded-lg bg-runway-surface border border-runway-border">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-runway-border">
-        <div className="flex items-center gap-2">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-runway-muted">
-            <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-          </svg>
-          <span className="text-xs font-medium">Schedules</span>
-          {schedules.length > 0 && (
-            <span className="text-[10px] text-runway-muted">{schedules.length}</span>
-          )}
-        </div>
-        <button onClick={() => setShowAdd(!showAdd)}
-          className="text-xs text-runway-accent hover:underline">
-          {showAdd ? "Cancel" : "+ Add"}
-        </button>
-      </div>
-
-      {showAdd && (
-        <div className="px-3 py-2 border-b border-runway-border flex gap-2 items-end">
-          <div className="flex-1">
-            <label className="block text-[10px] text-runway-muted mb-0.5">Cron Expression</label>
-            <input type="text" value={cronExpr} onChange={(e) => setCronExpr(e.target.value)}
-              placeholder="@every 5m, @hourly, 30 9 * * *"
-              onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
-              className="w-full px-2 py-1.5 rounded bg-runway-bg border border-runway-border text-xs text-runway-text placeholder-runway-muted focus:outline-none focus:border-runway-accent transition-colors" />
-          </div>
-          <button onClick={handleAdd} disabled={adding || !cronExpr.trim()}
-            className="px-3 py-1.5 rounded bg-runway-accent text-white text-xs font-medium disabled:opacity-50">
-            {adding ? "..." : "Add"}
-          </button>
-        </div>
-      )}
-
-      {schedules.length === 0 && !showAdd ? (
-        <div className="px-3 py-3 text-center text-xs text-runway-muted">
-          No schedules. Add one to run this project on a timer.
+    <div className="side-panel-body flex flex-col gap-4">
+      {schedules.length === 0 ? (
+        <div className="text-xs text-runway-text-tertiary py-4 text-center">
+          No schedules yet
         </div>
       ) : (
-        <div>
+        <div className="flex flex-col gap-1">
           {schedules.map((s) => (
-            <div key={s.id} className="flex items-center gap-2 px-3 py-2 border-b border-runway-border last:border-b-0">
-              <button onClick={() => handleToggle(s.id, !s.enabled)} title={s.enabled ? "Disable" : "Enable"}
-                className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 transition-colors ${
-                  s.enabled ? "bg-runway-success border-runway-success" : "bg-transparent border-runway-muted"
-                }`} />
+            <div
+              key={s.id}
+              className="flex items-start gap-3 py-2.5 border-b border-runway-border-subtle last:border-b-0 group"
+            >
+              <button
+                onClick={() => handleToggle(s.id, !s.enabled)}
+                className={`w-2 h-2 rounded-full mt-1.5 shrink-0 transition-colors cursor-pointer ${
+                  s.enabled ? "bg-runway-success" : "bg-runway-text-tertiary"
+                }`}
+                title={s.enabled ? "Active — click to pause" : "Paused — click to enable"}
+              />
               <div className="flex-1 min-w-0">
-                <span className={`text-xs font-mono ${s.enabled ? "text-runway-text" : "text-runway-muted"}`}>
+                <span className="schedule-expr">
                   {s.cron_expr}
                 </span>
-                <div className="flex gap-3 text-[10px] text-runway-muted">
-                  {s.next_run_at && <span>Next: {formatDate(s.next_run_at)}</span>}
-                  {s.last_triggered_at && <span>Last: {formatDate(s.last_triggered_at)}</span>}
+                <div className="text-[11px] text-runway-text-tertiary mt-1">
+                  {humanizeCron(s.cron_expr)}
+                  {s.next_run_at && <span className="ml-2">Next: {formatDate(s.next_run_at)}</span>}
                 </div>
               </div>
-              <button onClick={() => handleRemove(s.id)}
-                className="p-1 rounded hover:bg-red-500/10 text-runway-muted hover:text-red-400 transition-colors shrink-0">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
+              <button
+                onClick={() => handleRemove(s.id)}
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-runway-text-tertiary hover:text-runway-error p-0.5"
+              >
+                <X size={12} />
               </button>
             </div>
           ))}
         </div>
       )}
+
+      <div className="border-t border-runway-border-subtle pt-3">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={cronExpr}
+            onChange={(e) => setCronExpr(e.target.value)}
+            placeholder="@every 5m, 30 9 * * *"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleAdd();
+            }}
+            className="input !py-1.5 !text-xs flex-1"
+          />
+          <button
+            onClick={handleAdd}
+            disabled={adding || !cronExpr.trim()}
+            className="btn btn-primary btn-sm"
+          >
+            {adding ? "..." : "Add"}
+          </button>
+        </div>
+        <div className="flex gap-1.5 mt-2">
+          {quickPresets.map((p) => (
+            <button
+              key={p}
+              onClick={() => setCronExpr(p)}
+              className="schedule-quick-btn"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-// --- Execution History Section ---
-function ExecutionHistory({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
+// ─── History Panel ─────────────────────────────────────────────────
+
+function HistoryPanel({
+  projectId,
+  refreshKey,
+}: {
+  projectId: string;
+  refreshKey: number;
+}) {
   const [logs, setLogs] = useState<ExecutionLogInfo[]>([]);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
-    listExecutionLogs(projectId, 20).then(setLogs).catch(console.error);
+    listExecutionLogs(projectId, 30).then(setLogs).catch(console.error);
   }, [projectId, refreshKey]);
 
-  if (logs.length === 0) return null;
+  if (logs.length === 0) {
+    return (
+      <div className="side-panel-body">
+        <div className="text-xs text-runway-text-tertiary py-4 text-center">
+          No executions yet
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="rounded-lg bg-runway-surface border border-runway-border">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-runway-border">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-runway-muted">
-          <path d="M12 8v4l3 3" /><circle cx="12" cy="12" r="10" />
-        </svg>
-        <span className="text-xs font-medium">Execution History</span>
-        <span className="text-[10px] text-runway-muted">{logs.length}</span>
-      </div>
-      <div className="max-h-48 overflow-y-auto">
+    <div className="side-panel-body">
+      <div className="history-timeline">
         {logs.map((log) => {
-          const isExpanded = expandedId === log.id;
           const isSuccess = log.exit_code === 0;
           const isRunning = log.finished_at === null;
+          const dotClass = isRunning
+            ? "history-dot--running"
+            : isSuccess
+              ? "history-dot--success"
+              : "history-dot--error";
+
+          let duration = "";
+          if (log.started_at && log.finished_at) {
+            const ms =
+              new Date(log.finished_at).getTime() -
+              new Date(log.started_at).getTime();
+            if (ms < 1000) duration = `${ms}ms`;
+            else if (ms < 60000) duration = `${(ms / 1000).toFixed(1)}s`;
+            else duration = `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+          }
+
           return (
-            <div key={log.id} className="border-b border-runway-border last:border-b-0">
-              <button
-                onClick={() => setExpandedId(isExpanded ? null : log.id)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-runway-bg/50 transition-colors"
-              >
-                <div className={`w-2 h-2 rounded-full shrink-0 ${
-                  isRunning ? "bg-runway-accent animate-pulse-soft" :
-                  isSuccess ? "bg-runway-success" : "bg-runway-error"
-                }`} />
-                <span className="text-xs text-runway-text flex-1 truncate">
+            <div key={log.id} className="history-item">
+              <div className={`history-dot ${dotClass}`} />
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-runway-text-secondary">
                   {formatDate(log.started_at)}
                 </span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                  log.trigger === "schedule"
-                    ? "bg-purple-500/10 text-purple-400"
-                    : "bg-runway-accent/10 text-runway-accent"
-                }`}>
+                <span
+                  className={`badge ${
+                    log.trigger === "schedule" ? "badge-warning" : "badge-accent"
+                  }`}
+                  style={{ fontSize: 9, padding: "1px 6px" }}
+                >
                   {log.trigger}
                 </span>
                 {!isRunning && (
-                  <span className={`text-[10px] font-mono ${isSuccess ? "text-runway-success" : "text-runway-error"}`}>
+                  <span
+                    className={`font-mono ${
+                      isSuccess ? "text-runway-success" : "text-runway-error"
+                    }`}
+                  >
                     exit {log.exit_code}
                   </span>
                 )}
                 {isRunning && (
-                  <span className="text-[10px] text-runway-accent">running</span>
+                  <span className="text-runway-accent">running</span>
                 )}
-                <svg
-                  width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  strokeWidth="2" strokeLinecap="round"
-                  className={`text-runway-muted shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                >
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              </button>
-              {isExpanded && log.output && (
-                <div className="px-3 pb-2">
-                  <pre className="text-[11px] font-mono text-runway-muted bg-runway-bg rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all">
-                    {log.output || "(no output)"}
-                  </pre>
+                {duration && (
+                  <span className="text-runway-text-tertiary ml-auto">
+                    {duration}
+                  </span>
+                )}
+              </div>
+              {!isSuccess && !isRunning && log.output && (
+                <div className="mt-1 text-[10px] font-mono text-runway-error/70 truncate">
+                  {log.output.split("\n")[0]?.slice(0, 80)}
                 </div>
               )}
             </div>
@@ -263,7 +321,197 @@ function ExecutionHistory({ projectId, refreshKey }: { projectId: string; refres
   );
 }
 
-// --- Main Component ---
+// ─── Settings Panel ────────────────────────────────────────────────
+
+function SettingsPanel({
+  project,
+  notifyEnabled,
+  onToggleNotify,
+  onDelete,
+}: {
+  project: Project;
+  notifyEnabled: boolean;
+  onToggleNotify: () => void;
+  onDelete: () => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  return (
+    <div className="side-panel-body flex flex-col gap-5">
+      <div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bell size={13} className="text-runway-text-secondary" />
+            <span className="text-xs font-medium text-runway-text-primary">
+              Notifications
+            </span>
+          </div>
+          <button
+            onClick={onToggleNotify}
+            className="toggle"
+            data-checked={notifyEnabled}
+            style={{ width: 32, height: 19 }}
+          />
+        </div>
+        <div className="text-[11px] text-runway-text-tertiary mt-1 ml-5">
+          Notify on completion or failure
+        </div>
+      </div>
+
+      <div className="border-t border-runway-border-subtle pt-4">
+        <div className="text-[11px] text-runway-text-tertiary uppercase tracking-wider font-medium mb-2">
+          Info
+        </div>
+        <div className="space-y-2">
+          <div>
+            <div className="text-[10px] text-runway-text-tertiary">Entrypoint</div>
+            <div className="text-xs font-mono text-runway-text-secondary">
+              {project.entrypoint ?? "none"}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-runway-text-tertiary">Runtime</div>
+            <div className="text-xs text-runway-text-secondary">
+              {project.runtime}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] text-runway-text-tertiary">Path</div>
+            <div className="text-xs font-mono text-runway-text-secondary truncate">
+              {project.path}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-runway-border-subtle pt-4 mt-auto">
+        {!confirmDelete ? (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="btn btn-danger w-full"
+          >
+            <Trash2 size={13} />
+            Delete Project
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <div className="text-xs text-runway-error text-center">
+              Are you sure? This cannot be undone.
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="btn btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button onClick={onDelete} className="btn btn-danger flex-1">
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Target Dropdown ───────────────────────────────────────────────
+
+function TargetDropdown({
+  targets,
+  selectedTarget,
+  onSelect,
+}: {
+  targets: TargetInfo[];
+  selectedTarget: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const selected = selectedTarget
+    ? targets.find((t) => t.id === selectedTarget)
+    : null;
+  const label = selected ? selected.name : "local";
+  const dotColor = selected
+    ? selected.status === "online"
+      ? "bg-runway-success"
+      : selected.status === "offline"
+        ? "bg-runway-error"
+        : "bg-runway-text-tertiary"
+    : "bg-runway-success";
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="target-trigger"
+      >
+        <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+        {label}
+        <ChevronDown size={10} className="text-runway-text-tertiary" />
+      </button>
+
+      {open && (
+        <div className="target-popover">
+          <button
+            onClick={() => {
+              onSelect(null);
+              setOpen(false);
+            }}
+            className="target-option"
+            data-selected={selectedTarget === null}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-runway-success" />
+            local
+          </button>
+          {targets.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => {
+                onSelect(t.id);
+                setOpen(false);
+              }}
+              className="target-option"
+              data-selected={selectedTarget === t.id}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  t.status === "online"
+                    ? "bg-runway-success"
+                    : t.status === "offline"
+                      ? "bg-runway-error"
+                      : "bg-runway-text-tertiary"
+                }`}
+              />
+              {t.name}
+              <span className="text-[10px] text-runway-text-tertiary ml-auto">
+                {t.kind}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ────────────────────────────────────────────────
+
+type PanelType = "schedule" | "history" | "settings" | null;
+
 export default function ProjectDetail({ projectId, onBack }: Props) {
   const [project, setProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<string>("idle");
@@ -279,6 +527,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileDirty, setFileDirty] = useState(false);
+  const [activePanel, setActivePanel] = useState<PanelType>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -301,31 +550,44 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
         setLogs((prev) => [...prev, event.payload]);
       }
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [projectId]);
 
   useEffect(() => {
-    const unlisten = listen<StatusEvent>("project-status-change", (event) => {
-      if (event.payload.project_id === projectId) {
-        setStatus(event.payload.status);
-        if (event.payload.status === "running") {
-          setStartedAt(Date.now());
-        } else {
-          setStartedAt(null);
-          setHistoryRefreshKey((k) => k + 1);
-          if (event.payload.status === "failed") {
-            toast(`Process exited with code ${event.payload.exit_code ?? "unknown"}`, "error");
-          } else if (event.payload.status === "idle") {
-            toast("Process completed successfully", "success");
+    const unlisten = listen<StatusEvent>(
+      "project-status-change",
+      (event) => {
+        if (event.payload.project_id === projectId) {
+          setStatus(event.payload.status);
+          if (event.payload.status === "running") {
+            setStartedAt(Date.now());
+          } else {
+            setStartedAt(null);
+            setHistoryRefreshKey((k) => k + 1);
+            if (event.payload.status === "failed") {
+              toast(
+                `Process exited with code ${event.payload.exit_code ?? "unknown"}`,
+                "error"
+              );
+            } else if (event.payload.status === "idle") {
+              toast("Process completed successfully", "success");
+            }
           }
         }
       }
-    });
-    return () => { unlisten.then((fn) => fn()); };
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [projectId, toast]);
 
   useEffect(() => {
-    if (!startedAt) { setUptime(""); return; }
+    if (!startedAt) {
+      setUptime("");
+      return;
+    }
     const interval = setInterval(() => {
       const secs = Math.floor((Date.now() - startedAt) / 1000);
       const m = Math.floor(secs / 60);
@@ -378,7 +640,8 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
   }, [projectId, notifyEnabled, toast]);
 
   const handleRun = useCallback(async () => {
-    setError(null); setLogs([]);
+    setError(null);
+    setLogs([]);
     try {
       await runProject(projectId, selectedTarget || undefined);
       if (selectedTarget) {
@@ -388,7 +651,9 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
         toast("Project started", "success");
       }
     } catch (e) {
-      const msg = String(e); setError(msg); toast(msg, "error");
+      const msg = String(e);
+      setError(msg);
+      toast(msg, "error");
     }
   }, [projectId, selectedTarget, targets, toast]);
 
@@ -398,7 +663,9 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
       await stopProject(projectId, selectedTarget || undefined);
       toast("Project stopped", "info");
     } catch (e) {
-      const msg = String(e); setError(msg); toast(msg, "error");
+      const msg = String(e);
+      setError(msg);
+      toast(msg, "error");
     }
   }, [projectId, selectedTarget, toast]);
 
@@ -407,223 +674,296 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
       await deleteProject(projectId);
       toast("Project deleted", "info");
       onBack();
-    } catch (e) { toast(String(e), "error"); }
+    } catch (e) {
+      toast(String(e), "error");
+    }
   }, [projectId, onBack, toast]);
+
+  const handleSelectTarget = useCallback(
+    (id: string | null) => {
+      setSelectedTarget(id);
+      setProjectTarget(projectId, id).catch(console.error);
+    },
+    [projectId]
+  );
+
+  const togglePanel = useCallback((panel: PanelType) => {
+    setActivePanel((prev) => (prev === panel ? null : panel));
+  }, []);
 
   const isRunning = status === "running";
 
   if (!project) {
     return (
-      <div className="h-full flex flex-col">
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-runway-border">
-          <button onClick={onBack} className="text-runway-accent text-sm hover:underline">&larr; Back</button>
-          <div className="skeleton h-4 w-32" />
-        </div>
-        <div className="p-4 flex flex-col gap-3">
-          <div className="skeleton h-10 w-full" />
-          <div className="skeleton h-8 w-48" />
-          <div className="skeleton h-64 w-full" />
-        </div>
+      <div className="h-full flex flex-col p-5">
+        <div className="skeleton h-6 w-48 mb-4" />
+        <div className="skeleton h-10 w-full mb-3" />
+        <div className="skeleton flex-1 w-full" />
       </div>
     );
   }
 
+  const exitCodeColor =
+    project.last_exit_code === null
+      ? "text-runway-text-tertiary"
+      : project.last_exit_code === 0
+        ? "text-runway-success"
+        : "text-runway-error";
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-runway-border">
-        <button onClick={onBack} className="text-runway-accent text-sm hover:underline">&larr; Back</button>
-        <h1 className="text-sm font-semibold">{project.name}</h1>
-        <button onClick={handleDelete} className="ml-auto text-xs text-runway-muted hover:text-runway-error transition-colors">Delete</button>
-      </div>
+    <div className="h-full flex flex-col animate-page-enter">
+      {/* ── Header ──────────────────────────────────────────────── */}
+      <div className="h-[52px] flex items-center px-5 gap-3 border-b border-runway-border-subtle shrink-0">
+        <h1 className="text-[15px] font-semibold text-runway-text-primary tracking-tight truncate">
+          {project.name}
+        </h1>
+        <span className="badge badge-neutral">{project.runtime}</span>
 
-      <div className="flex-1 flex flex-col gap-3 p-4 overflow-hidden">
-        {/* Status bar */}
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-runway-surface">
-          <div className={`w-2.5 h-2.5 rounded-full ${STATUS_COLORS[status] ?? STATUS_COLORS.idle} ${isRunning ? "animate-pulse-soft" : ""}`} />
-          <span className="text-sm font-medium capitalize">{status}</span>
-          {uptime && <span className="text-xs text-runway-muted font-mono">{uptime}</span>}
-          <div className="ml-auto flex items-center gap-3 text-xs text-runway-muted">
-            <span>{project.runtime}</span>
-            <span>{project.entrypoint ?? "no entrypoint"}</span>
-          </div>
+        {/* Status cluster */}
+        <div className="flex items-center gap-2 ml-2">
+          <div
+            className={`w-2 h-2 rounded-full ${
+              STATUS_COLORS[status] ?? STATUS_COLORS.idle
+            } ${isRunning ? "animate-pulse-soft" : ""}`}
+          />
+          <span className="text-xs text-runway-text-secondary capitalize">
+            {status}
+          </span>
+          {uptime && (
+            <span className="text-xs font-mono text-runway-text-tertiary tabular-nums">
+              {uptime}
+            </span>
+          )}
         </div>
-
-        {/* Monitoring stats */}
-        <div className="flex gap-3">
-          <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface text-center">
-            <div className="text-lg font-semibold tabular-nums">{project.run_count}</div>
-            <div className="text-xs text-runway-muted">Runs</div>
-          </div>
-          <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface text-center">
-            <div className="text-lg font-semibold">{timeAgo(project.last_run_at)}</div>
-            <div className="text-xs text-runway-muted">Last Run</div>
-          </div>
-          <div className="flex-1 px-3 py-2 rounded-lg bg-runway-surface text-center">
-            <div className="text-lg font-semibold tabular-nums">{project.last_exit_code !== null ? project.last_exit_code : "--"}</div>
-            <div className="text-xs text-runway-muted">Exit Code</div>
-          </div>
-        </div>
-
-        {/* Notification toggle */}
-        <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-runway-surface">
-          <div className="flex items-center gap-2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-runway-muted">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
-            </svg>
-            <span className="text-xs text-runway-text">Notifications</span>
-          </div>
-          <button
-            onClick={handleToggleNotify}
-            className={`relative w-8 h-5 rounded-full transition-colors ${
-              notifyEnabled ? "bg-runway-accent" : "bg-runway-border"
-            }`}
-          >
-            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              notifyEnabled ? "translate-x-3.5" : "translate-x-0.5"
-            }`} />
-          </button>
-        </div>
-
-        {/* Target selector */}
-        {targets.length > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-runway-muted">Target:</span>
-            <div className="flex gap-1.5">
-              <button onClick={() => { setSelectedTarget(null); setProjectTarget(projectId, null).catch(console.error); }}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                  selectedTarget === null ? "bg-runway-accent text-white" : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
-                }`}>
-                <div className="w-1.5 h-1.5 rounded-full bg-runway-success" />local
-              </button>
-              {targets.map((t) => (
-                <button key={t.id} onClick={() => { setSelectedTarget(t.id); setProjectTarget(projectId, t.id).catch(console.error); }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    selectedTarget === t.id ? "bg-runway-accent text-white" : "bg-runway-surface text-runway-muted border border-runway-border hover:border-runway-accent/30"
-                  }`}>
-                  <div className={`w-1.5 h-1.5 rounded-full ${t.status === "online" ? "bg-runway-success" : t.status === "offline" ? "bg-runway-error" : "bg-runway-muted"}`} />
-                  {t.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-400">{error}</div>
-        )}
 
         {/* Actions */}
-        <div className="flex gap-2">
-          <button onClick={handleRun} disabled={isRunning}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-runway-accent text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>Run
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleRun}
+            disabled={isRunning}
+            className="btn btn-primary"
+          >
+            <Play size={12} fill="currentColor" />
+            Run
           </button>
-          <button onClick={handleStop} disabled={!isRunning}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-runway-surface text-runway-text text-sm border border-runway-border hover:bg-runway-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>Stop
+          <button
+            onClick={handleStop}
+            disabled={!isRunning}
+            className="btn btn-secondary"
+          >
+            <Square size={12} fill="currentColor" />
+            Stop
           </button>
         </div>
+      </div>
 
-        {/* Schedules */}
-        <ScheduleSection projectId={projectId} />
+      {/* ── Toolbar ─────────────────────────────────────────────── */}
+      <div className="h-10 flex items-center px-5 gap-4 border-b border-runway-border-subtle shrink-0">
+        {/* Target dropdown */}
+        {targets.length > 0 && (
+          <TargetDropdown
+            targets={targets}
+            selectedTarget={selectedTarget}
+            onSelect={handleSelectTarget}
+          />
+        )}
 
-        {/* Execution History */}
-        <ExecutionHistory projectId={projectId} refreshKey={historyRefreshKey} />
+        {/* Inline stats */}
+        <div className="flex items-center gap-0 text-xs text-runway-text-secondary tabular-nums">
+          <span>{project.run_count} runs</span>
+          <span className="text-runway-text-tertiary mx-2">&middot;</span>
+          <span>{timeAgo(project.last_run_at)}</span>
+          <span className="text-runway-text-tertiary mx-2">&middot;</span>
+          <span className={exitCodeColor}>
+            exit {project.last_exit_code !== null ? project.last_exit_code : "--"}
+          </span>
+        </div>
 
-        {/* Logs / Code tabs */}
-        <div className="flex items-center gap-1 border-b border-runway-border">
+        {/* Panel toggles */}
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => togglePanel("schedule")}
+            className="toolbar-icon"
+            data-active={activePanel === "schedule"}
+            title="Schedules"
+          >
+            <Clock size={15} strokeWidth={1.75} />
+          </button>
+          <button
+            onClick={() => togglePanel("history")}
+            className="toolbar-icon"
+            data-active={activePanel === "history"}
+            title="History"
+          >
+            <History size={15} strokeWidth={1.75} />
+          </button>
+          <button
+            onClick={() => togglePanel("settings")}
+            className="toolbar-icon"
+            data-active={activePanel === "settings"}
+            title="Settings"
+          >
+            <Settings size={15} strokeWidth={1.75} />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Error banner ────────────────────────────────────────── */}
+      {error && (
+        <div className="px-5 py-2 bg-runway-error-bg border-b border-runway-error/20 flex items-center gap-2">
+          <span className="text-xs text-runway-error flex-1">{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-runway-error/60 hover:text-runway-error"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* ── Workspace ───────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-h-0 relative">
+        {/* Tab bar */}
+        <div className="workspace-tab-bar">
           <button
             onClick={() => setActiveTab("logs")}
-            className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === "logs"
-                ? "border-runway-accent text-runway-accent"
-                : "border-transparent text-runway-muted hover:text-runway-text"
-            }`}
+            className="workspace-tab"
+            data-active={activeTab === "logs"}
           >
-            Logs
+            Output
           </button>
           <button
             onClick={() => setActiveTab("code")}
-            className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === "code"
-                ? "border-runway-accent text-runway-accent"
-                : "border-transparent text-runway-muted hover:text-runway-text"
-            }`}
+            className="workspace-tab"
+            data-active={activeTab === "code"}
           >
             Code{fileDirty ? " *" : ""}
           </button>
         </div>
 
-        {activeTab === "logs" && (
-          <>
-            {logs.length === 0 && !isRunning ? (
-              <div className="flex-1 flex items-center justify-center rounded-lg bg-runway-surface border border-runway-border">
-                <div className="text-center">
-                  <div className="text-runway-muted text-sm">No logs yet</div>
-                  <div className="text-runway-muted/60 text-xs mt-1">Click Run to start the project</div>
+        {/* Tab content */}
+        <div className="flex-1 flex flex-col min-h-0">
+          {activeTab === "logs" && (
+            <>
+              {logs.length === 0 && !isRunning ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-runway-text-secondary text-sm">
+                      No output yet
+                    </div>
+                    <div className="text-runway-text-tertiary text-xs mt-1">
+                      Click Run to start the project
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <Terminal logs={logs} />
-            )}
-          </>
-        )}
+              ) : (
+                <Terminal logs={logs} flush />
+              )}
+            </>
+          )}
 
-        {activeTab === "code" && (
-          <div className="flex-1 flex flex-col min-h-0 rounded-lg bg-runway-surface border border-runway-border overflow-hidden">
-            {fileLoading ? (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-runway-muted text-sm">Loading...</div>
-              </div>
-            ) : fileContent === null ? (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <div className="text-runway-muted text-sm">No entrypoint file</div>
-                  <div className="text-runway-muted/60 text-xs mt-1">This project has no entrypoint to view</div>
+          {activeTab === "code" && (
+            <>
+              {fileLoading ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-runway-text-secondary text-sm">
+                    Loading...
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between px-3 py-1.5 border-b border-runway-border bg-runway-bg/50">
-                  <span className="text-[11px] text-runway-muted font-mono">
-                    {project.entrypoint}
-                  </span>
-                  <button
-                    onClick={handleSaveCode}
-                    disabled={!fileDirty}
-                    className="px-2.5 py-1 rounded text-[11px] font-medium bg-runway-accent text-white disabled:opacity-30 hover:opacity-90 transition-opacity"
-                  >
-                    Save
-                  </button>
+              ) : fileContent === null ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-runway-text-secondary text-sm">
+                      No entrypoint file
+                    </div>
+                    <div className="text-runway-text-tertiary text-xs mt-1">
+                      This project has no entrypoint to view
+                    </div>
+                  </div>
                 </div>
-                <textarea
-                  value={fileContent}
-                  onChange={(e) => {
-                    setFileContent(e.target.value);
-                    setFileDirty(true);
-                  }}
-                  onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-                      e.preventDefault();
-                      handleSaveCode();
-                    }
-                    if (e.key === "Tab") {
-                      e.preventDefault();
-                      const target = e.target as HTMLTextAreaElement;
-                      const start = target.selectionStart;
-                      const end = target.selectionEnd;
-                      const val = fileContent;
-                      setFileContent(val.substring(0, start) + "  " + val.substring(end));
+              ) : (
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="flex items-center justify-between px-5 py-1.5 border-b border-runway-border-subtle">
+                    <span className="text-[11px] text-runway-text-tertiary font-mono">
+                      {project.entrypoint}
+                    </span>
+                    {fileDirty && (
+                      <button
+                        onClick={handleSaveCode}
+                        className="btn btn-primary btn-sm"
+                      >
+                        Save
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    value={fileContent}
+                    onChange={(e) => {
+                      setFileContent(e.target.value);
                       setFileDirty(true);
-                      requestAnimationFrame(() => {
-                        target.selectionStart = target.selectionEnd = start + 2;
-                      });
-                    }
-                  }}
-                  spellCheck={false}
-                  className="flex-1 w-full p-3 bg-transparent text-sm font-mono text-runway-text resize-none focus:outline-none leading-relaxed"
-                />
-              </>
+                    }}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+                        e.preventDefault();
+                        handleSaveCode();
+                      }
+                      if (e.key === "Tab") {
+                        e.preventDefault();
+                        const target = e.target as HTMLTextAreaElement;
+                        const start = target.selectionStart;
+                        const end = target.selectionEnd;
+                        const val = fileContent;
+                        setFileContent(
+                          val.substring(0, start) + "  " + val.substring(end)
+                        );
+                        setFileDirty(true);
+                        requestAnimationFrame(() => {
+                          target.selectionStart = target.selectionEnd = start + 2;
+                        });
+                      }
+                    }}
+                    spellCheck={false}
+                    className="flex-1 w-full p-4 bg-transparent text-sm font-mono text-runway-text-primary resize-none focus:outline-none leading-relaxed"
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* ── Side Panel ────────────────────────────────────────── */}
+        {activePanel && (
+          <div className="side-panel">
+            <div className="side-panel-header">
+              <span>
+                {activePanel === "schedule" && "Schedules"}
+                {activePanel === "history" && "History"}
+                {activePanel === "settings" && "Settings"}
+              </span>
+              <button
+                onClick={() => setActivePanel(null)}
+                className="text-runway-text-tertiary hover:text-runway-text-primary transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {activePanel === "schedule" && (
+              <SchedulePanel projectId={projectId} />
+            )}
+            {activePanel === "history" && (
+              <HistoryPanel
+                projectId={projectId}
+                refreshKey={historyRefreshKey}
+              />
+            )}
+            {activePanel === "settings" && (
+              <SettingsPanel
+                project={project}
+                notifyEnabled={notifyEnabled}
+                onToggleNotify={handleToggleNotify}
+                onDelete={handleDelete}
+              />
             )}
           </div>
         )}

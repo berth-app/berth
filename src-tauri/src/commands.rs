@@ -835,3 +835,237 @@ pub fn import_file(file_path: String) -> Result<Project, String> {
 
     Ok(project)
 }
+
+// --- Agent upgrade commands ---
+
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Clone, Serialize)]
+pub struct UpgradeCheck {
+    pub available: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub arch: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct UpgradeResult {
+    pub target_id: String,
+    pub target_name: String,
+    pub success: bool,
+    pub new_version: String,
+    pub message: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct RollbackResult {
+    pub success: bool,
+    pub restored_version: String,
+    pub message: String,
+}
+
+#[tauri::command]
+pub fn check_agent_upgrade(id: String) -> Result<UpgradeCheck, String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    let target = targets
+        .iter()
+        .find(|t| t.id == uuid)
+        .ok_or_else(|| format!("Target {} not found", id))?;
+
+    let current_version = target.agent_version.clone().unwrap_or_default();
+    let latest_version = APP_VERSION.to_string();
+
+    let available = if current_version.is_empty() {
+        false
+    } else {
+        match (
+            semver::Version::parse(&current_version),
+            semver::Version::parse(&latest_version),
+        ) {
+            (Ok(current), Ok(latest)) => current < latest,
+            _ => false,
+        }
+    };
+
+    Ok(UpgradeCheck {
+        available,
+        current_version,
+        latest_version,
+        arch: None,
+    })
+}
+
+/// Download (or load from cache/settings) the agent binary for the given version and arch.
+async fn get_agent_binary(version: &str, arch: &str) -> Result<Vec<u8>, String> {
+    // Check if user has configured a local binary path in settings
+    let store = get_store()?;
+    if let Ok(settings) = store.get_all_settings() {
+        if let Some(binary_path) = settings.get("agent_binary_path") {
+            if !binary_path.is_empty() {
+                return std::fs::read(binary_path)
+                    .map_err(|e| format!("Failed to read agent binary from {binary_path}: {e}"));
+            }
+        }
+    }
+
+    // Check local cache
+    let cache_dir = dirs_next::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("com.runway.app")
+        .join("agent-binaries")
+        .join(format!("v{version}"));
+
+    let binary_name = format!("runway-agent-linux-{arch}");
+    let cached_path = cache_dir.join(&binary_name);
+
+    if cached_path.exists() {
+        return std::fs::read(&cached_path)
+            .map_err(|e| format!("Failed to read cached binary: {e}"));
+    }
+
+    // Download from GitHub Releases
+    let download_url = format!(
+        "https://github.com/carlosinfantes/runway/releases/download/v{version}/{binary_name}"
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download agent binary: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Download failed: HTTP {} from {download_url}",
+            response.status()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read download response: {e}"))?;
+
+    // Cache for future use
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("Failed to create cache directory: {e}"))?;
+    std::fs::write(&cached_path, &bytes)
+        .map_err(|e| format!("Failed to cache binary: {e}"))?;
+
+    Ok(bytes.to_vec())
+}
+
+#[tauri::command]
+pub async fn upgrade_agent(id: String) -> Result<UpgradeResult, String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+    let target = targets
+        .iter()
+        .find(|t| t.id == uuid)
+        .ok_or_else(|| format!("Target {} not found", id))?;
+
+    let target_name = target.name.clone();
+    let target_id = target.id.to_string();
+
+    // Get agent arch via health check
+    let client = get_agent_client(Some(&id)).await?;
+    let health = client.health().await.map_err(|e| format!("Health check failed: {e}"))?;
+
+    let arch = health.arch.as_deref().unwrap_or("x86_64");
+
+    // Get the binary
+    let binary_data = get_agent_binary(APP_VERSION, arch).await?;
+
+    // Send upgrade
+    match client.upgrade(&binary_data).await {
+        Ok((success, new_version, message)) => {
+            if success {
+                let _ = store.update_target_status(
+                    uuid,
+                    runway_core::target::TargetStatus::Online,
+                    Some(&new_version),
+                );
+            }
+            Ok(UpgradeResult {
+                target_id,
+                target_name,
+                success,
+                new_version,
+                message,
+            })
+        }
+        Err(e) => Ok(UpgradeResult {
+            target_id,
+            target_name,
+            success: false,
+            new_version: String::new(),
+            message: format!("Upgrade failed: {e}"),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn rollback_agent(id: String) -> Result<RollbackResult, String> {
+    let client = get_agent_client(Some(&id)).await?;
+
+    match client.rollback().await {
+        Ok((success, restored_version, message)) => {
+            if success {
+                let store = get_store()?;
+                let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+                let _ = store.update_target_status(
+                    uuid,
+                    runway_core::target::TargetStatus::Online,
+                    Some(&restored_version),
+                );
+            }
+            Ok(RollbackResult {
+                success,
+                restored_version,
+                message,
+            })
+        }
+        Err(e) => Err(format!("Rollback failed: {e}")),
+    }
+}
+
+#[tauri::command]
+pub async fn upgrade_all_agents() -> Result<Vec<UpgradeResult>, String> {
+    let store = get_store()?;
+    let targets = store.list_targets().map_err(|e| e.to_string())?;
+
+    let latest = semver::Version::parse(APP_VERSION)
+        .map_err(|e| format!("Invalid app version: {e}"))?;
+
+    let mut results = Vec::new();
+
+    for target in &targets {
+        let _current = match &target.agent_version {
+            Some(v) => match semver::Version::parse(v) {
+                Ok(ver) if ver < latest => ver,
+                _ => continue,
+            },
+            None => continue,
+        };
+
+        let id = target.id.to_string();
+        match upgrade_agent(id).await {
+            Ok(result) => results.push(result),
+            Err(e) => results.push(UpgradeResult {
+                target_id: target.id.to_string(),
+                target_name: target.name.clone(),
+                success: false,
+                new_version: String::new(),
+                message: e,
+            }),
+        }
+    }
+
+    Ok(results)
+}

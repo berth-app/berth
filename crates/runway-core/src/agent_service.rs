@@ -557,6 +557,7 @@ impl AgentService for AgentServiceImpl {
             container_ready: self.podman_version.is_some(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
+            probation_status: String::new(),
         }))
     }
 
@@ -634,6 +635,15 @@ impl AgentService for AgentServiceImpl {
     ) -> Result<Response<UpgradeResponse>, Status> {
         Err(Status::unimplemented(
             "Upgrade is only available on remote persistent agents",
+        ))
+    }
+
+    async fn rollback(
+        &self,
+        _request: Request<RollbackRequest>,
+    ) -> Result<Response<RollbackResponse>, Status> {
+        Err(Status::unimplemented(
+            "Rollback is only available on remote persistent agents",
         ))
     }
 }

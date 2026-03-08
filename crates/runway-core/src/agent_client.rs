@@ -24,6 +24,7 @@ pub struct AgentHealth {
     pub container_ready: bool,
     pub os: Option<String>,
     pub arch: Option<String>,
+    pub probation_status: String,
 }
 
 /// Execution history entry from a remote agent.
@@ -299,6 +300,7 @@ impl AgentTransport for AgentClient {
             container_ready: response.container_ready,
             os,
             arch,
+            probation_status: response.probation_status,
         })
     }
 
@@ -564,5 +566,17 @@ impl AgentTransport for AgentClient {
             .into_inner();
 
         Ok((response.success, response.new_version, response.message))
+    }
+
+    async fn rollback(&self) -> Result<(bool, String, String)> {
+        let response = self
+            .inner
+            .clone()
+            .rollback(proto::RollbackRequest {})
+            .await
+            .context("Rollback RPC failed")?
+            .into_inner();
+
+        Ok((response.success, response.restored_version, response.message))
     }
 }

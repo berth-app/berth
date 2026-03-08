@@ -5,6 +5,8 @@ mod nats_publisher;
 mod persistent_service;
 mod service;
 
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::Parser;
@@ -46,6 +48,93 @@ struct Cli {
     nats_agent_id: Option<String>,
 }
 
+/// Probation health check: TCP-connect to our own gRPC port repeatedly
+/// to verify the server is actually accepting connections.
+/// Returns true if probation passed, false if it should rollback.
+async fn run_probation(addr: SocketAddr, runway_dir: &Path) -> bool {
+    // Wait for the gRPC server to start
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+    let mut successes = 0;
+    let required = 3;
+    let max_checks = 6; // 6 checks × 5s = 30s window
+
+    for i in 0..max_checks {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(_) => {
+                successes += 1;
+                tracing::info!("Probation check {}/{}: OK ({}/{})", i + 1, max_checks, successes, required);
+                if successes >= required {
+                    // Probation passed
+                    let _ = std::fs::remove_file(runway_dir.join(".probation"));
+                    let _ = std::fs::remove_file(runway_dir.join(".rollback-count"));
+                    let _ = std::fs::write(
+                        runway_dir.join(".probation-passed"),
+                        serde_json::json!({
+                            "passed_at": chrono::Utc::now().to_rfc3339(),
+                            "version": env!("CARGO_PKG_VERSION"),
+                            "checks": successes,
+                        }).to_string(),
+                    );
+                    tracing::info!("Probation passed after {} successful checks", successes);
+                    return true;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Probation check {}/{}: FAIL ({})", i + 1, max_checks, e);
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+
+    tracing::error!("Probation failed: only {}/{} checks passed", successes, required);
+    false
+}
+
+/// Self-rollback: copy the backup binary over the current exe and clean up.
+fn do_self_rollback(runway_dir: &Path) {
+    let backup_path = runway_dir.join("runway-agent.old");
+    let count_file = runway_dir.join(".rollback-count");
+    let probation_file = runway_dir.join(".probation");
+
+    let count: u32 = std::fs::read_to_string(&count_file)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+
+    if count >= 2 {
+        tracing::error!("Rollback loop detected (count={}), not rolling back again", count);
+        let _ = std::fs::remove_file(&probation_file);
+        let _ = std::fs::remove_file(&count_file);
+        return;
+    }
+
+    let current_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Cannot determine current exe for rollback: {e}");
+            return;
+        }
+    };
+
+    if !backup_path.exists() {
+        tracing::error!("No backup binary at {} — cannot rollback", backup_path.display());
+        let _ = std::fs::remove_file(&probation_file);
+        return;
+    }
+
+    match std::fs::copy(&backup_path, &current_exe) {
+        Ok(_) => {
+            tracing::warn!("Self-rollback: restored backup binary");
+            let _ = std::fs::write(&count_file, format!("{}", count + 1));
+            let _ = std::fs::remove_file(&probation_file);
+        }
+        Err(e) => {
+            tracing::error!("Self-rollback failed: {e}");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -59,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Open agent-side SQLite store
     let db_dir = dirs_next::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".runway");
     std::fs::create_dir_all(&db_dir)?;
     let db_path = db_dir.join("agent.db");
@@ -151,23 +240,78 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let addr = if cli.listen_all {
+    let addr: SocketAddr = if cli.listen_all {
         format!("0.0.0.0:{}", cli.port)
     } else {
         format!("127.0.0.1:{}", cli.port)
-    };
-
-    let addr = addr.parse()?;
+    }
+    .parse()?;
 
     tracing::info!("Runway agent listening on {} (persistent mode)", addr);
     if nats_publisher.is_some() {
         tracing::info!("NATS relay enabled");
     }
 
-    Server::builder()
-        .add_service(AgentServiceServer::from_arc(service))
-        .serve(addr)
-        .await?;
+    // Check probation state
+    let runway_dir = db_dir.clone(); // ~/.runway
+    let probation_file = runway_dir.join(".probation");
+    let backup_path = runway_dir.join("runway-agent.old");
+    let in_probation = probation_file.exists() && backup_path.exists();
+
+    if in_probation {
+        tracing::info!("Probation mode active — running health checks for 30s");
+    } else {
+        // Not in probation — check for post-upgrade/rollback status from previous run
+        service.check_post_upgrade_status().await;
+    }
+
+    // Spawn gRPC server as a task (non-blocking)
+    let server_service = service.clone();
+    let server_handle = tokio::spawn(async move {
+        Server::builder()
+            .add_service(AgentServiceServer::from_arc(server_service))
+            .serve(addr)
+            .await
+    });
+
+    if in_probation {
+        let probation_dir = runway_dir.clone();
+        let probation_handle = tokio::spawn(async move {
+            run_probation(addr, &probation_dir).await
+        });
+
+        tokio::select! {
+            server_result = server_handle => {
+                // Server crashed during probation
+                tracing::error!("gRPC server exited during probation: {:?}", server_result);
+                do_self_rollback(&runway_dir);
+                std::process::exit(42);
+            }
+            probation_result = probation_handle => {
+                match probation_result {
+                    Ok(true) => {
+                        tracing::info!("Probation passed, running normally");
+                        // Server is already running in background, wait forever
+                        // (server_handle was moved into select, so we just loop)
+                        tokio::signal::ctrl_c().await.ok();
+                    }
+                    Ok(false) => {
+                        tracing::error!("Probation failed, self-rolling back");
+                        do_self_rollback(&runway_dir);
+                        std::process::exit(42);
+                    }
+                    Err(e) => {
+                        tracing::error!("Probation task panicked: {e}");
+                        do_self_rollback(&runway_dir);
+                        std::process::exit(42);
+                    }
+                }
+            }
+        }
+    } else {
+        // Normal mode — just await the server
+        server_handle.await??;
+    }
 
     Ok(())
 }

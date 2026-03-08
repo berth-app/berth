@@ -79,6 +79,18 @@ impl PersistentAgentService {
     // --- Core logic methods (shared between gRPC and NATS handlers) ---
 
     pub fn do_health(&self) -> HealthInfo {
+        let runway_dir = dirs_next::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".runway");
+
+        let probation_status = if runway_dir.join(".probation").exists() {
+            "in_probation".into()
+        } else if runway_dir.join(".rollback-count").exists() {
+            "rolled_back".into()
+        } else {
+            String::new()
+        };
+
         HealthInfo {
             version: env!("CARGO_PKG_VERSION").into(),
             status: "healthy".into(),
@@ -87,6 +99,7 @@ impl PersistentAgentService {
             container_ready: self.podman_version.is_some(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
+            probation_status,
         }
     }
 
@@ -538,6 +551,200 @@ impl PersistentAgentService {
             next_run_at: s.next_run_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
         }).collect())
     }
+
+    pub async fn do_upgrade_from_bytes(&self, data: Vec<u8>) -> Result<(bool, String, String), String> {
+        let runway_dir = dirs_next::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".runway");
+
+        let upgrade_path = runway_dir.join("runway-agent.new");
+        let backup_path = runway_dir.join("runway-agent.old");
+
+        if data.is_empty() {
+            return Err("No upgrade data received".into());
+        }
+
+        tracing::info!("Received upgrade binary: {} bytes", data.len());
+
+        // Write to temp file
+        std::fs::write(&upgrade_path, &data)
+            .map_err(|e| format!("Failed to write upgrade binary: {e}"))?;
+
+        // Make executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&upgrade_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to chmod: {e}"))?;
+        }
+
+        // Verify the new binary
+        let verify = std::process::Command::new(&upgrade_path)
+            .arg("--version")
+            .output();
+
+        match verify {
+            Ok(output) if output.status.success() => {
+                let new_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                tracing::info!("Verified new agent version: {new_version}");
+
+                let current_exe = std::env::current_exe()
+                    .map_err(|e| format!("Failed to get current exe path: {e}"))?;
+
+                // Backup current binary
+                if let Err(e) = std::fs::copy(&current_exe, &backup_path) {
+                    tracing::warn!("Failed to backup current binary: {e}");
+                }
+
+                // Replace current binary
+                std::fs::rename(&upgrade_path, &current_exe)
+                    .map_err(|e| format!("Failed to replace binary: {e}. Backup at {}", backup_path.display()))?;
+
+                // Emit upgrade event
+                let event_data = serde_json::json!({
+                    "old_version": env!("CARGO_PKG_VERSION"),
+                    "new_version": &new_version,
+                }).to_string();
+                {
+                    let store = self.store.lock().await;
+                    let _ = store.insert_event("agent_upgraded", None, None, &event_data);
+                }
+                nats_publisher::maybe_publish_event(&self.nats, "agent_upgraded", None, None, &event_data).await;
+
+                // Write probation marker so the new binary enters probation mode
+                let probation_file = runway_dir.join(".probation");
+                let _ = std::fs::write(&probation_file, serde_json::json!({
+                    "old_version": env!("CARGO_PKG_VERSION"),
+                    "new_version": &new_version,
+                    "upgraded_at": chrono::Utc::now().to_rfc3339(),
+                }).to_string());
+                // Clear any previous rollback count
+                let _ = std::fs::remove_file(runway_dir.join(".rollback-count"));
+
+                // Schedule restart via systemd (after response is sent)
+                tokio::spawn(async {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    let _ = std::process::Command::new("systemctl")
+                        .args(["restart", "runway-agent"])
+                        .spawn();
+                });
+
+                Ok((true, new_version, "Upgrade successful, restarting in probation mode...".into()))
+            }
+            Ok(output) => {
+                let _ = std::fs::remove_file(&upgrade_path);
+                Err(format!("New binary verification failed: {}", String::from_utf8_lossy(&output.stderr)))
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&upgrade_path);
+                Err(format!("Failed to verify new binary: {e}"))
+            }
+        }
+    }
+
+    /// Called at startup (when not in probation) to check if a previous
+    /// probation passed or if the agent was auto-rolled-back.
+    pub async fn check_post_upgrade_status(&self) {
+        let runway_dir = dirs_next::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".runway");
+
+        let passed_file = runway_dir.join(".probation-passed");
+        let rollback_count_file = runway_dir.join(".rollback-count");
+
+        // Probation passed in a previous run — emit verification event
+        if passed_file.exists() {
+            if let Ok(data) = std::fs::read_to_string(&passed_file) {
+                tracing::info!("Post-upgrade verification: probation passed");
+                let event_data = serde_json::json!({
+                    "status": "verified",
+                    "details": data,
+                }).to_string();
+                {
+                    let store = self.store.lock().await;
+                    let _ = store.insert_event("agent_upgrade_verified", None, None, &event_data);
+                }
+                nats_publisher::maybe_publish_event(&self.nats, "agent_upgrade_verified", None, None, &event_data).await;
+            }
+            let _ = std::fs::remove_file(&passed_file);
+        }
+
+        // Auto-rollback happened — emit rollback event so desktop knows
+        if rollback_count_file.exists() {
+            if let Ok(count_str) = std::fs::read_to_string(&rollback_count_file) {
+                tracing::warn!("Agent was auto-rolled-back (count={})", count_str.trim());
+                let event_data = serde_json::json!({
+                    "status": "auto_rolled_back",
+                    "rollback_count": count_str.trim(),
+                    "version": env!("CARGO_PKG_VERSION"),
+                }).to_string();
+                {
+                    let store = self.store.lock().await;
+                    let _ = store.insert_event("agent_auto_rollback", None, None, &event_data);
+                }
+                nats_publisher::maybe_publish_event(&self.nats, "agent_auto_rollback", None, None, &event_data).await;
+            }
+            let _ = std::fs::remove_file(&rollback_count_file);
+        }
+    }
+
+    pub async fn do_rollback(&self) -> Result<(bool, String, String), String> {
+        let runway_dir = dirs_next::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".runway");
+
+        let backup_path = runway_dir.join("runway-agent.old");
+
+        if !backup_path.exists() {
+            return Err("No backup available — no previous version to rollback to".into());
+        }
+
+        // Verify the backup binary
+        let verify = std::process::Command::new(&backup_path)
+            .arg("--version")
+            .output();
+
+        match verify {
+            Ok(output) if output.status.success() => {
+                let restored_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                tracing::info!("Verified backup agent version: {restored_version}");
+
+                let current_exe = std::env::current_exe()
+                    .map_err(|e| format!("Failed to get current exe path: {e}"))?;
+
+                // Swap backup to current (backup is consumed)
+                std::fs::rename(&backup_path, &current_exe)
+                    .map_err(|e| format!("Failed to restore backup: {e}"))?;
+
+                // Emit rollback event
+                let event_data = serde_json::json!({
+                    "from_version": env!("CARGO_PKG_VERSION"),
+                    "restored_version": &restored_version,
+                }).to_string();
+                {
+                    let store = self.store.lock().await;
+                    let _ = store.insert_event("agent_rollback", None, None, &event_data);
+                }
+                nats_publisher::maybe_publish_event(&self.nats, "agent_rollback", None, None, &event_data).await;
+
+                // Schedule restart via systemd
+                tokio::spawn(async {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    let _ = std::process::Command::new("systemctl")
+                        .args(["restart", "runway-agent"])
+                        .spawn();
+                });
+
+                Ok((true, restored_version, "Rollback successful, restarting...".into()))
+            }
+            Ok(output) => {
+                Err(format!("Backup binary verification failed: {}", String::from_utf8_lossy(&output.stderr)))
+            }
+            Err(e) => {
+                Err(format!("Failed to verify backup binary: {e}"))
+            }
+        }
+    }
 }
 
 pub struct HealthInfo {
@@ -548,6 +755,7 @@ pub struct HealthInfo {
     pub container_ready: bool,
     pub os: String,
     pub arch: String,
+    pub probation_status: String,
 }
 
 pub struct StatusInfo {
@@ -1210,14 +1418,16 @@ impl AgentService for PersistentAgentService {
         &self,
         _request: Request<HealthRequest>,
     ) -> Result<Response<HealthResponse>, Status> {
+        let h = self.do_health();
         Ok(Response::new(HealthResponse {
-            agent_version: env!("CARGO_PKG_VERSION").into(),
-            status: "healthy".into(),
-            uptime_seconds: self.start_time.elapsed().as_secs(),
-            podman_version: self.podman_version.clone().unwrap_or_default(),
-            container_ready: self.podman_version.is_some(),
-            os: std::env::consts::OS.into(),
-            arch: std::env::consts::ARCH.into(),
+            agent_version: h.version,
+            status: h.status,
+            uptime_seconds: h.uptime_seconds,
+            podman_version: h.podman_version,
+            container_ready: h.container_ready,
+            os: h.os,
+            arch: h.arch,
+            probation_status: h.probation_status,
         }))
     }
 
@@ -1413,117 +1623,33 @@ impl AgentService for PersistentAgentService {
     ) -> Result<Response<UpgradeResponse>, Status> {
         let mut stream = request.into_inner();
 
-        let upgrade_path = dirs_next::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".runway/runway-agent.new");
-
-        let backup_path = dirs_next::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".runway/runway-agent.old");
-
         // Receive binary chunks
         let mut data = Vec::new();
-        let mut total_size = 0u64;
-
         while let Some(chunk) = stream
             .message()
             .await
             .map_err(|e| Status::internal(format!("Failed to receive upgrade chunk: {e}")))?
         {
-            if chunk.total_size > 0 {
-                total_size = chunk.total_size;
-            }
             data.extend_from_slice(&chunk.data);
         }
 
-        if data.is_empty() {
-            return Err(Status::invalid_argument("No upgrade data received"));
-        }
-
-        tracing::info!(
-            "Received upgrade binary: {} bytes (expected {})",
-            data.len(),
-            total_size
-        );
-
-        // Write to temp file
-        std::fs::write(&upgrade_path, &data).map_err(|e| {
-            Status::internal(format!("Failed to write upgrade binary: {e}"))
-        })?;
-
-        // Make executable
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&upgrade_path, std::fs::Permissions::from_mode(0o755))
-                .map_err(|e| Status::internal(format!("Failed to chmod: {e}")))?;
-        }
-
-        // Verify the new binary
-        let verify = std::process::Command::new(&upgrade_path)
-            .arg("--version")
-            .output();
-
-        match verify {
-            Ok(output) if output.status.success() => {
-                let new_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                tracing::info!("Verified new agent version: {new_version}");
-
-                // Get current binary path
-                let current_exe = std::env::current_exe().map_err(|e| {
-                    Status::internal(format!("Failed to get current exe path: {e}"))
-                })?;
-
-                // Backup current binary
-                if let Err(e) = std::fs::copy(&current_exe, &backup_path) {
-                    tracing::warn!("Failed to backup current binary: {e}");
-                }
-
-                // Replace current binary
-                std::fs::rename(&upgrade_path, &current_exe).map_err(|e| {
-                    Status::internal(format!(
-                        "Failed to replace binary: {e}. Old binary backed up at {}",
-                        backup_path.display()
-                    ))
-                })?;
-
-                // Emit upgrade event
-                let data = serde_json::json!({
-                    "old_version": env!("CARGO_PKG_VERSION"),
-                    "new_version": &new_version,
-                }).to_string();
-                {
-                    let store = self.store.lock().await;
-                    let _ = store.insert_event(
-                        "agent_upgraded",
-                        None,
-                        None,
-                        &data,
-                    );
-                }
-                nats_publisher::maybe_publish_event(&self.nats, "agent_upgraded", None, None, &data).await;
-
-                // Schedule restart via systemd (after response is sent)
-                tokio::spawn(async {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    let _ = std::process::Command::new("systemctl")
-                        .args(["restart", "runway-agent"])
-                        .spawn();
-                });
-
-                Ok(Response::new(UpgradeResponse {
-                    success: true,
-                    new_version,
-                    message: "Upgrade successful, restarting...".into(),
-                }))
+        match self.do_upgrade_from_bytes(data).await {
+            Ok((success, new_version, message)) => {
+                Ok(Response::new(UpgradeResponse { success, new_version, message }))
             }
-            Ok(output) => Err(Status::internal(format!(
-                "New binary verification failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))),
-            Err(e) => Err(Status::internal(format!(
-                "Failed to verify new binary: {e}"
-            ))),
+            Err(e) => Err(Status::internal(e)),
+        }
+    }
+
+    async fn rollback(
+        &self,
+        _request: Request<RollbackRequest>,
+    ) -> Result<Response<RollbackResponse>, Status> {
+        match self.do_rollback().await {
+            Ok((success, restored_version, message)) => {
+                Ok(Response::new(RollbackResponse { success, restored_version, message }))
+            }
+            Err(e) => Err(Status::internal(e)),
         }
     }
 }

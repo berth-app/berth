@@ -50,6 +50,9 @@ service AgentService {
 
   // Upgrade the agent binary (client-streaming)
   rpc Upgrade(stream UpgradeChunk) returns (UpgradeResponse);
+
+  // Rollback to previous agent binary
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
 }
 
 // Deploy source code and build container image or setup environment
@@ -142,6 +145,7 @@ message HealthResponse {
   bool container_ready = 5;       // true if podman is available
   string os = 6;                  // e.g. "linux", "macos"
   string arch = 7;                // e.g. "x86_64", "aarch64"
+  string probation_status = 8;    // "", "in_probation", "passed", "rolled_back"
 }
 
 // --- Persistent agent messages ---
@@ -241,5 +245,13 @@ message UpgradeChunk {
 message UpgradeResponse {
   bool success = 1;
   string new_version = 2;
+  string message = 3;
+}
+
+message RollbackRequest {}
+
+message RollbackResponse {
+  bool success = 1;
+  string restored_version = 2;
   string message = 3;
 }

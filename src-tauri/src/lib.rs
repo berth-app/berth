@@ -383,6 +383,10 @@ pub fn run() {
             set_project_target,
             read_project_file,
             write_project_file,
+            check_agent_upgrade,
+            upgrade_agent,
+            rollback_agent,
+            upgrade_all_agents,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Runway");
