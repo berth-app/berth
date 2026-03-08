@@ -1,0 +1,124 @@
+---
+# Decision Record Format (DRF) - Naming: Runway → Berth
+# https://github.com/reasoning-formats/drf
+
+type: decision-record
+version: "1.0"
+id: DRF-011
+title: "Rename from Runway to Berth"
+date: "2026-03-08"
+status: approved
+decision_maker: founder
+participants:
+  - claude-opus-4-6 (competitive research + naming analysis)
+
+context: |
+  "Runway" has critical naming conflicts for a public launch:
+  - RunwayML: $3B AI video company, active trademark enforcement, owns runway.com
+  - runway.team: Mobile release management platform (same product category)
+  - rackspace/runway: Infrastructure deployment tool, owns PyPI "runway" package
+  - runwaylab/runway: Deployment controller on GitHub
+  - GitLab Runway: Internal infrastructure team
+  - "runway" taken on both npm AND crates.io
+
+  SEO for "runway" is impossible — would compete against a $3B brand.
+  Trademark risk is real — RunwayML is in the same AI tools space.
+
+decision:
+  new_name: "Berth"
+  domain: "berth.sh"
+  tagline: "Where your code docks and runs."
+
+  rationale: |
+    - Concrete, grounded metaphor (nautical: where a ship docks)
+    - 5 characters, easy CLI: `berth deploy`, `berth run`
+    - Available on crates.io, npm, Homebrew (all clear)
+    - No US trademark in software classes (9 or 42)
+    - Domain berth.sh follows brew.sh / bun.sh pattern for CLI-first tools
+    - Docker proved generic-word-recontextualization works brilliantly
+
+  known_tradeoffs:
+    - PyPI "berth" is taken (abandoned Docker package builder) — acceptable, we're Rust-native
+    - ~4 small GitHub repos named "berth" (container management tools, all low-profile)
+    - "berth"/"birth" verbal confusion — minor, irrelevant in text/CLI
+    - berth.dev is parked (registered on Namecheap) — using berth.sh instead
+    - SEO will initially show nautical results — need "berth deploy" or "berth dev tool" to rank
+
+  rejected_alternatives:
+    - Runway: Too many conflicts (see context above)
+    - Volant: Clean availability but too abstract, didn't resonate
+    - Apron: npm taken, UK fintech "Apron" exists
+    - Hangar: crates.io AND npm taken, multiple software companies use name
+    - FlightDeck: 5+ existing products (Arctir, thoughtbot, Signiant, etc.)
+    - FlyDeck: Could be confused with FlightDeck in searches
+    - Jetway: Clean but less resonant than Berth
+    - CodeDrop: Multiple existing tools and products
+    - Launchway: launchway.dev taken (SaaS boilerplate)
+    - RunKit: Well-known Node.js prototyping tool
+
+domain_analysis:
+  berth.sh:
+    status: available
+    price: "$47/yr (Porkbun)"
+    rationale: "Same pattern as brew.sh, bun.sh. CLI-first developer branding."
+  berth.dev:
+    status: "registered (parked on Namecheap)"
+    notes: "Could try to purchase from owner as fallback"
+  berth.app:
+    status: "registered (berthapp.com marina management)"
+  berth.io:
+    status: "registered (parked/for-sale)"
+  getberth.dev:
+    status: available
+    price: "$13/yr"
+    notes: "Fallback option"
+  berth.run:
+    status: available
+    price: "$22/yr"
+  useberth.dev:
+    status: available
+
+registry_availability:
+  crates_io: available
+  npm: available
+  homebrew: available
+  pypi: "taken (abandoned, FalconSocial Docker package builder)"
+
+rename_scope:
+  files_to_update:
+    - src-tauri/tauri.conf.json: "productName, identifier, window title"
+    - src-tauri/Cargo.toml: "package name"
+    - crates/runway-core/Cargo.toml: "package name → berth-core"
+    - crates/runway-agent/Cargo.toml: "package name → berth-agent"
+    - crates/runway-cli/Cargo.toml: "package name → berth-cli"
+    - crates/runway-mcp/Cargo.toml: "package name → berth-mcp"
+    - Cargo.toml: "workspace members"
+    - package.json: "name"
+    - README.md: "all references"
+    - CLAUDE.md: "all references"
+    - proto/runway.proto: "package name, service names"
+    - scripts/install-agent.sh: "binary names, paths"
+    - scripts/setup-nats.sh: "subject prefixes"
+    - .github/workflows/release-agent.yml: "binary names"
+    - .mcp.json: "tool names, binary path"
+    - docs/index.html: "all references"
+    - docs/remote-agent.html: "all references"
+
+  code_changes:
+    - "MCP tool prefixes: runway_* → berth_*"
+    - "NATS subjects: runway.<agent_id>.* → berth.<agent_id>.*"
+    - "CLI binary: runway → berth"
+    - "Agent binary: runway-agent → berth-agent"
+    - "UDS socket: ~/.runway/agent.sock → ~/.berth/agent.sock"
+    - "Data dir: ~/.runway/ → ~/.berth/"
+    - "Agent DB: ~/.runway/agent.db → ~/.berth/agent.db"
+    - "Lockfile: ~/.runway/agent.lock → ~/.berth/agent.lock"
+    - "Tauri data dir references"
+    - "systemd service: runway-agent.service → berth-agent.service"
+
+  directories_to_rename:
+    - "crates/runway-core → crates/berth-core"
+    - "crates/runway-agent → crates/berth-agent"
+    - "crates/runway-cli → crates/berth-cli"
+    - "crates/runway-mcp → crates/berth-mcp"
+    - "Note: src-tauri stays as-is (Tauri convention)"

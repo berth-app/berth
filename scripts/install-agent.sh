@@ -243,6 +243,8 @@ install_service() {
 Description=Runway Deployment Agent
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=120
 
 [Service]
 Type=simple
@@ -260,9 +262,6 @@ RestartSec=5
 # Exit code 42 = intentional upgrade/rollback restart.
 # Treated as success so it doesn't count toward StartLimitBurst.
 SuccessExitStatus=42
-
-StartLimitBurst=5
-StartLimitIntervalSec=120
 
 # Security hardening
 NoNewPrivileges=true
