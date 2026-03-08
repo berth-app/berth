@@ -48,6 +48,12 @@ pub struct PersistentAgentService {
 }
 
 impl PersistentAgentService {
+    fn runway_dir() -> PathBuf {
+        dirs_next::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".runway")
+    }
+
     pub fn new(store: Arc<Mutex<AgentStore>>, nats: Option<Arc<NatsPublisher>>) -> Self {
         let deploys_dir = dirs_next::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
@@ -553,12 +559,11 @@ impl PersistentAgentService {
     }
 
     pub async fn do_upgrade_from_bytes(&self, data: Vec<u8>) -> Result<(bool, String, String), String> {
-        let runway_dir = dirs_next::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".runway");
-
-        let upgrade_path = runway_dir.join("runway-agent.new");
-        let backup_path = runway_dir.join("runway-agent.old");
+        let runway_dir = Self::runway_dir();
+        let bin_dir = runway_dir.join("bin");
+        let active_path = bin_dir.join("runway-agent");
+        let staging_path = bin_dir.join("runway-agent.new");
+        let backup_path = bin_dir.join("runway-agent.old");
 
         if data.is_empty() {
             return Err("No upgrade data received".into());
@@ -566,20 +571,22 @@ impl PersistentAgentService {
 
         tracing::info!("Received upgrade binary: {} bytes", data.len());
 
-        // Write to temp file
-        std::fs::write(&upgrade_path, &data)
-            .map_err(|e| format!("Failed to write upgrade binary: {e}"))?;
+        // Write to staging file
+        std::fs::create_dir_all(&bin_dir)
+            .map_err(|e| format!("Failed to create bin dir: {e}"))?;
+        std::fs::write(&staging_path, &data)
+            .map_err(|e| format!("Failed to write staging binary: {e}"))?;
 
         // Make executable
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&upgrade_path, std::fs::Permissions::from_mode(0o755))
+            std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("Failed to chmod: {e}"))?;
         }
 
         // Verify the new binary
-        let verify = std::process::Command::new(&upgrade_path)
+        let verify = std::process::Command::new(&staging_path)
             .arg("--version")
             .output();
 
@@ -588,20 +595,16 @@ impl PersistentAgentService {
                 let new_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 tracing::info!("Verified new agent version: {new_version}");
 
-                let current_exe = std::env::current_exe()
-                    .map_err(|e| format!("Failed to get current exe path: {e}"))?;
-
-                // Backup current binary
-                if let Err(e) = std::fs::copy(&current_exe, &backup_path) {
-                    tracing::warn!("Failed to backup current binary: {e}");
+                // Backup: rename current → .old (remove stale backup first)
+                let _ = std::fs::remove_file(&backup_path);
+                if active_path.exists() {
+                    std::fs::rename(&active_path, &backup_path)
+                        .map_err(|e| format!("Failed to backup current binary: {e}"))?;
                 }
 
-                // Replace: delete running binary (Linux keeps the inode alive
-                // for the running process) then move the new one into place
-                std::fs::remove_file(&current_exe)
-                    .map_err(|e| format!("Failed to remove current binary: {e}. Backup at {}", backup_path.display()))?;
-                std::fs::rename(&upgrade_path, &current_exe)
-                    .map_err(|e| format!("Failed to install new binary: {e}. Backup at {}", backup_path.display()))?;
+                // Promote: rename .new → active (atomic on same filesystem)
+                std::fs::rename(&staging_path, &active_path)
+                    .map_err(|e| format!("Failed to promote new binary: {e}. Backup at {}", backup_path.display()))?;
 
                 // Emit upgrade event
                 let event_data = serde_json::json!({
@@ -614,37 +617,37 @@ impl PersistentAgentService {
                 }
                 nats_publisher::maybe_publish_event(&self.nats, "agent_upgraded", None, None, &event_data).await;
 
-                // Write probation marker so the new binary enters probation mode
-                let probation_file = runway_dir.join(".probation");
-                let _ = std::fs::write(&probation_file, serde_json::json!({
+                // Write markers for probation mode
+                let upgrade_meta = serde_json::json!({
                     "old_version": env!("CARGO_PKG_VERSION"),
                     "new_version": &new_version,
                     "upgraded_at": chrono::Utc::now().to_rfc3339(),
-                }).to_string());
-                // Clear any previous rollback count
+                }).to_string();
+                let _ = std::fs::write(runway_dir.join(".upgrading"), &upgrade_meta);
+                let _ = std::fs::write(runway_dir.join(".probation"), &upgrade_meta);
                 let _ = std::fs::remove_file(runway_dir.join(".rollback-count"));
 
-                // Flush NATS before restarting so the response is delivered
+                // Flush NATS before exiting so the response is delivered
                 if let Some(nats) = &self.nats {
                     let _ = nats.client().flush().await;
                 }
 
-                // Schedule restart via systemd (delay to let caller receive response)
+                // Exit with code 42 — systemd (SuccessExitStatus=42) will
+                // restart us with the new binary. No sudo/systemctl needed.
                 tokio::spawn(async {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                    let _ = std::process::Command::new("systemctl")
-                        .args(["restart", "runway-agent"])
-                        .spawn();
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    tracing::info!("Exiting for upgrade restart (exit code 42)");
+                    std::process::exit(42);
                 });
 
-                Ok((true, new_version, "Upgrade successful, restarting in probation mode...".into()))
+                Ok((true, new_version, "Upgrade successful, restarting...".into()))
             }
             Ok(output) => {
-                let _ = std::fs::remove_file(&upgrade_path);
+                let _ = std::fs::remove_file(&staging_path);
                 Err(format!("New binary verification failed: {}", String::from_utf8_lossy(&output.stderr)))
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&upgrade_path);
+                let _ = std::fs::remove_file(&staging_path);
                 Err(format!("Failed to verify new binary: {e}"))
             }
         }
@@ -653,9 +656,7 @@ impl PersistentAgentService {
     /// Called at startup (when not in probation) to check if a previous
     /// probation passed or if the agent was auto-rolled-back.
     pub async fn check_post_upgrade_status(&self) {
-        let runway_dir = dirs_next::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".runway");
+        let runway_dir = Self::runway_dir();
 
         let passed_file = runway_dir.join(".probation-passed");
         let rollback_count_file = runway_dir.join(".rollback-count");
@@ -697,11 +698,10 @@ impl PersistentAgentService {
     }
 
     pub async fn do_rollback(&self) -> Result<(bool, String, String), String> {
-        let runway_dir = dirs_next::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".runway");
-
-        let backup_path = runway_dir.join("runway-agent.old");
+        let runway_dir = Self::runway_dir();
+        let bin_dir = runway_dir.join("bin");
+        let active_path = bin_dir.join("runway-agent");
+        let backup_path = bin_dir.join("runway-agent.old");
 
         if !backup_path.exists() {
             return Err("No backup available — no previous version to rollback to".into());
@@ -717,11 +717,9 @@ impl PersistentAgentService {
                 let restored_version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 tracing::info!("Verified backup agent version: {restored_version}");
 
-                let current_exe = std::env::current_exe()
-                    .map_err(|e| format!("Failed to get current exe path: {e}"))?;
-
-                // Swap backup to current (backup is consumed)
-                std::fs::rename(&backup_path, &current_exe)
+                // Swap: remove active, rename backup → active
+                let _ = std::fs::remove_file(&active_path);
+                std::fs::rename(&backup_path, &active_path)
                     .map_err(|e| format!("Failed to restore backup: {e}"))?;
 
                 // Emit rollback event
@@ -735,12 +733,19 @@ impl PersistentAgentService {
                 }
                 nats_publisher::maybe_publish_event(&self.nats, "agent_rollback", None, None, &event_data).await;
 
-                // Schedule restart via systemd
+                // Write .upgrading marker so ExecStopPost doesn't double-rollback
+                let _ = std::fs::write(runway_dir.join(".upgrading"), "rollback");
+
+                // Flush NATS before exiting
+                if let Some(nats) = &self.nats {
+                    let _ = nats.client().flush().await;
+                }
+
+                // Exit with code 42 — systemd restarts with restored binary
                 tokio::spawn(async {
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    let _ = std::process::Command::new("systemctl")
-                        .args(["restart", "runway-agent"])
-                        .spawn();
+                    tracing::info!("Exiting for rollback restart (exit code 42)");
+                    std::process::exit(42);
                 });
 
                 Ok((true, restored_version, "Rollback successful, restarting...".into()))

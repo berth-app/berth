@@ -7,15 +7,13 @@ set -euo pipefail
 #   Uninstall:  curl -sSL https://get.runway.dev | bash -s -- --uninstall
 
 BINARY_NAME="runway-agent"
-# Binary installed to user-writable dir for self-upgrade support
-AGENT_HOME=""  # set after user creation
-INSTALL_PATH="" # set after user creation
 SERVICE_NAME="runway-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 AGENT_USER="runway"
-AGENT_PORT="50051"
+AGENT_HOME=""      # resolved after user creation
+RUNWAY_DIR=""      # resolved after user creation
+INSTALL_PATH=""    # resolved after user creation
 BASE_URL="https://get.runway.dev/releases/latest"
-ROLLBACK_SCRIPT_URL="${BASE_URL}/runway-agent-rollback.sh"
 ROLLBACK_SCRIPT_DIR="/usr/local/lib/runway"
 ROLLBACK_SCRIPT_PATH="${ROLLBACK_SCRIPT_DIR}/rollback.sh"
 
@@ -128,6 +126,29 @@ detect_arch() {
 }
 
 # ---------------------------------------------------------------------------
+# Create the runway system user (idempotent)
+# ---------------------------------------------------------------------------
+
+create_user() {
+  if id "${AGENT_USER}" &>/dev/null; then
+    info "User '${AGENT_USER}' already exists, skipping creation."
+  else
+    info "Creating system user '${AGENT_USER}'..."
+    useradd --system --create-home --shell /usr/sbin/nologin "${AGENT_USER}"
+    ok "User '${AGENT_USER}' created."
+  fi
+
+  # Resolve home dir and set paths
+  AGENT_HOME=$(eval echo "~${AGENT_USER}")
+  RUNWAY_DIR="${AGENT_HOME}/.runway"
+  INSTALL_PATH="${RUNWAY_DIR}/bin/${BINARY_NAME}"
+
+  # Create directory structure
+  mkdir -p "${RUNWAY_DIR}/bin" "${RUNWAY_DIR}/deploys"
+  chown -R "${AGENT_USER}:${AGENT_USER}" "${RUNWAY_DIR}"
+}
+
+# ---------------------------------------------------------------------------
 # Download the agent binary
 # ---------------------------------------------------------------------------
 
@@ -150,26 +171,6 @@ download_binary() {
 }
 
 # ---------------------------------------------------------------------------
-# Create the runway system user
-# ---------------------------------------------------------------------------
-
-create_user() {
-  if id "${AGENT_USER}" &>/dev/null; then
-    info "User '${AGENT_USER}' already exists, skipping creation."
-  else
-    info "Creating system user '${AGENT_USER}'..."
-    useradd --system --create-home --shell /usr/sbin/nologin "${AGENT_USER}"
-    ok "User '${AGENT_USER}' created."
-  fi
-
-  # Resolve home dir and set install path
-  AGENT_HOME=$(eval echo "~${AGENT_USER}")
-  INSTALL_PATH="${AGENT_HOME}/.runway/bin/${BINARY_NAME}"
-  mkdir -p "${AGENT_HOME}/.runway/bin"
-  chown -R "${AGENT_USER}:${AGENT_USER}" "${AGENT_HOME}/.runway"
-}
-
-# ---------------------------------------------------------------------------
 # Install the auto-rollback script
 # ---------------------------------------------------------------------------
 
@@ -182,22 +183,56 @@ install_rollback_script() {
   local_script="$(dirname "$0")/runway-agent-rollback.sh"
   if [ -f "${local_script}" ]; then
     install -m 755 "${local_script}" "${ROLLBACK_SCRIPT_PATH}"
-  elif command -v curl &>/dev/null; then
-    curl -fsSL -o "${ROLLBACK_SCRIPT_PATH}" "${ROLLBACK_SCRIPT_URL}"
-    chmod 755 "${ROLLBACK_SCRIPT_PATH}"
-  elif command -v wget &>/dev/null; then
-    wget -qO "${ROLLBACK_SCRIPT_PATH}" "${ROLLBACK_SCRIPT_URL}"
-    chmod 755 "${ROLLBACK_SCRIPT_PATH}"
   else
-    err "Cannot install rollback script (no curl/wget)."
-    exit 1
+    local url="${BASE_URL}/runway-agent-rollback.sh"
+    if command -v curl &>/dev/null; then
+      curl -fsSL -o "${ROLLBACK_SCRIPT_PATH}" "${url}"
+    elif command -v wget &>/dev/null; then
+      wget -qO "${ROLLBACK_SCRIPT_PATH}" "${url}"
+    else
+      err "Cannot install rollback script (no curl/wget)."
+      exit 1
+    fi
+    chmod 755 "${ROLLBACK_SCRIPT_PATH}"
   fi
 
   ok "Rollback script installed to ${ROLLBACK_SCRIPT_PATH}"
 }
 
 # ---------------------------------------------------------------------------
-# Create and enable the systemd service
+# Generate environment file (idempotent — won't overwrite existing)
+# ---------------------------------------------------------------------------
+
+install_env_file() {
+  local env_file="${RUNWAY_DIR}/agent.env"
+  if [ -f "${env_file}" ]; then
+    info "Environment file already exists, skipping."
+    return
+  fi
+
+  info "Creating environment file at ${env_file}..."
+  cat > "${env_file}" <<'ENVEOF'
+# Runway Agent Configuration
+# Uncomment and edit the lines you need.
+
+# NATS relay (enables zero-port remote control from desktop app)
+# RUNWAY_NATS_URL=tls://connect.ngs.global
+# RUNWAY_NATS_CREDS=/home/runway/.runway/nats.creds
+# RUNWAY_NATS_AGENT_ID=my-server
+
+# gRPC port (default 50051)
+# RUNWAY_PORT=50051
+
+# Log level
+RUST_LOG=info
+ENVEOF
+
+  chown "${AGENT_USER}:${AGENT_USER}" "${env_file}"
+  ok "Environment file created at ${env_file}"
+}
+
+# ---------------------------------------------------------------------------
+# Create and enable the systemd service (idempotent)
 # ---------------------------------------------------------------------------
 
 install_service() {
@@ -205,19 +240,34 @@ install_service() {
 
   cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=Runway Agent
-After=network.target
+Description=Runway Deployment Agent
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=${AGENT_USER}
-ExecStart=${INSTALL_PATH} --port ${AGENT_PORT}
-ExecStopPost=+${ROLLBACK_SCRIPT_PATH} %e
+Group=${AGENT_USER}
+
+ExecStart=${INSTALL_PATH}
+ExecStopPost=+${ROLLBACK_SCRIPT_PATH}
+
+EnvironmentFile=-${RUNWAY_DIR}/agent.env
+
 Restart=always
 RestartSec=5
+
+# Exit code 42 = intentional upgrade/rollback restart.
+# Treated as success so it doesn't count toward StartLimitBurst.
+SuccessExitStatus=42
+
 StartLimitBurst=5
 StartLimitIntervalSec=120
-Environment=RUST_LOG=info
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=${RUNWAY_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -241,17 +291,21 @@ main() {
   create_user
   download_binary
   install_rollback_script
+  install_env_file
   install_service
 
   echo ""
-  ok "Runway agent is running on port ${AGENT_PORT}."
-  info "Add this target in Runway with your server's IP:"
+  ok "Runway agent is running."
+  info "Configure NATS relay for remote control:"
+  echo "    sudo nano ${RUNWAY_DIR}/agent.env"
   echo ""
-  echo "    runway targets add my-server --host <SERVER_IP> --port ${AGENT_PORT}"
+  info "Or add this target in Runway with your server's IP:"
+  echo "    runway targets add my-server --host <SERVER_IP> --port 50051"
   echo ""
   info "Useful commands:"
   echo "    systemctl status ${SERVICE_NAME}    # check status"
   echo "    journalctl -u ${SERVICE_NAME} -f    # follow logs"
+  echo "    ${INSTALL_PATH} update              # self-update"
   echo "    sudo bash install-agent.sh --uninstall  # remove"
   echo ""
 }

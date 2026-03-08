@@ -256,7 +256,7 @@ export default function Settings() {
                 Runway
               </div>
               <div className="text-xs text-runway-text-secondary mt-0.5">
-                v0.1.6 — Deployment control plane for AI-generated code
+                v0.1.7 — Deployment control plane for AI-generated code
               </div>
             </div>
           </section>

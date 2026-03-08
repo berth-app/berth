@@ -34,14 +34,18 @@ jobs:
       - name: Build runway-agent
         run: cross build --release --target ${{ matrix.target }} -p runway-agent
 
-      - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/runway-agent ${{ matrix.asset }}
+      - name: Rename binary and compute checksum
+        run: |
+          cp target/${{ matrix.target }}/release/runway-agent ${{ matrix.asset }}
+          sha256sum ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
 
   release:
     name: Create GitHub Release
@@ -62,4 +66,6 @@ jobs:
             --title "Runway Agent ${{ github.ref_name }}" \
             --generate-notes \
             artifacts/runway-agent-linux-x86_64/runway-agent-linux-x86_64 \
-            artifacts/runway-agent-linux-aarch64/runway-agent-linux-aarch64
+            artifacts/runway-agent-linux-x86_64/runway-agent-linux-x86_64.sha256 \
+            artifacts/runway-agent-linux-aarch64/runway-agent-linux-aarch64 \
+            artifacts/runway-agent-linux-aarch64/runway-agent-linux-aarch64.sha256

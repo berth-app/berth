@@ -4,12 +4,13 @@ mod nats_cmd_handler;
 mod nats_publisher;
 mod persistent_service;
 mod service;
+mod update;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tokio::sync::Mutex;
 use tonic::transport::Server;
 
@@ -20,15 +21,22 @@ use agent_store::AgentStore;
 use nats_publisher::NatsPublisher;
 use persistent_service::PersistentAgentService;
 
+/// Exit code that tells systemd "I upgraded/rolled back, just restart me."
+/// systemd SuccessExitStatus=42 ensures this doesn't count toward rate limiting.
+const EXIT_CODE_UPGRADE: i32 = 42;
+
 #[derive(Parser)]
 #[command(name = "runway-agent", version, about = "Runway deployment agent")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Bind to 0.0.0.0 instead of 127.0.0.1
     #[arg(long)]
     listen_all: bool,
 
     /// Port for gRPC server
-    #[arg(long, default_value_t = 50051)]
+    #[arg(long, default_value_t = 50051, env = "RUNWAY_PORT")]
     port: u16,
 
     /// Print version and exit (alias for clap's --version)
@@ -46,6 +54,19 @@ struct Cli {
     /// Agent ID for NATS subjects (defaults to hostname)
     #[arg(long, env = "RUNWAY_NATS_AGENT_ID")]
     nats_agent_id: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Check for updates and self-upgrade
+    Update {
+        /// Specific version to update to (default: latest)
+        #[arg(long)]
+        version: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 /// Probation health check: TCP-connect to our own gRPC port repeatedly
@@ -91,60 +112,21 @@ async fn run_probation(addr: SocketAddr, runway_dir: &Path) -> bool {
     false
 }
 
-/// Self-rollback: copy the backup binary over the current exe and clean up.
-fn do_self_rollback(runway_dir: &Path) {
-    let backup_path = runway_dir.join("runway-agent.old");
-    let count_file = runway_dir.join(".rollback-count");
-    let probation_file = runway_dir.join(".probation");
-
-    let count: u32 = std::fs::read_to_string(&count_file)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
-
-    if count >= 2 {
-        tracing::error!("Rollback loop detected (count={}), not rolling back again", count);
-        let _ = std::fs::remove_file(&probation_file);
-        let _ = std::fs::remove_file(&count_file);
-        return;
-    }
-
-    let current_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("Cannot determine current exe for rollback: {e}");
-            return;
-        }
-    };
-
-    if !backup_path.exists() {
-        tracing::error!("No backup binary at {} — cannot rollback", backup_path.display());
-        let _ = std::fs::remove_file(&probation_file);
-        return;
-    }
-
-    match std::fs::copy(&backup_path, &current_exe) {
-        Ok(_) => {
-            tracing::warn!("Self-rollback: restored backup binary");
-            let _ = std::fs::write(&count_file, format!("{}", count + 1));
-            let _ = std::fs::remove_file(&probation_file);
-        }
-        Err(e) => {
-            tracing::error!("Self-rollback failed: {e}");
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-
     let cli = Cli::parse();
 
     if cli.show_version {
         println!("runway-agent {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
+    // Handle subcommands before initializing the full agent
+    if let Some(Commands::Update { version, yes }) = cli.command {
+        return update::run_update(version.as_deref(), yes).await;
+    }
+
+    tracing_subscriber::fmt::init();
 
     // Open agent-side SQLite store
     let db_dir = dirs_next::home_dir()
@@ -255,8 +237,11 @@ async fn main() -> anyhow::Result<()> {
     // Check probation state
     let runway_dir = db_dir.clone(); // ~/.runway
     let probation_file = runway_dir.join(".probation");
-    let backup_path = runway_dir.join("runway-agent.old");
+    let backup_path = runway_dir.join("bin/runway-agent.old");
     let in_probation = probation_file.exists() && backup_path.exists();
+
+    // Clean up .upgrading marker from a previous upgrade/rollback exit
+    let _ = std::fs::remove_file(runway_dir.join(".upgrading"));
 
     if in_probation {
         tracing::info!("Probation mode active — running health checks for 30s");
@@ -282,28 +267,25 @@ async fn main() -> anyhow::Result<()> {
 
         tokio::select! {
             server_result = server_handle => {
-                // Server crashed during probation
+                // Server crashed during probation — exit(1) so ExecStopPost
+                // handles the rollback (swaps backup binary back)
                 tracing::error!("gRPC server exited during probation: {:?}", server_result);
-                do_self_rollback(&runway_dir);
-                std::process::exit(42);
+                std::process::exit(1);
             }
             probation_result = probation_handle => {
                 match probation_result {
                     Ok(true) => {
                         tracing::info!("Probation passed, running normally");
-                        // Server is already running in background, wait forever
-                        // (server_handle was moved into select, so we just loop)
                         tokio::signal::ctrl_c().await.ok();
                     }
                     Ok(false) => {
-                        tracing::error!("Probation failed, self-rolling back");
-                        do_self_rollback(&runway_dir);
-                        std::process::exit(42);
+                        // Probation failed — exit(1) so ExecStopPost rolls back
+                        tracing::error!("Probation failed, exiting for rollback");
+                        std::process::exit(1);
                     }
                     Err(e) => {
                         tracing::error!("Probation task panicked: {e}");
-                        do_self_rollback(&runway_dir);
-                        std::process::exit(42);
+                        std::process::exit(1);
                     }
                 }
             }
