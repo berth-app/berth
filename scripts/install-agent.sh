@@ -7,8 +7,9 @@ set -euo pipefail
 #   Uninstall:  curl -sSL https://get.runway.dev | bash -s -- --uninstall
 
 BINARY_NAME="runway-agent"
-INSTALL_DIR="/usr/local/bin"
-INSTALL_PATH="${INSTALL_DIR}/${BINARY_NAME}"
+# Binary installed to user-writable dir for self-upgrade support
+AGENT_HOME=""  # set after user creation
+INSTALL_PATH="" # set after user creation
 SERVICE_NAME="runway-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 AGENT_USER="runway"
@@ -58,11 +59,15 @@ uninstall() {
     systemctl daemon-reload
   fi
 
-  # Remove the binary
-  if [ -f "${INSTALL_PATH}" ]; then
-    info "Removing binary ${INSTALL_PATH}..."
-    rm -f "${INSTALL_PATH}"
-  fi
+  # Remove the binary (check both old and new locations)
+  local agent_home
+  agent_home=$(eval echo "~${AGENT_USER}" 2>/dev/null || echo "")
+  for bin_path in "/usr/local/bin/${BINARY_NAME}" "${agent_home}/.runway/bin/${BINARY_NAME}"; do
+    if [ -f "${bin_path}" ]; then
+      info "Removing binary ${bin_path}..."
+      rm -f "${bin_path}"
+    fi
+  done
 
   # Remove the rollback script
   if [ -f "${ROLLBACK_SCRIPT_PATH}" ]; then
@@ -140,7 +145,7 @@ download_binary() {
   fi
 
   chmod +x "${INSTALL_PATH}"
-  # Ownership set after create_user() via fix_ownership()
+  chown "${AGENT_USER}:${AGENT_USER}" "${INSTALL_PATH}"
   ok "Binary installed to ${INSTALL_PATH}"
 }
 
@@ -153,9 +158,15 @@ create_user() {
     info "User '${AGENT_USER}' already exists, skipping creation."
   else
     info "Creating system user '${AGENT_USER}'..."
-    useradd --system --no-create-home --shell /usr/sbin/nologin "${AGENT_USER}"
+    useradd --system --create-home --shell /usr/sbin/nologin "${AGENT_USER}"
     ok "User '${AGENT_USER}' created."
   fi
+
+  # Resolve home dir and set install path
+  AGENT_HOME=$(eval echo "~${AGENT_USER}")
+  INSTALL_PATH="${AGENT_HOME}/.runway/bin/${BINARY_NAME}"
+  mkdir -p "${AGENT_HOME}/.runway/bin"
+  chown -R "${AGENT_USER}:${AGENT_USER}" "${AGENT_HOME}/.runway"
 }
 
 # ---------------------------------------------------------------------------
@@ -222,21 +233,13 @@ EOF
 # Main
 # ---------------------------------------------------------------------------
 
-fix_ownership() {
-  # The agent needs write access to its own binary for self-upgrade
-  info "Setting binary ownership to ${AGENT_USER}..."
-  chown "${AGENT_USER}:${AGENT_USER}" "${INSTALL_PATH}"
-  ok "Binary owned by ${AGENT_USER} (enables self-upgrade)"
-}
-
 main() {
   info "Installing Runway agent..."
   need_root
   detect_os
   detect_arch
-  download_binary
   create_user
-  fix_ownership
+  download_binary
   install_rollback_script
   install_service
 

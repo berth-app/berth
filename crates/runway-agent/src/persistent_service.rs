@@ -596,11 +596,12 @@ impl PersistentAgentService {
                     tracing::warn!("Failed to backup current binary: {e}");
                 }
 
-                // Replace current binary (copy instead of rename — rename needs
-                // directory write permission which the service user may not have)
-                std::fs::copy(&upgrade_path, &current_exe)
-                    .map_err(|e| format!("Failed to replace binary: {e}. Backup at {}", backup_path.display()))?;
-                let _ = std::fs::remove_file(&upgrade_path);
+                // Replace: delete running binary (Linux keeps the inode alive
+                // for the running process) then move the new one into place
+                std::fs::remove_file(&current_exe)
+                    .map_err(|e| format!("Failed to remove current binary: {e}. Backup at {}", backup_path.display()))?;
+                std::fs::rename(&upgrade_path, &current_exe)
+                    .map_err(|e| format!("Failed to install new binary: {e}. Backup at {}", backup_path.display()))?;
 
                 // Emit upgrade event
                 let event_data = serde_json::json!({
