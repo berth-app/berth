@@ -4018,7 +4018,7 @@ dependencies = [
 
 [[package]]
 name = "runway-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4043,7 +4043,7 @@ dependencies = [
 
 [[package]]
 name = "runway-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4068,7 +4068,7 @@ dependencies = [
 
 [[package]]
 name = "runway-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4082,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "runway-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4120,7 +4120,7 @@ dependencies = [
 
 [[package]]
 name = "runway-mcp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
