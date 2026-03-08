@@ -220,6 +220,32 @@ export default function Settings() {
             </div>
           </section>
 
+          {/* Advanced */}
+          <section>
+            <h2 className="text-[11px] font-semibold text-runway-text-tertiary uppercase tracking-wider mb-3">
+              Advanced
+            </h2>
+            <div className="glass-card-static divide-y divide-runway-border-subtle">
+              <div className="flex items-center justify-between px-4 py-3">
+                <div>
+                  <div className="text-sm text-runway-text-primary">
+                    GitHub Token
+                  </div>
+                  <div className="text-xs text-runway-text-tertiary mt-0.5">
+                    Required for agent upgrades (private repo access)
+                  </div>
+                </div>
+                <input
+                  type="password"
+                  placeholder="ghp_..."
+                  value={settings.github_token ?? ""}
+                  onChange={(e) => save("github_token", e.target.value)}
+                  className="input !w-48 !py-1 !text-sm"
+                />
+              </div>
+            </div>
+          </section>
+
           {/* About */}
           <section>
             <h2 className="text-[11px] font-semibold text-runway-text-tertiary uppercase tracking-wider mb-3">
@@ -230,7 +256,7 @@ export default function Settings() {
                 Runway
               </div>
               <div className="text-xs text-runway-text-secondary mt-0.5">
-                v0.1.0 — Deployment control plane for AI-generated code
+                v0.1.1 — Deployment control plane for AI-generated code
               </div>
             </div>
           </section>

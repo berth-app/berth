@@ -927,21 +927,71 @@ async fn get_agent_binary(version: &str, arch: &str) -> Result<Vec<u8>, String> 
     }
 
     // Download from GitHub Releases
-    let download_url = format!(
-        "https://github.com/carlosinfantes/runway/releases/download/v{version}/{binary_name}"
-    );
+    // Private repo: use GitHub API to get asset download URL with auth
+    let github_token = store
+        .get_all_settings()
+        .ok()
+        .and_then(|s| s.get("github_token").cloned())
+        .filter(|t| !t.is_empty());
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&download_url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to download agent binary: {e}"))?;
+    let client = reqwest::Client::builder()
+        .user_agent("runway-app")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let response = if let Some(token) = &github_token {
+        // Use GitHub API to find asset and download via API (works for private repos)
+        let api_url = format!(
+            "https://api.github.com/repos/carlosinfantes/runway/releases/tags/v{version}"
+        );
+        let release: serde_json::Value = client
+            .get(&api_url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| format!("Failed to query GitHub release API: {e}"))?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("Failed to parse release JSON: {e}"))?;
+
+        let asset_url = release["assets"]
+            .as_array()
+            .and_then(|assets: &Vec<serde_json::Value>| {
+                assets.iter().find(|a| a["name"].as_str() == Some(&binary_name))
+            })
+            .and_then(|a| a["url"].as_str())
+            .ok_or_else(|| format!("Asset {binary_name} not found in release v{version}"))?
+            .to_string();
+
+        client
+            .get(&asset_url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/octet-stream")
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download agent binary: {e}"))?
+    } else {
+        // Public repo: direct download
+        let download_url = format!(
+            "https://github.com/carlosinfantes/runway/releases/download/v{version}/{binary_name}"
+        );
+        client
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download agent binary: {e}"))?
+    };
 
     if !response.status().is_success() {
         return Err(format!(
-            "Download failed: HTTP {} from {download_url}",
-            response.status()
+            "Download failed: HTTP {}. {}",
+            response.status(),
+            if github_token.is_none() {
+                "Repo may be private — set a 'github_token' in Settings."
+            } else {
+                "Check that the release exists and the token has repo access."
+            }
         ));
     }
 
