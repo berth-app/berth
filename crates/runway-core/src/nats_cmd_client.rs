@@ -529,6 +529,8 @@ impl AgentTransport for NatsAgentClient {
         let subject = cmd_subject(&self.agent_id, "upgrade");
         self.client.publish(subject, payload.into()).await
             .context("Failed to publish upgrade command")?;
+        self.client.flush().await
+            .context("Failed to flush NATS")?;
 
         // 120s timeout: agent needs to download binary + verify + swap + restart
         let msg = tokio::time::timeout(Duration::from_secs(120), sub.next())
