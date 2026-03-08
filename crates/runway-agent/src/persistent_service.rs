@@ -621,9 +621,14 @@ impl PersistentAgentService {
                 // Clear any previous rollback count
                 let _ = std::fs::remove_file(runway_dir.join(".rollback-count"));
 
-                // Schedule restart via systemd (after response is sent)
+                // Flush NATS before restarting so the response is delivered
+                if let Some(nats) = &self.nats {
+                    let _ = nats.client().flush().await;
+                }
+
+                // Schedule restart via systemd (delay to let caller receive response)
                 tokio::spawn(async {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     let _ = std::process::Command::new("systemctl")
                         .args(["restart", "runway-agent"])
                         .spawn();

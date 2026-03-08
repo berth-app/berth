@@ -486,11 +486,16 @@ impl AgentTransport for NatsAgentClient {
         let result_resp: NatsResponse = serde_json::from_slice(&result_msg.payload)
             .context("Failed to deserialize upgrade result")?;
 
+        // Check for error status first
+        if let NatsResponseStatus::Error(e) = &result_resp.status {
+            anyhow::bail!("Agent upgrade failed: {e}");
+        }
+
         match result_resp.body {
             NatsResponseBody::UpgradeResult { success, new_version, message } => {
                 Ok((success, new_version, message))
             }
-            _ => anyhow::bail!("Unexpected upgrade result response type"),
+            other => anyhow::bail!("Unexpected upgrade result response type: {:?}", other),
         }
     }
 

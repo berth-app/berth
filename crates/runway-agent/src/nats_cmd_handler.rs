@@ -535,6 +535,8 @@ async fn handle_command(
                 },
             };
             send_reply(&client, &result_subject, &resp).await;
+            // Flush to ensure result is delivered before systemd restart
+            let _ = client.flush().await;
         }
 
         NatsCommandKind::ListSchedules { project_id } => {
