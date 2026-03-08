@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Runway - Technical Documentation</title>
+<title>Berth - Technical Documentation</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -63,7 +63,7 @@
 <body>
 <div class="container">
 
-<h1>Runway</h1>
+<h1>Berth</h1>
 <p class="subtitle">Mac-native deployment control plane for AI-generated code. &mdash; v0.1.0</p>
 
 <nav>
@@ -101,7 +101,7 @@
 <span class="highlight">|       invoke() / listen()               |                |</span>
 <span class="highlight">+------------------------------------------+----------------+</span>
                                            |
-                                    <span class="purple">runway-core</span>
+                                    <span class="purple">berth-core</span>
                               +------------+------------+
                               |                         |
                      +--------+--------+    +-----------+---------+
@@ -119,23 +119,23 @@
 <h3>Workspace Crates</h3>
 <div class="grid">
   <div class="card">
-    <h3>runway-core <span class="badge badge-done">Done</span></h3>
+    <h3>berth-core <span class="badge badge-done">Done</span></h3>
     <p>Shared business logic: project model, runtime detection, process executor, SQLite store.</p>
   </div>
   <div class="card">
-    <h3>runway-app (src-tauri) <span class="badge badge-done">Done</span></h3>
+    <h3>berth-app (src-tauri) <span class="badge badge-done">Done</span></h3>
     <p>Tauri 2.0 desktop app. Rust backend with 18 commands + React frontend with 5 pages. Agent-based execution via UDS.</p>
   </div>
   <div class="card">
-    <h3>runway-mcp <span class="badge badge-done">Done</span></h3>
+    <h3>berth-mcp <span class="badge badge-done">Done</span></h3>
     <p>MCP server for AI agent control. 17 tools via JSON-RPC 2.0 stdio. E2E tested.</p>
   </div>
   <div class="card">
-    <h3>runway-agent <span class="badge badge-done">Done</span></h3>
-    <p>Persistent execution agent. 14 gRPC RPCs, SQLite store (~/.runway/agent.db), agent-side scheduler, store-and-forward events, remote upgrade. Deployed on Linux via systemd.</p>
+    <h3>berth-agent <span class="badge badge-done">Done</span></h3>
+    <p>Persistent execution agent. 14 gRPC RPCs, SQLite store (~/.berth/agent.db), agent-side scheduler, store-and-forward events, remote upgrade. Deployed on Linux via systemd.</p>
   </div>
   <div class="card">
-    <h3>runway-cli <span class="badge badge-done">Done</span></h3>
+    <h3>berth-cli <span class="badge badge-done">Done</span></h3>
     <p>CLI interface. 12 commands + schedule + targets subcommands. Full feature parity with MCP.</p>
   </div>
 </div>
@@ -209,7 +209,7 @@
 <!-- ============================================================ -->
 <h2 id="crates">Rust Crates Detail</h2>
 
-<h3>runway-core::project</h3>
+<h3>berth-core::project</h3>
 <pre><code>pub struct Project {
     pub id: Uuid,
     pub name: String,
@@ -233,7 +233,7 @@ impl Project {
     // Generates UUID v4, sets status to Idle, timestamps to now
 }</code></pre>
 
-<h3>runway-core::runtime</h3>
+<h3>berth-core::runtime</h3>
 <pre><code>pub enum Runtime {
     Python, Node, Go, Rust, Shell, Unknown,
 }
@@ -259,7 +259,7 @@ pub fn detect_runtime(path: &amp;Path) -&gt; RuntimeInfo</code></pre>
   <tr><td><code>*.sh</code>, <code>*.bash</code></td><td>Shell</td><td><code>run.sh</code>, <code>start.sh</code>, <code>main.sh</code></td></tr>
 </table>
 
-<h3>runway-core::executor</h3>
+<h3>berth-core::executor</h3>
 <pre><code>pub struct LogLine {
     pub stream: LogStream,        // Stdout or Stderr
     pub text: String,
@@ -285,7 +285,7 @@ pub async fn spawn_and_stream(
 </table>
 <p>All commands run with <code>kill_on_drop(true)</code>, piped stdout/stderr, and two background tokio tasks reading into a 256-capacity mpsc channel.</p>
 
-<h3>runway-core::store</h3>
+<h3>berth-core::store</h3>
 <pre><code>pub struct ProjectStore { conn: Connection }
 
 impl ProjectStore {
@@ -311,7 +311,7 @@ impl ProjectStore {
 <!-- ============================================================ -->
 <h2 id="database">Database Schema</h2>
 
-<h3>SQLite &mdash; <code>~/Library/Application Support/com.runway.app/runway.db</code></h3>
+<h3>SQLite &mdash; <code>~/Library/Application Support/com.berth.app/berth.db</code></h3>
 
 <div class="diagram">
 +-------------------------------------------------------------------+
@@ -372,7 +372,7 @@ impl ProjectStore {
   <span class="red">Failed</span> also occurs on non-zero exit code
 </div>
 
-<h3>Agent SQLite &mdash; <code>~/.runway/agent.db</code> (remote agent only)</h3>
+<h3>Agent SQLite &mdash; <code>~/.berth/agent.db</code> (remote agent only)</h3>
 
 <div class="diagram">
 +-------------------------------------------------------------------+
@@ -383,7 +383,7 @@ impl ProjectStore {
 | <span class="green">version</span>      INTEGER NOT NULL                                     |
 | <span class="green">runtime</span>      TEXT NOT NULL       python|node|go|rust|shell         |
 | <span class="green">entrypoint</span>   TEXT NOT NULL                                        |
-| <span class="green">working_dir</span>  TEXT NOT NULL       /home/user/.runway/deploys/...   |
+| <span class="green">working_dir</span>  TEXT NOT NULL       /home/user/.berth/deploys/...   |
 | <span class="green">image_tag</span>    TEXT                container image (nullable)        |
 | <span class="green">status</span>       TEXT NOT NULL       deployed|running|stopped          |
 | <span class="green">deployed_at</span>  TEXT NOT NULL       RFC 3339                         |
@@ -482,8 +482,8 @@ impl ProjectStore {
 
 <h3>Managed State</h3>
 <pre><code>// Embedded local agent (in-process, UDS transport)
-// AgentClient connects via ~/.runway/agent.sock
-// Lockfile coordination via ~/.runway/agent.lock
+// AgentClient connects via ~/.berth/agent.sock
+// Lockfile coordination via ~/.berth/agent.lock
 // No ProcessRegistry — agent owns all process lifecycle
 
 pub struct AppState {
@@ -594,26 +594,26 @@ stopProject(id: string): Promise&lt;void&gt;</code></pre>
 <h4>Dark Mode (default)</h4>
 <table>
   <tr><th>Token</th><th>Value</th><th>Usage</th></tr>
-  <tr><td><code>--runway-bg</code></td><td><code>#1c1c1e</code></td><td>Page background</td></tr>
-  <tr><td><code>--runway-surface</code></td><td><code>#2c2c2e</code></td><td>Cards, inputs, log viewer</td></tr>
-  <tr><td><code>--runway-border</code></td><td><code>#3a3a3c</code></td><td>Borders, dividers</td></tr>
-  <tr><td><code>--runway-text</code></td><td><code>#f5f5f7</code></td><td>Primary text</td></tr>
-  <tr><td><code>--runway-muted</code></td><td><code>#8e8e93</code></td><td>Secondary text, labels</td></tr>
-  <tr><td><code>--runway-accent</code></td><td><code>#0a84ff</code></td><td>Buttons, links, active states</td></tr>
-  <tr><td><code>--runway-success</code></td><td><code>#30d158</code></td><td>Running status</td></tr>
-  <tr><td><code>--runway-error</code></td><td><code>#ff453a</code></td><td>Failed status, stderr</td></tr>
+  <tr><td><code>--berth-bg</code></td><td><code>#1c1c1e</code></td><td>Page background</td></tr>
+  <tr><td><code>--berth-surface</code></td><td><code>#2c2c2e</code></td><td>Cards, inputs, log viewer</td></tr>
+  <tr><td><code>--berth-border</code></td><td><code>#3a3a3c</code></td><td>Borders, dividers</td></tr>
+  <tr><td><code>--berth-text</code></td><td><code>#f5f5f7</code></td><td>Primary text</td></tr>
+  <tr><td><code>--berth-muted</code></td><td><code>#8e8e93</code></td><td>Secondary text, labels</td></tr>
+  <tr><td><code>--berth-accent</code></td><td><code>#0a84ff</code></td><td>Buttons, links, active states</td></tr>
+  <tr><td><code>--berth-success</code></td><td><code>#30d158</code></td><td>Running status</td></tr>
+  <tr><td><code>--berth-error</code></td><td><code>#ff453a</code></td><td>Failed status, stderr</td></tr>
 </table>
 
 <h4>Light Mode</h4>
 <table>
   <tr><th>Token</th><th>Value</th></tr>
-  <tr><td><code>--runway-bg</code></td><td><code>#f2f2f7</code></td></tr>
-  <tr><td><code>--runway-surface</code></td><td><code>#ffffff</code></td></tr>
-  <tr><td><code>--runway-border</code></td><td><code>#d1d1d6</code></td></tr>
-  <tr><td><code>--runway-text</code></td><td><code>#1c1c1e</code></td></tr>
-  <tr><td><code>--runway-accent</code></td><td><code>#007aff</code></td></tr>
-  <tr><td><code>--runway-success</code></td><td><code>#34c759</code></td></tr>
-  <tr><td><code>--runway-error</code></td><td><code>#ff3b30</code></td></tr>
+  <tr><td><code>--berth-bg</code></td><td><code>#f2f2f7</code></td></tr>
+  <tr><td><code>--berth-surface</code></td><td><code>#ffffff</code></td></tr>
+  <tr><td><code>--berth-border</code></td><td><code>#d1d1d6</code></td></tr>
+  <tr><td><code>--berth-text</code></td><td><code>#1c1c1e</code></td></tr>
+  <tr><td><code>--berth-accent</code></td><td><code>#007aff</code></td></tr>
+  <tr><td><code>--berth-success</code></td><td><code>#34c759</code></td></tr>
+  <tr><td><code>--berth-error</code></td><td><code>#ff3b30</code></td></tr>
 </table>
 
 <h4>Typography</h4>
@@ -626,7 +626,7 @@ user-select: none;</code></pre>
 <h2 id="protobuf">Protobuf / gRPC</h2>
 
 <pre><code>syntax = "proto3";
-package runway;
+package berth;
 
 service AgentService {
   // Core RPCs (Phase 1-3)
@@ -672,26 +672,26 @@ service AgentService {
 
 <table>
   <tr><th>Tool</th><th>Purpose</th><th>Status</th></tr>
-  <tr><td><code>runway_list_projects</code></td><td>List all projects with status, runtime, run history</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_project_status</code></td><td>Detailed status of one project (by UUID or name)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_deploy</code></td><td>Create project + run (inline code or path)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_run</code></td><td>Run existing project, capture output with timeout</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_stop</code></td><td>Stop a running project</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_logs</code></td><td>Fetch logs (pending log store)</td><td><span class="badge badge-partial">Partial</span></td></tr>
-  <tr><td><code>runway_import_code</code></td><td>Import code from path or inline, create project</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_detect_runtime</code></td><td>Auto-detect language, entrypoint, deps, scripts</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_delete</code></td><td>Delete a project</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_health</code></td><td>System health (version, projects, schedules, platform)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_schedule_add</code></td><td>Add a cron-like schedule to a project</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_schedule_list</code></td><td>List all schedules</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td><code>runway_schedule_remove</code></td><td>Remove a schedule by UUID</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_list_projects</code></td><td>List all projects with status, runtime, run history</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_project_status</code></td><td>Detailed status of one project (by UUID or name)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_deploy</code></td><td>Create project + run (inline code or path)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_run</code></td><td>Run existing project, capture output with timeout</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_stop</code></td><td>Stop a running project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_logs</code></td><td>Fetch logs (pending log store)</td><td><span class="badge badge-partial">Partial</span></td></tr>
+  <tr><td><code>berth_import_code</code></td><td>Import code from path or inline, create project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_detect_runtime</code></td><td>Auto-detect language, entrypoint, deps, scripts</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_delete</code></td><td>Delete a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_health</code></td><td>System health (version, projects, schedules, platform)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_schedule_add</code></td><td>Add a cron-like schedule to a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_schedule_list</code></td><td>List all schedules</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_schedule_remove</code></td><td>Remove a schedule by UUID</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
 <p>Transport: stdio (primary, for Claude Code). HTTP via axum planned for Phase 3.</p>
 <p>Claude Code integration: <code>.mcp.json</code> config included in repo root.</p>
 
 <h3>MCP Architecture</h3>
-<pre><code>crates/runway-mcp/
+<pre><code>crates/berth-mcp/
   src/
     main.rs       -- Entry point, tokio::main, calls server::run_stdio()
     lib.rs        -- Module exports (protocol, server, tools)
@@ -702,24 +702,24 @@ service AgentService {
 <!-- ============================================================ -->
 <h2 id="cli">CLI <span class="badge badge-done">Done</span></h2>
 
-<pre><code>runway list                                    # List all projects (table format)
-runway deploy &lt;path&gt; [--name N] [--target T]   # Create project + run
-runway run &lt;project&gt;                           # Run by name or UUID
-runway stop &lt;project&gt;                          # Stop a project
-runway logs &lt;project&gt; [-f|--follow]            # Run and capture output
-runway status &lt;project&gt;                        # Detailed project info
-runway import &lt;path&gt; [--name N]                # Import code as project
-runway detect &lt;path&gt;                           # Detect runtime + deps + scripts
-runway delete &lt;project&gt;                        # Delete a project
-runway health                                  # System health check
-runway targets list                            # List deploy targets
-runway targets add &lt;name&gt; --host &lt;host&gt;       # Add target (Phase 3)
-runway schedule add &lt;project&gt; --cron &lt;expr&gt;   # Add schedule (@every 5m, @hourly, etc.)
-runway schedule list                           # List all schedules
-runway schedule remove &lt;id&gt;                    # Remove a schedule
-runway schedule enable &lt;id&gt;                    # Enable a schedule
-runway schedule disable &lt;id&gt;                   # Disable a schedule
-runway schedule tick                           # Run one scheduler tick</code></pre>
+<pre><code>berth list                                    # List all projects (table format)
+berth deploy &lt;path&gt; [--name N] [--target T]   # Create project + run
+berth run &lt;project&gt;                           # Run by name or UUID
+berth stop &lt;project&gt;                          # Stop a project
+berth logs &lt;project&gt; [-f|--follow]            # Run and capture output
+berth status &lt;project&gt;                        # Detailed project info
+berth import &lt;path&gt; [--name N]                # Import code as project
+berth detect &lt;path&gt;                           # Detect runtime + deps + scripts
+berth delete &lt;project&gt;                        # Delete a project
+berth health                                  # System health check
+berth targets list                            # List deploy targets
+berth targets add &lt;name&gt; --host &lt;host&gt;       # Add target (Phase 3)
+berth schedule add &lt;project&gt; --cron &lt;expr&gt;   # Add schedule (@every 5m, @hourly, etc.)
+berth schedule list                           # List all schedules
+berth schedule remove &lt;id&gt;                    # Remove a schedule
+berth schedule enable &lt;id&gt;                    # Enable a schedule
+berth schedule disable &lt;id&gt;                   # Disable a schedule
+berth schedule tick                           # Run one scheduler tick</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="file-map">File Map</h2>
@@ -765,7 +765,7 @@ mac-rundeck/
 |       +-- commands.rs         <span class="muted">18 commands + agent-based execution + monitoring</span>
 |
 +-- <span class="green">crates/</span>
-|   +-- runway-core/            <span class="badge badge-done">Done</span>
+|   +-- berth-core/            <span class="badge badge-done">Done</span>
 |   |   +-- src/
 |   |       +-- lib.rs          <span class="muted">Re-exports</span>
 |   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
@@ -780,7 +780,7 @@ mac-rundeck/
 |   |       +-- tls.rs          <span class="muted">mTLS certificate generation (rcgen)</span>
 |   |       +-- credentials.rs  <span class="muted">Keychain credential storage (security-framework)</span>
 |   |
-|   +-- runway-mcp/             <span class="badge badge-done">Done</span>
+|   +-- berth-mcp/             <span class="badge badge-done">Done</span>
 |   |   +-- src/
 |   |       +-- main.rs         <span class="muted">Entry point (stdio)</span>
 |   |       +-- lib.rs          <span class="muted">Module exports</span>
@@ -788,23 +788,23 @@ mac-rundeck/
 |   |       +-- server.rs       <span class="muted">Stdio server loop</span>
 |   |       +-- tools.rs        <span class="muted">17 tool definitions + handlers</span>
 |   |
-|   +-- runway-agent/           <span class="badge badge-done">Done</span>
+|   +-- berth-agent/           <span class="badge badge-done">Done</span>
 |   |   +-- src/
 |   |   |   +-- main.rs              <span class="muted">Agent startup: SQLite init, gRPC server, scheduler loop</span>
-|   |   |   +-- service.rs           <span class="muted">Legacy re-export (AgentServiceImpl from runway-core)</span>
+|   |   |   +-- service.rs           <span class="muted">Legacy re-export (AgentServiceImpl from berth-core)</span>
 |   |   |   +-- persistent_service.rs <span class="muted">PersistentAgentService (14 RPCs, SQLite persistence)</span>
-|   |   |   +-- agent_store.rs       <span class="muted">Agent SQLite store (~/.runway/agent.db, 5 tables)</span>
+|   |   |   +-- agent_store.rs       <span class="muted">Agent SQLite store (~/.berth/agent.db, 5 tables)</span>
 |   |   |   +-- agent_scheduler.rs   <span class="muted">Agent-side cron scheduler (tick every 30s)</span>
 |   |   +-- build.rs                 <span class="muted">tonic-build proto compilation</span>
 |   |
-|   +-- runway-cli/             <span class="badge badge-done">Done</span>
+|   +-- berth-cli/             <span class="badge badge-done">Done</span>
 |       +-- src/main.rs         <span class="muted">12 commands + schedule subcommands</span>
 |
 +-- proto/
-|   +-- runway.proto            <span class="muted">gRPC service (Phase 3)</span>
+|   +-- berth.proto            <span class="muted">gRPC service (Phase 3)</span>
 |
 +-- reasoning/                  <span class="muted">Decision records (DRF/CRF)</span>
-|   +-- crf/runway-project.yaml
+|   +-- crf/berth-project.yaml
 |   +-- drf/001-framework-selection.yaml
 |   +-- drf/002-agent-language.yaml
 |   +-- drf/003-product-positioning.yaml
@@ -825,7 +825,7 @@ mac-rundeck/
 <table>
   <tr><th>Item</th><th>Status</th></tr>
   <tr><td>Tauri app scaffold (project list, detail, code import)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>runway-core: project model, runtime detection</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>berth-core: project model, runtime detection</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>Run/Stop execution (agent-based via UDS, log streaming via events)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>Paste & Deploy end-to-end (save to disk, smart quote normalization)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>xterm.js log viewer (ANSI colors, auto-fit, 10k scrollback)</td><td><span class="badge badge-done">Done</span></td></tr>
@@ -873,8 +873,8 @@ mac-rundeck/
 
 <hr style="border-color: var(--border); margin: 3rem 0 1rem;">
 <p style="text-align: center; font-size: 0.85rem;">
-  Runway v0.1.0 &mdash; Documentation generated March 2026<br>
-  <a href="https://github.com/setillo/runway">github.com/setillo/runway</a>
+  Berth v0.1.0 &mdash; Documentation generated March 2026<br>
+  <a href="https://github.com/setillo/berth">github.com/setillo/berth</a>
 </p>
 
 </div>

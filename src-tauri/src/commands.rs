@@ -1,13 +1,13 @@
-use runway_core::agent_client::AgentClient;
-use runway_core::agent_transport::AgentTransport;
-use runway_core::nats_cmd_client::NatsAgentClient;
+use berth_core::agent_client::AgentClient;
+use berth_core::agent_transport::AgentTransport;
+use berth_core::nats_cmd_client::NatsAgentClient;
 use tauri::Emitter;
 use tauri_plugin_notification::NotificationExt;
-use runway_core::project::{Project, ProjectStatus};
-use runway_core::runtime::{self, RuntimeInfo};
-use runway_core::scheduler::Schedule;
-use runway_core::store::{ExecutionLog, ProjectStore};
-use runway_core::target::Target;
+use berth_core::project::{Project, ProjectStatus};
+use berth_core::runtime::{self, RuntimeInfo};
+use berth_core::scheduler::Schedule;
+use berth_core::store::{ExecutionLog, ProjectStore};
+use berth_core::target::Target;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,10 +37,10 @@ pub struct ProjectResponse {
 pub(crate) fn get_store() -> Result<ProjectStore, String> {
     let data_dir = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.runway.app");
+        .join("com.berth.app");
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-    let db_path = data_dir.join("runway.db");
-    ProjectStore::open(db_path.to_str().unwrap_or("runway.db")).map_err(|e| e.to_string())
+    let db_path = data_dir.join("berth.db");
+    ProjectStore::open(db_path.to_str().unwrap_or("berth.db")).map_err(|e| e.to_string())
 }
 
 /// Get a transport for the given target. None or "local" uses the embedded local agent via gRPC.
@@ -48,7 +48,7 @@ pub(crate) fn get_store() -> Result<ProjectStore, String> {
 async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransport>, String> {
     match target_id {
         None | Some("local") | Some("") => {
-            let client = runway_core::local_agent::get_or_start_local_agent()
+            let client = berth_core::local_agent::get_or_start_local_agent()
                 .await
                 .map_err(|e| format!("Failed to start local agent: {e}"))?;
             Ok(Box::new(client))
@@ -81,6 +81,8 @@ async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransp
 }
 
 /// Get the shared NATS client, or connect on demand from settings.
+// TODO(prod): Hardcode NATS URL to tls://connect.ngs.global for production builds.
+// Keep settings-based override for dev/test (e.g. behind a compile flag or env var).
 async fn get_nats_client() -> Result<async_nats::Client, String> {
     // Try reading from global state (set by start_nats_subscriber in lib.rs)
     if let Some(client) = nats_client_lock().lock().await.clone() {
@@ -154,7 +156,7 @@ pub fn save_paste_code(name: String, code: String) -> Result<String, String> {
 
     let base = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("com.runway.app")
+        .join("com.berth.app")
         .join("projects")
         .join(&name);
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
@@ -281,7 +283,7 @@ pub async fn run_project(
 
     // Spawn background task for streaming logs
     tokio::spawn(async move {
-        use runway_core::agent_transport::ExecuteParams;
+        use berth_core::agent_transport::ExecuteParams;
 
         let params = ExecuteParams {
             project_id: project_id_str.clone(),
@@ -339,9 +341,9 @@ pub async fn run_project(
 
                 if notify_on_complete {
                     let (title, body) = if exit_code == 0 {
-                        ("Runway — Run Complete".to_string(), format!("{project_name} finished successfully"))
+                        ("Berth — Run Complete".to_string(), format!("{project_name} finished successfully"))
                     } else {
-                        ("Runway — Run Failed".to_string(), format!("{project_name} exited with code {exit_code}"))
+                        ("Berth — Run Failed".to_string(), format!("{project_name} exited with code {exit_code}"))
                     };
                     let _ = app_handle.notification().builder().title(&title).body(&body).show();
                 }
@@ -376,7 +378,7 @@ pub async fn run_project(
                 if notify_on_complete {
                     let _ = app_handle.notification()
                         .builder()
-                        .title("Runway — Run Failed")
+                        .title("Berth — Run Failed")
                         .body(&format!("{project_name}: {error_msg}"))
                         .show();
                 }
@@ -509,7 +511,7 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
             Ok(health) => {
                 let _ = store.update_target_status(
                     target.id,
-                    runway_core::target::TargetStatus::Online,
+                    berth_core::target::TargetStatus::Online,
                     Some(&health.version),
                 );
                 let mut info = TargetInfo::from(target);
@@ -520,7 +522,7 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
             Err(e) => {
                 let _ = store.update_target_status(
                     target.id,
-                    runway_core::target::TargetStatus::Offline,
+                    berth_core::target::TargetStatus::Offline,
                     None,
                 );
                 Err(format!("Agent unhealthy: {}", e))
@@ -529,7 +531,7 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
         Err(e) => {
             let _ = store.update_target_status(
                 target.id,
-                runway_core::target::TargetStatus::Offline,
+                berth_core::target::TargetStatus::Offline,
                 None,
             );
             Err(format!("Connection failed: {}", e))
@@ -580,7 +582,7 @@ pub async fn get_agent_stats(id: String) -> Result<AgentStats, String> {
     // Update target status while we're at it
     let _ = store.update_target_status(
         target.id,
-        runway_core::target::TargetStatus::Online,
+        berth_core::target::TargetStatus::Online,
         Some(&health.version),
     );
 
@@ -819,7 +821,7 @@ pub fn import_file(file_path: String) -> Result<Project, String> {
 
     let base = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("com.runway.app")
+        .join("com.berth.app")
         .join("projects")
         .join(&project_name);
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
@@ -904,12 +906,12 @@ async fn get_agent_download_info(version: &str, arch: &str) -> Result<(String, S
     use sha2::{Sha256, Digest};
 
     let store = get_store()?;
-    let binary_name = format!("runway-agent-linux-{arch}");
+    let binary_name = format!("berth-agent-linux-{arch}");
 
     // Check local cache for pre-computed checksum
     let cache_dir = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("com.runway.app")
+        .join("com.berth.app")
         .join("agent-binaries")
         .join(format!("v{version}"));
 
@@ -923,11 +925,12 @@ async fn get_agent_download_info(version: &str, arch: &str) -> Result<(String, S
         .filter(|t| !t.is_empty());
 
     let client = reqwest::Client::builder()
-        .user_agent("runway-app")
+        .user_agent("berth-app")
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
     // Resolve the download URL the agent will use
+    // TODO: update GitHub URLs when repo is renamed to berth
     let (download_url, is_private) = if let Some(token) = &github_token {
         let api_url = format!(
             "https://api.github.com/repos/carlosinfantes/runway/releases/tags/v{version}"
@@ -1046,7 +1049,7 @@ pub async fn upgrade_agent(id: String) -> Result<UpgradeResult, String> {
             if success {
                 let _ = store.update_target_status(
                     uuid,
-                    runway_core::target::TargetStatus::Online,
+                    berth_core::target::TargetStatus::Online,
                     Some(&new_version),
                 );
             }
@@ -1079,7 +1082,7 @@ pub async fn rollback_agent(id: String) -> Result<RollbackResult, String> {
                 let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
                 let _ = store.update_target_status(
                     uuid,
-                    runway_core::target::TargetStatus::Online,
+                    berth_core::target::TargetStatus::Online,
                     Some(&restored_version),
                 );
             }

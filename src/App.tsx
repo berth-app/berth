@@ -56,7 +56,7 @@ export default function App() {
           onSelectProject={handleSelectProject}
           onNewProject={() => setView("paste")}
         />
-        <main className="flex-1 overflow-hidden animate-page-enter bg-runway-bg">
+        <main className="flex-1 overflow-hidden animate-page-enter bg-berth-bg">
           {view === "list" && (
             <ProjectList
               onSelect={handleSelectProject}

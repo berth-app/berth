@@ -1,21 +1,21 @@
 [package]
-name = "runway-app"
+name = "berth-app"
 version = "0.1.9"
 edition = "2021"
 
 [lib]
-name = "runway_app"
+name = "berth_app"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "runway-app"
+name = "berth-app"
 path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-runway-core = { path = "../crates/runway-core", features = ["nats"] }
+berth-core = { path = "../crates/berth-core", features = ["nats"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"

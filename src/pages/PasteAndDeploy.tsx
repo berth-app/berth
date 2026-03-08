@@ -90,14 +90,14 @@ export default function PasteAndDeploy({ onCreated }: Props) {
   return (
     <div className="h-full flex flex-col animate-page-enter">
       <div className="flex-1 overflow-y-auto p-5">
-        <h1 className="text-lg font-semibold text-runway-text-primary mb-6">
+        <h1 className="text-lg font-semibold text-berth-text-primary mb-6">
           Paste & Deploy
         </h1>
 
         <div className="flex flex-col gap-5 max-w-lg">
           {/* Project name */}
           <div>
-            <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+            <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
               Project Name
             </label>
             <input
@@ -128,7 +128,7 @@ export default function PasteAndDeploy({ onCreated }: Props) {
           {/* Code paste area */}
           {mode === "paste" && (
             <div>
-              <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+              <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
                 Paste your code
               </label>
               <textarea
@@ -145,7 +145,7 @@ export default function PasteAndDeploy({ onCreated }: Props) {
           {/* Directory path */}
           {mode === "directory" && (
             <div>
-              <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+              <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
                 Project Path
               </label>
               <div className="flex gap-2">
@@ -167,19 +167,19 @@ export default function PasteAndDeploy({ onCreated }: Props) {
           {/* Runtime detection result */}
           {runtimeInfo && (
             <div className="glass-card-static px-4 py-3 animate-card-enter">
-              <div className="text-xs text-runway-text-secondary mb-1">
+              <div className="text-xs text-berth-text-secondary mb-1">
                 Detected Runtime
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-runway-text-primary">
+                <span className="text-sm font-medium text-berth-text-primary">
                   {runtimeInfo.runtime}
                 </span>
                 {runtimeInfo.entrypoint && (
-                  <span className="text-xs text-runway-text-secondary">
+                  <span className="text-xs text-berth-text-secondary">
                     Entry: {runtimeInfo.entrypoint}
                   </span>
                 )}
-                <span className="text-xs text-runway-text-tertiary ml-auto">
+                <span className="text-xs text-berth-text-tertiary ml-auto">
                   {Math.round(runtimeInfo.confidence * 100)}% confidence
                 </span>
               </div>
@@ -189,7 +189,7 @@ export default function PasteAndDeploy({ onCreated }: Props) {
           {/* Target selector */}
           {targets.length > 0 && (
             <div>
-              <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+              <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
                 Deploy Target
               </label>
               <div className="segmented-control">

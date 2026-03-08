@@ -191,7 +191,7 @@ Nobody offers this today. Not Vercel, not Railway, not Render.
 | Channel | Timeline | Cost | Notes |
 |---------|----------|------|-------|
 | Direct download (DMG) | Launch | Free | Notarized + signed |
-| Homebrew Cask | Launch | Free | `brew install --cask runway` |
+| Homebrew Cask | Launch | Free | `brew install --cask berth` |
 | Product Hunt | Launch week | Free | Target: Top 5 of the day |
 | Hacker News "Show HN" | Launch week | Free | Zero-infra angle |
 | GitHub (agent repo) | Month 1 | Free | Source-available license (BSL) |
@@ -221,7 +221,7 @@ Source-available (Business Source License or similar). Users can inspect what ru
 
 ### Setapp Strategy
 
-Setapp includes Free-tier features only (local execution + direct-connect agents). NATS relay, cloud targets, webhooks, sharing, and template deploy still require a Runway Pro subscription. Distribution without cannibalizing Pro revenue.
+Setapp includes Free-tier features only (local execution + direct-connect agents). NATS relay, cloud targets, webhooks, sharing, and template deploy still require a Berth Pro subscription. Distribution without cannibalizing Pro revenue.
 
 ---
 

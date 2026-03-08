@@ -7,8 +7,8 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-use runway_core::nats_relay::NatsConfig;
-use runway_core::nats_subscriber::NatsSubscriber;
+use berth_core::nats_relay::NatsConfig;
+use berth_core::nats_subscriber::NatsSubscriber;
 
 /// Send a macOS notification for a completed run if the project has notify_on_complete enabled.
 fn notify_if_enabled(app: &tauri::AppHandle, project_id: &str, exit_code: Option<i32>) {
@@ -17,9 +17,9 @@ fn notify_if_enabled(app: &tauri::AppHandle, project_id: &str, exit_code: Option
             if let Some(project) = projects.iter().find(|p| p.id.to_string() == project_id) {
                 if project.notify_on_complete {
                     let (title, body) = if exit_code == Some(0) {
-                        ("Runway — Run Complete", format!("{} finished successfully", project.name))
+                        ("Berth — Run Complete", format!("{} finished successfully", project.name))
                     } else {
-                        ("Runway — Run Failed", format!("{} failed (exit code {:?})", project.name, exit_code))
+                        ("Berth — Run Failed", format!("{} failed (exit code {:?})", project.name, exit_code))
                     };
                     let _ = app.notification().builder().title(title).body(&body).show();
                 }
@@ -43,13 +43,13 @@ fn rebuild_tray_menu(app: &tauri::AppHandle) {
         // Show up to 5 projects, running ones first
         let mut sorted = projects;
         sorted.sort_by(|a, b| {
-            let a_run = a.status == runway_core::project::ProjectStatus::Running;
-            let b_run = b.status == runway_core::project::ProjectStatus::Running;
+            let a_run = a.status == berth_core::project::ProjectStatus::Running;
+            let b_run = b.status == berth_core::project::ProjectStatus::Running;
             b_run.cmp(&a_run).then(b.updated_at.cmp(&a.updated_at))
         });
 
         for project in sorted.iter().take(5) {
-            let label = if project.status == runway_core::project::ProjectStatus::Running {
+            let label = if project.status == berth_core::project::ProjectStatus::Running {
                 format!("\u{25CF} {} (Running)", project.name)
             } else {
                 project.name.clone()
@@ -60,9 +60,9 @@ fn rebuild_tray_menu(app: &tauri::AppHandle) {
 
         builder = builder.separator();
         builder = builder.item(&MenuItemBuilder::with_id("settings", "Settings\u{2026}").build(app)?);
-        builder = builder.item(&MenuItemBuilder::with_id("show", "Show Runway").build(app)?);
+        builder = builder.item(&MenuItemBuilder::with_id("show", "Show Berth").build(app)?);
         builder = builder.separator();
-        builder = builder.item(&MenuItemBuilder::with_id("quit", "Quit Runway").build(app)?);
+        builder = builder.item(&MenuItemBuilder::with_id("quit", "Quit Berth").build(app)?);
 
         let menu = builder.build()?;
         let tray = app.state::<tauri::tray::TrayIcon>();
@@ -91,7 +91,7 @@ fn start_scheduler(app_handle: tauri::AppHandle) {
 
             loop {
                 if let Ok(store) = commands::get_store() {
-                    let results = runway_core::scheduler::tick(&store).await;
+                    let results = berth_core::scheduler::tick(&store).await;
                     for (project_id, result) in &results {
                         let (status, exit_code) = match result {
                             Ok(code) => {
@@ -193,7 +193,7 @@ fn start_nats_subscriber(app_handle: tauri::AppHandle) {
                 .list_targets()
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|t| t.kind == runway_core::target::TargetKind::Remote)
+                .filter(|t| t.kind == berth_core::target::TargetKind::Remote)
                 .filter_map(|t| t.nats_agent_id)
                 .collect(),
             Err(_) => vec![],
@@ -294,13 +294,13 @@ pub fn run() {
         .setup(|app| {
             // Start the embedded local agent on a background task
             tauri::async_runtime::spawn(async {
-                if let Err(e) = runway_core::local_agent::get_or_start_local_agent().await {
+                if let Err(e) = berth_core::local_agent::get_or_start_local_agent().await {
                     tracing::error!("Failed to start local agent: {}", e);
                 }
             });
 
-            let show = MenuItemBuilder::with_id("show", "Show Runway").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit Runway").build(app)?;
+            let show = MenuItemBuilder::with_id("show", "Show Berth").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit Berth").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&show)
                 .separator()
@@ -312,7 +312,7 @@ pub fn run() {
             let tray = TrayIconBuilder::new()
                 .icon(icon)
                 .icon_as_template(true)
-                .tooltip("Runway")
+                .tooltip("Berth")
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     let id = event.id().as_ref();
@@ -324,7 +324,7 @@ pub fn run() {
                             }
                         }
                         "quit" => {
-                            runway_core::local_agent::cleanup_lockfile();
+                            berth_core::local_agent::cleanup_lockfile();
                             app.exit(0);
                         }
                         "new_project" => show_window_and_navigate(app, "paste"),
@@ -389,5 +389,5 @@ pub fn run() {
             upgrade_all_agents,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Runway");
+        .expect("error while running Berth");
 }

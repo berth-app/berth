@@ -31,67 +31,67 @@ function formatUptime(seconds: number): string {
 
 function StatsPanel({ stats }: { stats: AgentStats }) {
   return (
-    <div className="mt-3 pt-3 border-t border-runway-border-subtle">
+    <div className="mt-3 pt-3 border-t border-berth-border-subtle">
       <div className="grid grid-cols-2 gap-x-6 gap-y-2">
         <div className="flex justify-between">
-          <span className="text-xs text-runway-text-secondary">Host</span>
-          <span className="text-xs text-runway-text-primary font-mono">
+          <span className="text-xs text-berth-text-secondary">Host</span>
+          <span className="text-xs text-berth-text-primary font-mono">
             {stats.agent_id}
           </span>
         </div>
         {stats.os && (
           <div className="flex justify-between">
-            <span className="text-xs text-runway-text-secondary">Platform</span>
-            <span className="text-xs text-runway-text-primary">
+            <span className="text-xs text-berth-text-secondary">Platform</span>
+            <span className="text-xs text-berth-text-primary">
               {stats.os}/{stats.arch}
             </span>
           </div>
         )}
         <div className="flex justify-between">
-          <span className="text-xs text-runway-text-secondary">Uptime</span>
-          <span className="text-xs text-runway-text-primary">
+          <span className="text-xs text-berth-text-secondary">Uptime</span>
+          <span className="text-xs text-berth-text-primary">
             {formatUptime(stats.uptime_seconds)}
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-xs text-runway-text-secondary">CPU</span>
+          <span className="text-xs text-berth-text-secondary">CPU</span>
           <span
             className={`text-xs font-mono ${
               stats.cpu_usage > 80
-                ? "text-runway-error"
+                ? "text-berth-error"
                 : stats.cpu_usage > 50
-                  ? "text-runway-warning"
-                  : "text-runway-success"
+                  ? "text-berth-warning"
+                  : "text-berth-success"
             }`}
           >
             {stats.cpu_usage.toFixed(1)}%
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-xs text-runway-text-secondary">Memory</span>
-          <span className="text-xs text-runway-text-primary font-mono">
+          <span className="text-xs text-berth-text-secondary">Memory</span>
+          <span className="text-xs text-berth-text-primary font-mono">
             {stats.memory_mb.toLocaleString()} MB
           </span>
         </div>
         {stats.podman_version && (
           <div className="flex justify-between">
-            <span className="text-xs text-runway-text-secondary">Podman</span>
-            <span className="text-xs text-runway-text-primary">
+            <span className="text-xs text-berth-text-secondary">Podman</span>
+            <span className="text-xs text-berth-text-primary">
               v{stats.podman_version}
             </span>
           </div>
         )}
       </div>
       {stats.running_projects.length > 0 && (
-        <div className="mt-2 pt-2 border-t border-runway-border-subtle">
-          <span className="text-[10px] uppercase tracking-wider text-runway-text-tertiary">
+        <div className="mt-2 pt-2 border-t border-berth-border-subtle">
+          <span className="text-[10px] uppercase tracking-wider text-berth-text-tertiary">
             Running ({stats.running_projects.length})
           </span>
           <div className="mt-1 space-y-1">
             {stats.running_projects.map((p) => (
               <div key={p.project_id} className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-runway-success animate-pulse-soft" />
-                <span className="text-xs text-runway-text-primary font-mono truncate">
+                <div className="w-1.5 h-1.5 rounded-full bg-berth-success animate-pulse-soft" />
+                <span className="text-xs text-berth-text-primary font-mono truncate">
                   {p.project_id}
                 </span>
               </div>
@@ -311,7 +311,7 @@ export default function Targets() {
     <div className="h-full flex flex-col animate-page-enter">
       {/* Header */}
       <div className="px-5 pt-5 pb-4 flex items-center justify-between shrink-0">
-        <h1 className="text-lg font-semibold text-runway-text-primary">
+        <h1 className="text-lg font-semibold text-berth-text-primary">
           Deploy Targets
         </h1>
         <div className="flex gap-2">
@@ -319,7 +319,7 @@ export default function Targets() {
             <button
               onClick={handleUpgradeAll}
               disabled={upgradingAll}
-              className="btn btn-ghost btn-sm text-runway-warning"
+              className="btn btn-ghost btn-sm text-berth-warning"
             >
               <ArrowUpCircle size={14} />
               {upgradingAll ? "Upgrading..." : `Upgrade All (${upgradesAvailable})`}
@@ -340,7 +340,7 @@ export default function Targets() {
         <div className="mx-5 mb-4 glass-card-static p-4 animate-card-enter">
           <div className="grid grid-cols-[1fr_1fr_80px] gap-3 mb-3">
             <div>
-              <label className="text-xs text-runway-text-secondary block mb-1">
+              <label className="text-xs text-berth-text-secondary block mb-1">
                 Name
               </label>
               <input
@@ -352,7 +352,7 @@ export default function Targets() {
               />
             </div>
             <div>
-              <label className="text-xs text-runway-text-secondary block mb-1">
+              <label className="text-xs text-berth-text-secondary block mb-1">
                 Host
               </label>
               <input
@@ -364,7 +364,7 @@ export default function Targets() {
               />
             </div>
             <div>
-              <label className="text-xs text-runway-text-secondary block mb-1">
+              <label className="text-xs text-berth-text-secondary block mb-1">
                 Port
               </label>
               <input
@@ -377,9 +377,9 @@ export default function Targets() {
           </div>
           <div className="flex gap-3 items-end">
             <div className="flex-1">
-              <label className="text-xs text-runway-text-secondary block mb-1">
+              <label className="text-xs text-berth-text-secondary block mb-1">
                 NATS Agent ID{" "}
-                <span className="text-runway-text-tertiary">(optional)</span>
+                <span className="text-berth-text-tertiary">(optional)</span>
               </label>
               <input
                 type="text"
@@ -405,18 +405,18 @@ export default function Targets() {
         {/* Built-in local target */}
         <div className="glass-card-static flex items-center justify-between px-4 py-3 mb-3">
           <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-runway-success" />
+            <div className="w-2 h-2 rounded-full bg-berth-success" />
             <div>
-              <span className="text-sm font-medium text-runway-text-primary">
+              <span className="text-sm font-medium text-berth-text-primary">
                 local
               </span>
-              <span className="text-xs text-runway-text-secondary ml-2">
+              <span className="text-xs text-berth-text-secondary ml-2">
                 127.0.0.1:50051
               </span>
             </div>
             <span className="badge badge-success">built-in</span>
           </div>
-          <span className="text-xs text-runway-text-tertiary">
+          <span className="text-xs text-berth-text-tertiary">
             always available
           </span>
         </div>
@@ -426,7 +426,7 @@ export default function Targets() {
             {[1, 2].map((i) => (
               <div
                 key={i}
-                className="skeleton h-16 w-full rounded-runway-lg"
+                className="skeleton h-16 w-full rounded-berth-lg"
               />
             ))}
           </div>
@@ -435,12 +435,12 @@ export default function Targets() {
             <Server
               size={32}
               strokeWidth={1.5}
-              className="text-runway-text-tertiary mx-auto mb-3"
+              className="text-berth-text-tertiary mx-auto mb-3"
             />
-            <p className="text-sm text-runway-text-secondary">
+            <p className="text-sm text-berth-text-secondary">
               No remote targets configured
             </p>
-            <p className="text-xs text-runway-text-tertiary mt-1">
+            <p className="text-xs text-berth-text-tertiary mt-1">
               Add a target to deploy code to remote machines
             </p>
           </div>
@@ -452,23 +452,23 @@ export default function Targets() {
                   <div className="flex items-center gap-3">
                     <div className="relative flex items-center justify-center w-3 h-3">
                       {liveStatus[t.id] === "checking" ? (
-                        <div className="w-2.5 h-2.5 border-[1.5px] border-runway-surface-3 border-t-runway-accent rounded-full animate-spin" />
+                        <div className="w-2.5 h-2.5 border-[1.5px] border-berth-surface-3 border-t-berth-accent rounded-full animate-spin" />
                       ) : liveStatus[t.id] === "online" ? (
                         <>
-                          <div className="absolute w-2.5 h-2.5 rounded-full bg-runway-success animate-pulse-soft opacity-40" />
-                          <div className="relative w-2 h-2 rounded-full bg-runway-success" />
+                          <div className="absolute w-2.5 h-2.5 rounded-full bg-berth-success animate-pulse-soft opacity-40" />
+                          <div className="relative w-2 h-2 rounded-full bg-berth-success" />
                         </>
                       ) : liveStatus[t.id] === "offline" ? (
-                        <div className="w-2 h-2 rounded-full bg-runway-error" />
+                        <div className="w-2 h-2 rounded-full bg-berth-error" />
                       ) : (
-                        <div className="w-2 h-2 rounded-full bg-runway-text-tertiary" />
+                        <div className="w-2 h-2 rounded-full bg-berth-text-tertiary" />
                       )}
                     </div>
                     <div>
-                      <span className="text-sm font-medium text-runway-text-primary">
+                      <span className="text-sm font-medium text-berth-text-primary">
                         {t.name}
                       </span>
-                      <span className="text-xs text-runway-text-secondary ml-2">
+                      <span className="text-xs text-berth-text-secondary ml-2">
                         {t.host}:{t.port}
                       </span>
                     </div>
@@ -483,7 +483,7 @@ export default function Targets() {
                     )}
                     {upgradingId === t.id ? (
                       <span className="badge badge-warning flex items-center gap-1">
-                        <div className="w-2.5 h-2.5 border-[1.5px] border-runway-warning/30 border-t-runway-warning rounded-full animate-spin" />
+                        <div className="w-2.5 h-2.5 border-[1.5px] border-berth-warning/30 border-t-berth-warning rounded-full animate-spin" />
                         Upgrading...
                       </span>
                     ) : upgradeChecks[t.id]?.available ? (
@@ -501,7 +501,7 @@ export default function Targets() {
                     <button
                       onClick={() => handleToggleStats(t)}
                       className={`btn btn-ghost btn-icon ${
-                        expandedId === t.id ? "!text-runway-accent !bg-runway-accent-bg" : ""
+                        expandedId === t.id ? "!text-berth-accent !bg-berth-accent-bg" : ""
                       }`}
                       title="Agent stats"
                     >
@@ -511,7 +511,7 @@ export default function Targets() {
                       <button
                         onClick={() => handleUpgrade(t)}
                         disabled={upgradingId === t.id}
-                        className="btn btn-ghost btn-sm text-runway-warning"
+                        className="btn btn-ghost btn-sm text-berth-warning"
                         title="Upgrade agent"
                       >
                         <ArrowUpCircle size={14} />
@@ -528,7 +528,7 @@ export default function Targets() {
                     </button>
                     <button
                       onClick={() => handleRemove(t)}
-                      className="btn btn-ghost btn-icon hover:!text-runway-error"
+                      className="btn btn-ghost btn-icon hover:!text-berth-error"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -536,9 +536,9 @@ export default function Targets() {
                 </div>
                 {expandedId === t.id &&
                   (loadingStats === t.id && !stats[t.id] ? (
-                    <div className="mt-3 pt-3 border-t border-runway-border-subtle">
-                      <div className="flex items-center gap-2 text-xs text-runway-text-secondary">
-                        <div className="w-3 h-3 border-2 border-runway-surface-3 border-t-runway-accent rounded-full animate-spin" />
+                    <div className="mt-3 pt-3 border-t border-berth-border-subtle">
+                      <div className="flex items-center gap-2 text-xs text-berth-text-secondary">
+                        <div className="w-3 h-3 border-2 border-berth-surface-3 border-t-berth-accent rounded-full animate-spin" />
                         Connecting to agent...
                       </div>
                     </div>
@@ -548,7 +548,7 @@ export default function Targets() {
                       <div className="mt-2 flex justify-between items-center">
                         <button
                           onClick={() => handleRollback(t)}
-                          className="btn btn-ghost btn-sm text-[10px] text-runway-text-tertiary hover:text-runway-warning"
+                          className="btn btn-ghost btn-sm text-[10px] text-berth-text-tertiary hover:text-berth-warning"
                           title="Rollback to previous agent version"
                         >
                           <Undo2 size={10} />

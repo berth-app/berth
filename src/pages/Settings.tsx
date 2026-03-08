@@ -49,12 +49,12 @@ export default function Settings() {
   if (loading) {
     return (
       <div className="h-full flex flex-col p-5">
-        <h1 className="text-lg font-semibold text-runway-text-primary mb-5">
+        <h1 className="text-lg font-semibold text-berth-text-primary mb-5">
           Settings
         </h1>
         <div className="flex flex-col gap-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="skeleton h-14 w-full rounded-runway-lg" />
+            <div key={i} className="skeleton h-14 w-full rounded-berth-lg" />
           ))}
         </div>
       </div>
@@ -66,20 +66,20 @@ export default function Settings() {
   return (
     <div className="h-full flex flex-col animate-page-enter">
       <div className="flex-1 overflow-y-auto p-5">
-        <h1 className="text-lg font-semibold text-runway-text-primary mb-6">
+        <h1 className="text-lg font-semibold text-berth-text-primary mb-6">
           Settings
         </h1>
 
         <div className="flex flex-col gap-6 max-w-lg">
           {/* General */}
           <section>
-            <h2 className="text-[11px] font-semibold text-runway-text-tertiary uppercase tracking-wider mb-3">
+            <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
               General
             </h2>
             <div className="glass-card-static overflow-hidden">
               {/* Default Target */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-runway-border-subtle">
-                <label className="text-sm text-runway-text-primary">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-berth-border-subtle">
+                <label className="text-sm text-berth-text-primary">
                   Default Target
                 </label>
                 <select
@@ -98,10 +98,10 @@ export default function Settings() {
               {/* Auto-run on create */}
               <div className="flex items-center justify-between px-4 py-3">
                 <div>
-                  <div className="text-sm text-runway-text-primary">
+                  <div className="text-sm text-berth-text-primary">
                     Auto-run on create
                   </div>
-                  <div className="text-xs text-runway-text-tertiary mt-0.5">
+                  <div className="text-xs text-berth-text-tertiary mt-0.5">
                     Run projects immediately after creating them
                   </div>
                 </div>
@@ -121,13 +121,13 @@ export default function Settings() {
 
           {/* Display */}
           <section>
-            <h2 className="text-[11px] font-semibold text-runway-text-tertiary uppercase tracking-wider mb-3">
+            <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
               Display
             </h2>
             <div className="glass-card-static overflow-hidden">
               {/* Mode */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-runway-border-subtle">
-                <label className="text-sm text-runway-text-primary">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-berth-border-subtle">
+                <label className="text-sm text-berth-text-primary">
                   Mode
                 </label>
                 <div className="segmented-control">
@@ -145,8 +145,8 @@ export default function Settings() {
               </div>
 
               {/* Color Theme Gallery */}
-              <div className="px-4 py-3 border-b border-runway-border-subtle">
-                <label className="text-sm text-runway-text-primary block mb-3">
+              <div className="px-4 py-3 border-b border-berth-border-subtle">
+                <label className="text-sm text-berth-text-primary block mb-3">
                   Color Theme
                 </label>
                 <div className="grid grid-cols-5 gap-2">
@@ -154,14 +154,14 @@ export default function Settings() {
                     <button
                       key={t.id}
                       onClick={() => save("theme_palette", t.id)}
-                      className={`group flex flex-col items-center gap-1.5 p-1.5 rounded-runway-md transition-all ${
+                      className={`group flex flex-col items-center gap-1.5 p-1.5 rounded-berth-md transition-all ${
                         activePalette === t.id
-                          ? "ring-2 ring-runway-accent bg-runway-accent-bg"
-                          : "hover:bg-runway-surface-1"
+                          ? "ring-2 ring-berth-accent bg-berth-accent-bg"
+                          : "hover:bg-berth-surface-1"
                       }`}
                     >
                       <div
-                        className="w-full aspect-[3/2] rounded-runway-sm flex items-end justify-center gap-1 pb-1.5"
+                        className="w-full aspect-[3/2] rounded-berth-sm flex items-end justify-center gap-1 pb-1.5"
                         style={{ backgroundColor: t.preview.bg }}
                       >
                         <span
@@ -184,8 +184,8 @@ export default function Settings() {
                       <span
                         className={`text-[10px] leading-tight ${
                           activePalette === t.id
-                            ? "text-runway-accent font-medium"
-                            : "text-runway-text-secondary"
+                            ? "text-berth-accent font-medium"
+                            : "text-berth-text-secondary"
                         }`}
                       >
                         {t.name}
@@ -198,10 +198,10 @@ export default function Settings() {
               {/* Log scrollback */}
               <div className="flex items-center justify-between px-4 py-3">
                 <div>
-                  <div className="text-sm text-runway-text-primary">
+                  <div className="text-sm text-berth-text-primary">
                     Log Scrollback
                   </div>
-                  <div className="text-xs text-runway-text-tertiary mt-0.5">
+                  <div className="text-xs text-berth-text-tertiary mt-0.5">
                     Lines kept in terminal (1K-100K)
                   </div>
                 </div>
@@ -222,16 +222,16 @@ export default function Settings() {
 
           {/* Advanced */}
           <section>
-            <h2 className="text-[11px] font-semibold text-runway-text-tertiary uppercase tracking-wider mb-3">
+            <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
               Advanced
             </h2>
-            <div className="glass-card-static divide-y divide-runway-border-subtle">
+            <div className="glass-card-static divide-y divide-berth-border-subtle">
               <div className="flex items-center justify-between px-4 py-3">
                 <div>
-                  <div className="text-sm text-runway-text-primary">
+                  <div className="text-sm text-berth-text-primary">
                     GitHub Token
                   </div>
-                  <div className="text-xs text-runway-text-tertiary mt-0.5">
+                  <div className="text-xs text-berth-text-tertiary mt-0.5">
                     Required for agent upgrades (private repo access)
                   </div>
                 </div>
@@ -248,14 +248,14 @@ export default function Settings() {
 
           {/* About */}
           <section>
-            <h2 className="text-[11px] font-semibold text-runway-text-tertiary uppercase tracking-wider mb-3">
+            <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
               About
             </h2>
             <div className="glass-card-static px-4 py-3">
-              <div className="text-sm font-medium text-runway-text-primary">
-                Runway
+              <div className="text-sm font-medium text-berth-text-primary">
+                Berth
               </div>
-              <div className="text-xs text-runway-text-secondary mt-0.5">
+              <div className="text-xs text-berth-text-secondary mt-0.5">
                 v0.1.9 — Deployment control plane for AI-generated code
               </div>
             </div>

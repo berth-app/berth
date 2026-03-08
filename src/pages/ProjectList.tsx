@@ -32,10 +32,10 @@ interface Props {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  idle: "bg-runway-text-tertiary",
-  running: "bg-runway-success",
-  stopped: "bg-runway-text-tertiary",
-  failed: "bg-runway-error",
+  idle: "bg-berth-text-tertiary",
+  running: "bg-berth-success",
+  stopped: "bg-berth-text-tertiary",
+  failed: "bg-berth-error",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -60,7 +60,7 @@ const RUNTIME_COLORS: Record<string, string> = {
   go: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
   rust: "bg-orange-500/10 text-orange-400 border-orange-500/20",
   shell: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
-  unknown: "bg-runway-surface-2 text-runway-text-tertiary border-runway-border",
+  unknown: "bg-berth-surface-2 text-berth-text-tertiary border-berth-border",
 };
 
 function timeAgo(dateStr: string): string {
@@ -75,12 +75,12 @@ function LoadingSkeleton() {
   return (
     <div className="h-full flex flex-col p-5">
       <div className="flex items-center justify-between mb-4">
-        <div className="skeleton h-8 w-48 rounded-runway-sm" />
-        <div className="skeleton h-8 w-24 rounded-runway-sm" />
+        <div className="skeleton h-8 w-48 rounded-berth-sm" />
+        <div className="skeleton h-8 w-24 rounded-berth-sm" />
       </div>
       <div className="flex flex-col gap-3">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="skeleton h-16 w-full rounded-runway-lg" />
+          <div key={i} className="skeleton h-16 w-full rounded-berth-lg" />
         ))}
       </div>
     </div>
@@ -156,11 +156,11 @@ function EditProjectModal({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-base font-semibold text-runway-text-primary mb-5">
+        <h3 className="text-base font-semibold text-berth-text-primary mb-5">
           Edit Project
         </h3>
         <div className="mb-4">
-          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+          <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
             Name
           </label>
           <input
@@ -175,7 +175,7 @@ function EditProjectModal({
           />
         </div>
         <div className="mb-4">
-          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+          <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
             Entrypoint
           </label>
           <input
@@ -187,11 +187,11 @@ function EditProjectModal({
           />
         </div>
         <div className="mb-4">
-          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+          <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
             Runtime
           </label>
           <div className="flex items-center gap-2">
-            <div className="input flex-1 !cursor-default text-runway-text-secondary">
+            <div className="input flex-1 !cursor-default text-berth-text-secondary">
               {runtime}
             </div>
             <button
@@ -204,10 +204,10 @@ function EditProjectModal({
           </div>
         </div>
         <div className="mb-5">
-          <label className="block text-xs font-medium text-runway-text-secondary mb-1.5">
+          <label className="block text-xs font-medium text-berth-text-secondary mb-1.5">
             Path
           </label>
-          <div className="input !cursor-default text-runway-text-tertiary text-xs truncate">
+          <div className="input !cursor-default text-berth-text-tertiary text-xs truncate">
             {project.path}
           </div>
         </div>
@@ -387,14 +387,14 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
   if (projects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-5 px-6">
-        <div className="w-16 h-16 rounded-runway-xl bg-runway-accent-bg flex items-center justify-center">
-          <Plus size={28} strokeWidth={1.5} className="text-runway-accent" />
+        <div className="w-16 h-16 rounded-berth-xl bg-berth-accent-bg flex items-center justify-center">
+          <Plus size={28} strokeWidth={1.5} className="text-berth-accent" />
         </div>
         <div className="text-center">
-          <div className="text-base font-semibold text-runway-text-primary mb-1">
+          <div className="text-base font-semibold text-berth-text-primary mb-1">
             No projects yet
           </div>
-          <p className="text-sm text-runway-text-secondary max-w-[280px]">
+          <p className="text-sm text-berth-text-secondary max-w-[280px]">
             Paste code from Claude Code, Cursor, or any AI tool and deploy it
             instantly.
           </p>
@@ -413,7 +413,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
         <div className="relative flex-1 max-w-[280px]">
           <Search
             size={14}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-runway-text-tertiary"
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-berth-text-tertiary"
           />
           <input
             type="text"
@@ -424,7 +424,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
           />
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-runway-text-tertiary">
+          <span className="text-xs text-berth-text-tertiary">
             {projects.length} project{projects.length !== 1 ? "s" : ""}
           </span>
           <button onClick={onNewProject} className="btn btn-primary">
@@ -449,7 +449,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
               >
                 {/* Runtime badge */}
                 <div
-                  className={`w-9 h-9 rounded-runway-sm border flex items-center justify-center text-xs font-bold shrink-0 ${
+                  className={`w-9 h-9 rounded-berth-sm border flex items-center justify-center text-xs font-bold shrink-0 ${
                     RUNTIME_COLORS[project.runtime] ?? RUNTIME_COLORS.unknown
                   }`}
                 >
@@ -459,7 +459,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-runway-text-primary truncate">
+                    <span className="text-sm font-medium text-berth-text-primary truncate">
                       {project.name}
                     </span>
                     {(() => {
@@ -479,13 +479,13 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                       );
                     })()}
                     {project.run_count > 0 && (
-                      <span className="text-[10px] text-runway-text-tertiary">
+                      <span className="text-[10px] text-berth-text-tertiary">
                         {project.run_count} run
                         {project.run_count !== 1 ? "s" : ""}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-runway-text-secondary truncate mt-0.5">
+                  <div className="text-xs text-berth-text-secondary truncate mt-0.5">
                     {project.entrypoint ?? project.path}
                   </div>
                 </div>
@@ -501,7 +501,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                       <Square
                         size={14}
                         fill="currentColor"
-                        className="text-runway-error"
+                        className="text-berth-error"
                       />
                     </button>
                   ) : (
@@ -513,7 +513,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                       <Play
                         size={14}
                         fill="currentColor"
-                        className="text-runway-success"
+                        className="text-berth-success"
                       />
                     </button>
                   )}
@@ -533,7 +533,7 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                       askDelete(project.id);
                     }}
                     title="Delete"
-                    className="btn btn-ghost btn-icon hover:!text-runway-error"
+                    className="btn btn-ghost btn-icon hover:!text-berth-error"
                   >
                     <Trash2 size={14} />
                   </button>
@@ -547,11 +547,11 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                         STATUS_COLORS[project.status] ?? STATUS_COLORS.idle
                       } ${isRunning ? "animate-pulse-soft" : ""}`}
                     />
-                    <span className="text-xs text-runway-text-secondary">
+                    <span className="text-xs text-berth-text-secondary">
                       {STATUS_LABELS[project.status] ?? "Idle"}
                     </span>
                   </div>
-                  <span className="text-[10px] text-runway-text-tertiary">
+                  <span className="text-[10px] text-berth-text-tertiary">
                     {timeAgo(project.updated_at)}
                   </span>
                 </div>
@@ -563,13 +563,13 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
 
       {/* Drag-and-drop overlay */}
       {isDragging && (
-        <div className="absolute inset-4 z-40 flex items-center justify-center border-2 border-dashed border-runway-accent rounded-runway-xl animate-fade-in pointer-events-none bg-runway-accent-bg">
+        <div className="absolute inset-4 z-40 flex items-center justify-center border-2 border-dashed border-berth-accent rounded-berth-xl animate-fade-in pointer-events-none bg-berth-accent-bg">
           <div className="flex flex-col items-center gap-2">
-            <Download size={32} strokeWidth={1.5} className="text-runway-accent" />
-            <span className="text-sm font-medium text-runway-accent">
+            <Download size={32} strokeWidth={1.5} className="text-berth-accent" />
+            <span className="text-sm font-medium text-berth-accent">
               Drop file to import
             </span>
-            <span className="text-xs text-runway-text-secondary">
+            <span className="text-xs text-berth-text-secondary">
               .py, .js, .ts, .go, .sh, .rs
             </span>
           </div>
@@ -648,11 +648,11 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
             className="modal-content"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold text-runway-text-primary mb-1">
+            <h3 className="text-base font-semibold text-berth-text-primary mb-1">
               Delete project?
             </h3>
-            <p className="text-sm text-runway-text-secondary mb-5">
-              <span className="font-medium text-runway-text-primary">
+            <p className="text-sm text-berth-text-secondary mb-5">
+              <span className="font-medium text-berth-text-primary">
                 {projects.find((p) => p.id === confirmDeleteId)?.name}
               </span>{" "}
               will be removed. This cannot be undone.

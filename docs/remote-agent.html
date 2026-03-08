@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Runway Remote Agent - Technical Documentation</title>
+<title>Berth Remote Agent - Technical Documentation</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -69,8 +69,8 @@
 
 <a href="index.html" class="back-link">&larr; Back to main docs</a>
 
-<h1>Runway Remote Agent</h1>
-<p class="subtitle">Architecture, protocol, deployment, and security reference for the Runway agent system.</p>
+<h1>Berth Remote Agent</h1>
+<p class="subtitle">Architecture, protocol, deployment, and security reference for the Berth agent system.</p>
 
 <nav>
   <strong>Contents:</strong>
@@ -90,7 +90,7 @@
 <!-- ============================================================ -->
 <h2 id="overview">Overview</h2>
 
-<p>The Runway Remote Agent is a persistent Rust binary that runs on Linux servers as a systemd service. It receives code deployments from the Runway macOS app (or CLI) over gRPC, manages execution history in a local SQLite database, runs scheduled jobs independently, and supports remote self-upgrade.</p>
+<p>The Berth Remote Agent is a persistent Rust binary that runs on Linux servers as a systemd service. It receives code deployments from the Berth macOS app (or CLI) over gRPC, manages execution history in a local SQLite database, runs scheduled jobs independently, and supports remote self-upgrade.</p>
 
 <div class="callout">
   <p><strong>Key principle:</strong> Zero runtime dependencies + full persistence. The agent is a single static binary with embedded SQLite. All execution history, logs, events, and schedules survive restarts. The app polls the agent for events when connected &mdash; no direct network connectivity from agent to app required.</p>
@@ -98,13 +98,13 @@
 
 <table>
   <tr><th>Property</th><th>Value</th></tr>
-  <tr><td>Binary</td><td><code>runway-agent</code></td></tr>
-  <tr><td>Language</td><td>Rust (shared <code>runway-core</code> crate with app)</td></tr>
+  <tr><td>Binary</td><td><code>berth-agent</code></td></tr>
+  <tr><td>Language</td><td>Rust (shared <code>berth-core</code> crate with app)</td></tr>
   <tr><td>Protocol</td><td>gRPC over HTTP/2 (tonic 0.12), 14 RPCs</td></tr>
   <tr><td>Default port</td><td>50051</td></tr>
-  <tr><td>Protobuf schema</td><td><code>proto/runway.proto</code></td></tr>
-  <tr><td>Local database</td><td><code>~/.runway/agent.db</code> (SQLite, 5 tables)</td></tr>
-  <tr><td>Deployments dir</td><td><code>~/.runway/deploys/{project_id}/v{n}/</code></td></tr>
+  <tr><td>Protobuf schema</td><td><code>proto/berth.proto</code></td></tr>
+  <tr><td>Local database</td><td><code>~/.berth/agent.db</code> (SQLite, 5 tables)</td></tr>
+  <tr><td>Deployments dir</td><td><code>~/.berth/deploys/{project_id}/v{n}/</code></td></tr>
   <tr><td>Supported platforms</td><td>Linux x86_64, Linux aarch64</td></tr>
   <tr><td>Scheduler</td><td>Built-in, tick every 30s, runs independently of app</td></tr>
 </table>
@@ -116,10 +116,10 @@
 
 <div class="diagram">
 ┌──────────────────────────────────────────────────────────────────────┐
-│  macOS (Runway App)                                                  │
+│  macOS (Berth App)                                                  │
 │                                                                      │
 │  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────────┐  │
-│  │  React UI   │───▸│ Tauri Commands│───▸│  runway-core            │  │
+│  │  React UI   │───▸│ Tauri Commands│───▸│  berth-core            │  │
 │  │  (WebKit)   │    │ (Rust)       │    │  ├─ AgentClient (gRPC)  │  │
 │  │             │◂───│              │◂───│  ├─ ProjectStore (SQL)  │  │
 │  │  Terminal   │    │  Events:     │    │  ├─ TLS (rcgen)         │  │
@@ -134,7 +134,7 @@
 │  Linux Server                                        │               │
 │                                                      ▼               │
 │  ┌──────────────────────────────────────────────────────────────┐    │
-│  │  runway-agent (PersistentAgentService)                       │    │
+│  │  berth-agent (PersistentAgentService)                       │    │
 │  │  ├─ gRPC Server (14 RPCs)                                   │    │
 │  │  │   ├─ Health/Status   → version, uptime, os, arch, CPU   │    │
 │  │  │   ├─ Deploy()        → extract tarball, install deps     │    │
@@ -144,14 +144,14 @@
 │  │  │   ├─ GetEvents()     → poll store-and-forward events    │    │
 │  │  │   ├─ *Schedule()     → agent-side cron management       │    │
 │  │  │   └─ Upgrade()       → receive binary, swap, restart    │    │
-│  │  ├─ AgentStore (SQLite ~/.runway/agent.db)                  │    │
+│  │  ├─ AgentStore (SQLite ~/.berth/agent.db)                  │    │
 │  │  │   deployments | executions | logs | events | schedules   │    │
 │  │  ├─ Agent Scheduler (tick every 30s)                        │    │
 │  │  ├─ RunningProcesses (HashMap&lt;project_id, AbortHandle&gt;)     │    │
 │  │  └─ sysinfo (real CPU/memory metrics)                       │    │
 │  └──────────────────────────────────────────────────────────────┘    │
 │                                                                      │
-│  ~/.runway/deploys/{project_id}/v{n}/  ← persistent deploy dirs     │
+│  ~/.berth/deploys/{project_id}/v{n}/  ← persistent deploy dirs     │
 │  └── main.py | requirements.txt | ...                                │
 │                                                                      │
 └──────────────────────────────────────────────────────────────────────┘</div>
@@ -160,7 +160,7 @@
 
 <div class="diagram">
 ┌──────────┐         ┌───────────┐         ┌──────────────┐
-│  React   │  invoke │   Tauri   │  gRPC   │  runway-     │
+│  React   │  invoke │   Tauri   │  gRPC   │  berth-     │
 │  UI      │────────▸│  Command  │────────▸│  agent       │
 │          │         │           │         │              │
 │  Target: │         │  Reads    │         │  Writes code │
@@ -175,7 +175,7 @@
 <!-- ============================================================ -->
 <h2 id="protocol">gRPC Protocol</h2>
 
-<p>Defined in <code>proto/runway.proto</code>. The agent implements a single gRPC service with 14 RPCs:</p>
+<p>Defined in <code>proto/berth.proto</code>. The agent implements a single gRPC service with 14 RPCs:</p>
 
 <h3>Service: <code>AgentService</code></h3>
 
@@ -242,7 +242,7 @@
 
 <div class="flow-step">
   <div class="flow-num">1</div>
-  <div class="flow-body"><strong>Read code from disk</strong> &mdash; Tauri command reads the entrypoint file from <code>~/Library/Application Support/com.runway.app/projects/{name}/{entrypoint}</code> on macOS.</div>
+  <div class="flow-body"><strong>Read code from disk</strong> &mdash; Tauri command reads the entrypoint file from <code>~/Library/Application Support/com.berth.app/projects/{name}/{entrypoint}</code> on macOS.</div>
 </div>
 
 <div class="flow-step">
@@ -262,7 +262,7 @@
 
 <div class="flow-step">
   <div class="flow-num">5</div>
-  <div class="flow-body"><strong>Agent writes to deploy dir</strong> &mdash; Code is written to <code>~/.runway/deploys/{project_id}/v{n}/</code>. A versioned directory is created per deployment, persisted in the <code>deployments</code> table.</div>
+  <div class="flow-body"><strong>Agent writes to deploy dir</strong> &mdash; Code is written to <code>~/.berth/deploys/{project_id}/v{n}/</code>. A versioned directory is created per deployment, persisted in the <code>deployments</code> table.</div>
 </div>
 
 <div class="flow-step">
@@ -288,7 +288,7 @@
 <h3>Sequence Diagram</h3>
 
 <div class="diagram">
-  Mac UI          Tauri Command       AgentClient        runway-agent (Linux)
+  Mac UI          Tauri Command       AgentClient        berth-agent (Linux)
     │                  │                   │                     │
     │  click Run       │                   │                     │
     ├─────────────────▸│                   │                     │
@@ -333,22 +333,22 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
 
 # Copy source and build
-rsync -avz --exclude target --exclude node_modules your-mac:~/runway/ ~/runway/
-cd ~/runway
-cargo build -p runway-agent --release
+rsync -avz --exclude target --exclude node_modules your-mac:~/berth/ ~/berth/
+cd ~/berth
+cargo build -p berth-agent --release
 
 # Run (bind to all interfaces for network access)
-./target/release/runway-agent --listen-all --port 50051</code></pre>
+./target/release/berth-agent --listen-all --port 50051</code></pre>
 
 <h3>Method 2: Install Script</h3>
 
 <p>For production servers. Downloads a pre-built binary and installs as a systemd service.</p>
 
 <pre><code># Install
-curl -sSL https://get.runway.dev | sudo bash
+curl -sSL https://get.berth.dev | sudo bash
 
 # Uninstall
-curl -sSL https://get.runway.dev | sudo bash -s -- --uninstall</code></pre>
+curl -sSL https://get.berth.dev | sudo bash -s -- --uninstall</code></pre>
 
 <p>The install script (<code>scripts/install-agent.sh</code>) performs:</p>
 
@@ -356,21 +356,21 @@ curl -sSL https://get.runway.dev | sudo bash -s -- --uninstall</code></pre>
   <tr><th>Step</th><th>Action</th></tr>
   <tr><td>1. OS Detection</td><td>Linux only (rejects macOS)</td></tr>
   <tr><td>2. Arch Detection</td><td>x86_64 or aarch64</td></tr>
-  <tr><td>3. Download</td><td>Binary from release URL to <code>/usr/local/bin/runway-agent</code></td></tr>
-  <tr><td>4. User Creation</td><td>Creates <code>runway</code> system user (no home, nologin shell)</td></tr>
+  <tr><td>3. Download</td><td>Binary from release URL to <code>/usr/local/bin/berth-agent</code></td></tr>
+  <tr><td>4. User Creation</td><td>Creates <code>berth</code> system user (no home, nologin shell)</td></tr>
   <tr><td>5. systemd Service</td><td>Creates unit file, enables, starts</td></tr>
 </table>
 
 <h4>systemd Service Configuration</h4>
 
 <pre><code>[Unit]
-Description=Runway Agent
+Description=Berth Agent
 After=network.target
 
 [Service]
 Type=simple
-User=runway
-ExecStart=/usr/local/bin/runway-agent --port 50051
+User=berth
+ExecStart=/usr/local/bin/berth-agent --port 50051
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
@@ -381,21 +381,21 @@ WantedBy=multi-user.target</code></pre>
 <h4>Post-Install Commands</h4>
 
 <pre><code># Check status
-systemctl status runway-agent
+systemctl status berth-agent
 
 # View logs
-journalctl -u runway-agent -f
+journalctl -u berth-agent -f
 
 # Restart
-sudo systemctl restart runway-agent</code></pre>
+sudo systemctl restart berth-agent</code></pre>
 
-<h3>Method 3: Register in Runway App</h3>
+<h3>Method 3: Register in Berth App</h3>
 
 <p>After the agent is running, register it as a target:</p>
 
 <pre><code># Via CLI
-runway targets add my-server --host 192.168.1.222 --port 50051
-runway targets ping my-server
+berth targets add my-server --host 192.168.1.222 --port 50051
+berth targets ping my-server
 
 # Via UI
 # Targets page → + Add Target → fill name/host/port → Add → Ping</code></pre>
@@ -433,28 +433,28 @@ runway targets ping my-server
 
 <h3>mTLS Infrastructure (Implemented, Not Yet Wired)</h3>
 
-<p>The TLS module (<code>crates/runway-core/src/tls.rs</code>) provides certificate generation and tonic TLS configuration, ready to be activated:</p>
+<p>The TLS module (<code>crates/berth-core/src/tls.rs</code>) provides certificate generation and tonic TLS configuration, ready to be activated:</p>
 
 <h4>Certificate Chain</h4>
 
 <div class="diagram">
 ┌─────────────────────────────────────────────────────┐
-│  Runway CA (self-signed, 10-year validity)           │
+│  Berth CA (self-signed, 10-year validity)           │
 │  Generated by: tls::generate_ca()                    │
 │  Stored at: ~/Library/Application Support/           │
-│             com.runway.app/certs/ca.crt + ca.key     │
+│             com.berth.app/certs/ca.crt + ca.key     │
 │                                                      │
 │     ┌────────────────┐     ┌────────────────────┐   │
 │     │  Server Cert    │     │  Client Cert        │   │
-│     │  (per agent)    │     │  (Runway app)       │   │
+│     │  (per agent)    │     │  (Berth app)       │   │
 │     │                 │     │                      │   │
-│     │  CN: hostname   │     │  CN: runway-app     │   │
+│     │  CN: hostname   │     │  CN: berth-app     │   │
 │     │  SAN: hostname  │     │  EKU: clientAuth    │   │
 │     │  EKU: serverAuth│     │  1-year validity     │   │
 │     │  1-year validity│     │                      │   │
 │     └────────────────┘     └────────────────────┘   │
 │                                                      │
-│  Both signed by Runway CA                            │
+│  Both signed by Berth CA                            │
 └─────────────────────────────────────────────────────┘</div>
 
 <h4>TLS Functions</h4>
@@ -492,7 +492,7 @@ Channel::from_shared(endpoint)?
 
 <h3>Credential Storage</h3>
 
-<p>The credentials module (<code>crates/runway-core/src/credentials.rs</code>) stores secrets in the macOS Keychain:</p>
+<p>The credentials module (<code>crates/berth-core/src/credentials.rs</code>) stores secrets in the macOS Keychain:</p>
 
 <table>
   <tr><th>Function</th><th>Keychain Key Pattern</th><th>Purpose</th></tr>
@@ -511,8 +511,8 @@ Channel::from_shared(endpoint)?
   <li><strong>LAN only:</strong> Without mTLS, only deploy agents on trusted networks.</li>
   <li><strong>SSH tunnel:</strong> For internet-facing agents, use <code>ssh -L 50051:localhost:50051 user@server</code> and connect to <code>localhost:50051</code>.</li>
   <li><strong>Firewall:</strong> Restrict port 50051 to known IPs via <code>ufw</code> or security groups.</li>
-  <li><strong>Agent user:</strong> The install script creates a <code>runway</code> system user with no shell — processes run without root privileges.</li>
-  <li><strong>Temp directory cleanup:</strong> Executed code lives in <code>/tmp/runway-agent-{uuid}/</code> directories. These should be periodically cleaned.</li>
+  <li><strong>Agent user:</strong> The install script creates a <code>berth</code> system user with no shell — processes run without root privileges.</li>
+  <li><strong>Temp directory cleanup:</strong> Executed code lives in <code>/tmp/berth-agent-{uuid}/</code> directories. These should be periodically cleaned.</li>
 </ul>
 
 <!-- ============================================================ -->
@@ -520,14 +520,14 @@ Channel::from_shared(endpoint)?
 
 <h3>Source Location</h3>
 
-<pre><code>crates/runway-agent/
-├── Cargo.toml               # Deps: runway-core, tonic, clap, sysinfo, rusqlite, chrono, uuid
-├── build.rs                 # Compiles runway.proto via tonic-build
+<pre><code>crates/berth-agent/
+├── Cargo.toml               # Deps: berth-core, tonic, clap, sysinfo, rusqlite, chrono, uuid
+├── build.rs                 # Compiles berth.proto via tonic-build
 └── src/
     ├── main.rs              # CLI, SQLite init, gRPC server, scheduler loop spawn
-    ├── service.rs           # Legacy re-export (AgentServiceImpl from runway-core)
+    ├── service.rs           # Legacy re-export (AgentServiceImpl from berth-core)
     ├── persistent_service.rs # PersistentAgentService (14 RPCs with SQLite persistence)
-    ├── agent_store.rs       # AgentStore: SQLite at ~/.runway/agent.db (5 tables)
+    ├── agent_store.rs       # AgentStore: SQLite at ~/.berth/agent.db (5 tables)
     └── agent_scheduler.rs   # Independent scheduler (tick every 30s, runs cron jobs)</code></pre>
 
 <h3>Process Management</h3>
@@ -568,9 +568,9 @@ Channel::from_shared(endpoint)?
 <!-- ============================================================ -->
 <h2 id="client">Client Library</h2>
 
-<p>The gRPC client (<code>crates/runway-core/src/agent_client.rs</code>) is used by both the Tauri app and the CLI:</p>
+<p>The gRPC client (<code>crates/berth-core/src/agent_client.rs</code>) is used by both the Tauri app and the CLI:</p>
 
-<pre><code>use runway_core::agent_client::AgentClient;
+<pre><code>use berth_core::agent_client::AgentClient;
 
 // Connect
 let mut client = AgentClient::connect("http://192.168.1.222:50051").await?;
@@ -681,7 +681,7 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
   <ul>
     <li><strong>Multi-file deploy</strong> &mdash; Deploy RPC accepts tarballs, extracts to persistent directory</li>
     <li><strong>Dependency install</strong> &mdash; Deploy runs <code>pip install</code>, <code>npm install</code>, <code>go mod download</code> automatically</li>
-    <li><strong>Temp cleanup</strong> &mdash; Deployments go to <code>~/.runway/deploys/</code>, old versions auto-pruned (keep last 5)</li>
+    <li><strong>Temp cleanup</strong> &mdash; Deployments go to <code>~/.berth/deploys/</code>, old versions auto-pruned (keep last 5)</li>
     <li><strong>Log persistence</strong> &mdash; All execution logs stored in SQLite, replayable via GetExecutionLogs</li>
     <li><strong>Offline scheduling</strong> &mdash; Agent runs cron jobs independently, events queued for app to poll</li>
   </ul>
@@ -693,7 +693,7 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 <table>
   <tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
   <tr><td>gRPC agent server (14 RPCs)</td><td><span class="badge badge-done">Done</span></td><td>Health, Status, Deploy, Execute, Stop, StreamLogs + 8 persistent RPCs</td></tr>
-  <tr><td>SQLite persistence</td><td><span class="badge badge-done">Done</span></td><td><code>~/.runway/agent.db</code> — 5 tables, survives restarts</td></tr>
+  <tr><td>SQLite persistence</td><td><span class="badge badge-done">Done</span></td><td><code>~/.berth/agent.db</code> — 5 tables, survives restarts</td></tr>
   <tr><td>Execution history + logs</td><td><span class="badge badge-done">Done</span></td><td>Persistent, replayable via GetExecutions/GetExecutionLogs</td></tr>
   <tr><td>Store-and-forward events</td><td><span class="badge badge-done">Done</span></td><td>Agent queues events, app polls via GetEvents/AckEvents</td></tr>
   <tr><td>Agent-side scheduler</td><td><span class="badge badge-done">Done</span></td><td>Tick every 30s, runs cron jobs independently of app</td></tr>
@@ -706,14 +706,14 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
   <tr><td>UI target management</td><td><span class="badge badge-done">Done</span></td><td>Targets page with add/remove/ping/stats (os, arch, CPU, memory)</td></tr>
   <tr><td>UI remote execution</td><td><span class="badge badge-done">Done</span></td><td>Target selector + Run/Stop on remote</td></tr>
   <tr><td>Install script + systemd</td><td><span class="badge badge-done">Done</span></td><td>systemd service with auto-restart on Linux</td></tr>
-  <tr><td>mDNS LAN discovery</td><td><span class="badge badge-done">Done</span></td><td><code>_runway._tcp.local.</code> via mdns-sd</td></tr>
+  <tr><td>mDNS LAN discovery</td><td><span class="badge badge-done">Done</span></td><td><code>_berth._tcp.local.</code> via mdns-sd</td></tr>
   <tr><td>TLS cert generation</td><td><span class="badge badge-done">Done</span></td><td>CA + server/client certs via rcgen</td></tr>
   <tr><td>Activate mTLS</td><td><span class="badge badge-planned">Planned</span></td><td>Wire tls.rs into agent + client</td></tr>
   <tr><td>Container sandboxing</td><td><span class="badge badge-planned">Planned</span></td><td>OCI/Docker isolation per project</td></tr>
 </table>
 
 <p style="margin-top: 3rem; color: var(--muted); font-size: 0.85rem; text-align: center;">
-  Runway Remote Agent Documentation &mdash; Generated March 2026
+  Berth Remote Agent Documentation &mdash; Generated March 2026
 </p>
 
 </div>

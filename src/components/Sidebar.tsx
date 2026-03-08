@@ -15,10 +15,10 @@ interface Props {
 }
 
 const STATUS_DOT: Record<string, string> = {
-  running: "bg-runway-success",
-  failed: "bg-runway-error",
-  idle: "bg-runway-text-tertiary",
-  stopped: "bg-runway-text-tertiary",
+  running: "bg-berth-success",
+  failed: "bg-berth-error",
+  idle: "bg-berth-text-tertiary",
+  stopped: "bg-berth-text-tertiary",
 };
 
 export default function Sidebar({
@@ -67,8 +67,8 @@ export default function Sidebar({
   return (
     <aside className="sidebar">
       <div data-tauri-drag-region className="sidebar-brand">
-        <Rocket size={16} strokeWidth={1.75} className="text-runway-accent" />
-        <span>Runway</span>
+        <Rocket size={16} strokeWidth={1.75} className="text-berth-accent" />
+        <span>Berth</span>
       </div>
 
       <nav className="sidebar-nav">
@@ -108,7 +108,7 @@ export default function Sidebar({
             className="btn btn-ghost btn-icon"
             style={{ padding: 3 }}
           >
-            <Plus size={14} strokeWidth={2} className="text-runway-accent" />
+            <Plus size={14} strokeWidth={2} className="text-berth-accent" />
           </button>
         </div>
 
@@ -129,7 +129,7 @@ export default function Sidebar({
             </button>
           ))}
           {projects.length === 0 && (
-            <div className="px-3 py-4 text-[11px] text-runway-text-tertiary text-center">
+            <div className="px-3 py-4 text-[11px] text-berth-text-tertiary text-center">
               No projects yet
             </div>
           )}

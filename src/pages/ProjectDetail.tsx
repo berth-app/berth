@@ -42,10 +42,10 @@ interface Props {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  idle: "bg-runway-text-tertiary",
-  running: "bg-runway-success",
-  stopped: "bg-runway-text-tertiary",
-  failed: "bg-runway-error",
+  idle: "bg-berth-text-tertiary",
+  running: "bg-berth-success",
+  stopped: "bg-berth-text-tertiary",
+  failed: "bg-berth-error",
 };
 
 function timeAgo(dateStr: string | null): string {
@@ -155,7 +155,7 @@ function SchedulePanel({ projectId }: { projectId: string }) {
   return (
     <div className="side-panel-body flex flex-col gap-4">
       {schedules.length === 0 ? (
-        <div className="text-xs text-runway-text-tertiary py-4 text-center">
+        <div className="text-xs text-berth-text-tertiary py-4 text-center">
           No schedules yet
         </div>
       ) : (
@@ -163,12 +163,12 @@ function SchedulePanel({ projectId }: { projectId: string }) {
           {schedules.map((s) => (
             <div
               key={s.id}
-              className="flex items-start gap-3 py-2.5 border-b border-runway-border-subtle last:border-b-0 group"
+              className="flex items-start gap-3 py-2.5 border-b border-berth-border-subtle last:border-b-0 group"
             >
               <button
                 onClick={() => handleToggle(s.id, !s.enabled)}
                 className={`w-2 h-2 rounded-full mt-1.5 shrink-0 transition-colors cursor-pointer ${
-                  s.enabled ? "bg-runway-success" : "bg-runway-text-tertiary"
+                  s.enabled ? "bg-berth-success" : "bg-berth-text-tertiary"
                 }`}
                 title={s.enabled ? "Active — click to pause" : "Paused — click to enable"}
               />
@@ -176,14 +176,14 @@ function SchedulePanel({ projectId }: { projectId: string }) {
                 <span className="schedule-expr">
                   {s.cron_expr}
                 </span>
-                <div className="text-[11px] text-runway-text-tertiary mt-1">
+                <div className="text-[11px] text-berth-text-tertiary mt-1">
                   {humanizeCron(s.cron_expr)}
                   {s.next_run_at && <span className="ml-2">Next: {formatDate(s.next_run_at)}</span>}
                 </div>
               </div>
               <button
                 onClick={() => handleRemove(s.id)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity text-runway-text-tertiary hover:text-runway-error p-0.5"
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-berth-text-tertiary hover:text-berth-error p-0.5"
               >
                 <X size={12} />
               </button>
@@ -192,7 +192,7 @@ function SchedulePanel({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <div className="border-t border-runway-border-subtle pt-3">
+      <div className="border-t border-berth-border-subtle pt-3">
         <div className="flex gap-2">
           <input
             type="text"
@@ -246,7 +246,7 @@ function HistoryPanel({
   if (logs.length === 0) {
     return (
       <div className="side-panel-body">
-        <div className="text-xs text-runway-text-tertiary py-4 text-center">
+        <div className="text-xs text-berth-text-tertiary py-4 text-center">
           No executions yet
         </div>
       </div>
@@ -279,7 +279,7 @@ function HistoryPanel({
             <div key={log.id} className="history-item">
               <div className={`history-dot ${dotClass}`} />
               <div className="flex items-center gap-2 text-[11px]">
-                <span className="text-runway-text-secondary">
+                <span className="text-berth-text-secondary">
                   {formatDate(log.started_at)}
                 </span>
                 <span
@@ -293,23 +293,23 @@ function HistoryPanel({
                 {!isRunning && (
                   <span
                     className={`font-mono ${
-                      isSuccess ? "text-runway-success" : "text-runway-error"
+                      isSuccess ? "text-berth-success" : "text-berth-error"
                     }`}
                   >
                     exit {log.exit_code}
                   </span>
                 )}
                 {isRunning && (
-                  <span className="text-runway-accent">running</span>
+                  <span className="text-berth-accent">running</span>
                 )}
                 {duration && (
-                  <span className="text-runway-text-tertiary ml-auto">
+                  <span className="text-berth-text-tertiary ml-auto">
                     {duration}
                   </span>
                 )}
               </div>
               {!isSuccess && !isRunning && log.output && (
-                <div className="mt-1 text-[10px] font-mono text-runway-error/70 truncate">
+                <div className="mt-1 text-[10px] font-mono text-berth-error/70 truncate">
                   {log.output.split("\n")[0]?.slice(0, 80)}
                 </div>
               )}
@@ -341,8 +341,8 @@ function SettingsPanel({
       <div>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Bell size={13} className="text-runway-text-secondary" />
-            <span className="text-xs font-medium text-runway-text-primary">
+            <Bell size={13} className="text-berth-text-secondary" />
+            <span className="text-xs font-medium text-berth-text-primary">
               Notifications
             </span>
           </div>
@@ -353,38 +353,38 @@ function SettingsPanel({
             style={{ width: 32, height: 19 }}
           />
         </div>
-        <div className="text-[11px] text-runway-text-tertiary mt-1 ml-5">
+        <div className="text-[11px] text-berth-text-tertiary mt-1 ml-5">
           Notify on completion or failure
         </div>
       </div>
 
-      <div className="border-t border-runway-border-subtle pt-4">
-        <div className="text-[11px] text-runway-text-tertiary uppercase tracking-wider font-medium mb-2">
+      <div className="border-t border-berth-border-subtle pt-4">
+        <div className="text-[11px] text-berth-text-tertiary uppercase tracking-wider font-medium mb-2">
           Info
         </div>
         <div className="space-y-2">
           <div>
-            <div className="text-[10px] text-runway-text-tertiary">Entrypoint</div>
-            <div className="text-xs font-mono text-runway-text-secondary">
+            <div className="text-[10px] text-berth-text-tertiary">Entrypoint</div>
+            <div className="text-xs font-mono text-berth-text-secondary">
               {project.entrypoint ?? "none"}
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-runway-text-tertiary">Runtime</div>
-            <div className="text-xs text-runway-text-secondary">
+            <div className="text-[10px] text-berth-text-tertiary">Runtime</div>
+            <div className="text-xs text-berth-text-secondary">
               {project.runtime}
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-runway-text-tertiary">Path</div>
-            <div className="text-xs font-mono text-runway-text-secondary truncate">
+            <div className="text-[10px] text-berth-text-tertiary">Path</div>
+            <div className="text-xs font-mono text-berth-text-secondary truncate">
               {project.path}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="border-t border-runway-border-subtle pt-4 mt-auto">
+      <div className="border-t border-berth-border-subtle pt-4 mt-auto">
         {!confirmDelete ? (
           <button
             onClick={() => setConfirmDelete(true)}
@@ -395,7 +395,7 @@ function SettingsPanel({
           </button>
         ) : (
           <div className="space-y-2">
-            <div className="text-xs text-runway-error text-center">
+            <div className="text-xs text-berth-error text-center">
               Are you sure? This cannot be undone.
             </div>
             <div className="flex gap-2">
@@ -447,11 +447,11 @@ function TargetDropdown({
   const label = selected ? selected.name : "local";
   const dotColor = selected
     ? selected.status === "online"
-      ? "bg-runway-success"
+      ? "bg-berth-success"
       : selected.status === "offline"
-        ? "bg-runway-error"
-        : "bg-runway-text-tertiary"
-    : "bg-runway-success";
+        ? "bg-berth-error"
+        : "bg-berth-text-tertiary"
+    : "bg-berth-success";
 
   return (
     <div className="relative" ref={ref}>
@@ -461,7 +461,7 @@ function TargetDropdown({
       >
         <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
         {label}
-        <ChevronDown size={10} className="text-runway-text-tertiary" />
+        <ChevronDown size={10} className="text-berth-text-tertiary" />
       </button>
 
       {open && (
@@ -474,7 +474,7 @@ function TargetDropdown({
             className="target-option"
             data-selected={selectedTarget === null}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-runway-success" />
+            <span className="w-1.5 h-1.5 rounded-full bg-berth-success" />
             local
           </button>
           {targets.map((t) => (
@@ -490,14 +490,14 @@ function TargetDropdown({
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   t.status === "online"
-                    ? "bg-runway-success"
+                    ? "bg-berth-success"
                     : t.status === "offline"
-                      ? "bg-runway-error"
-                      : "bg-runway-text-tertiary"
+                      ? "bg-berth-error"
+                      : "bg-berth-text-tertiary"
                 }`}
               />
               {t.name}
-              <span className="text-[10px] text-runway-text-tertiary ml-auto">
+              <span className="text-[10px] text-berth-text-tertiary ml-auto">
                 {t.kind}
               </span>
             </button>
@@ -705,16 +705,16 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
 
   const exitCodeColor =
     project.last_exit_code === null
-      ? "text-runway-text-tertiary"
+      ? "text-berth-text-tertiary"
       : project.last_exit_code === 0
-        ? "text-runway-success"
-        : "text-runway-error";
+        ? "text-berth-success"
+        : "text-berth-error";
 
   return (
     <div className="h-full flex flex-col animate-page-enter">
       {/* ── Header ──────────────────────────────────────────────── */}
-      <div className="h-[52px] flex items-center px-5 gap-3 border-b border-runway-border-subtle shrink-0">
-        <h1 className="text-[15px] font-semibold text-runway-text-primary tracking-tight truncate">
+      <div className="h-[52px] flex items-center px-5 gap-3 border-b border-berth-border-subtle shrink-0">
+        <h1 className="text-[15px] font-semibold text-berth-text-primary tracking-tight truncate">
           {project.name}
         </h1>
         <span className="badge badge-neutral">{project.runtime}</span>
@@ -726,11 +726,11 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
               STATUS_COLORS[status] ?? STATUS_COLORS.idle
             } ${isRunning ? "animate-pulse-soft" : ""}`}
           />
-          <span className="text-xs text-runway-text-secondary capitalize">
+          <span className="text-xs text-berth-text-secondary capitalize">
             {status}
           </span>
           {uptime && (
-            <span className="text-xs font-mono text-runway-text-tertiary tabular-nums">
+            <span className="text-xs font-mono text-berth-text-tertiary tabular-nums">
               {uptime}
             </span>
           )}
@@ -758,7 +758,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
       </div>
 
       {/* ── Toolbar ─────────────────────────────────────────────── */}
-      <div className="h-10 flex items-center px-5 gap-4 border-b border-runway-border-subtle shrink-0">
+      <div className="h-10 flex items-center px-5 gap-4 border-b border-berth-border-subtle shrink-0">
         {/* Target dropdown */}
         {targets.length > 0 && (
           <TargetDropdown
@@ -769,11 +769,11 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
         )}
 
         {/* Inline stats */}
-        <div className="flex items-center gap-0 text-xs text-runway-text-secondary tabular-nums">
+        <div className="flex items-center gap-0 text-xs text-berth-text-secondary tabular-nums">
           <span>{project.run_count} runs</span>
-          <span className="text-runway-text-tertiary mx-2">&middot;</span>
+          <span className="text-berth-text-tertiary mx-2">&middot;</span>
           <span>{timeAgo(project.last_run_at)}</span>
-          <span className="text-runway-text-tertiary mx-2">&middot;</span>
+          <span className="text-berth-text-tertiary mx-2">&middot;</span>
           <span className={exitCodeColor}>
             exit {project.last_exit_code !== null ? project.last_exit_code : "--"}
           </span>
@@ -810,11 +810,11 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
 
       {/* ── Error banner ────────────────────────────────────────── */}
       {error && (
-        <div className="px-5 py-2 bg-runway-error-bg border-b border-runway-error/20 flex items-center gap-2">
-          <span className="text-xs text-runway-error flex-1">{error}</span>
+        <div className="px-5 py-2 bg-berth-error-bg border-b border-berth-error/20 flex items-center gap-2">
+          <span className="text-xs text-berth-error flex-1">{error}</span>
           <button
             onClick={() => setError(null)}
-            className="text-runway-error/60 hover:text-runway-error"
+            className="text-berth-error/60 hover:text-berth-error"
           >
             <X size={12} />
           </button>
@@ -848,10 +848,10 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
               {logs.length === 0 && !isRunning ? (
                 <div className="flex-1 flex items-center justify-center">
                   <div className="text-center">
-                    <div className="text-runway-text-secondary text-sm">
+                    <div className="text-berth-text-secondary text-sm">
                       No output yet
                     </div>
-                    <div className="text-runway-text-tertiary text-xs mt-1">
+                    <div className="text-berth-text-tertiary text-xs mt-1">
                       Click Run to start the project
                     </div>
                   </div>
@@ -866,25 +866,25 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
             <>
               {fileLoading ? (
                 <div className="flex-1 flex items-center justify-center">
-                  <div className="text-runway-text-secondary text-sm">
+                  <div className="text-berth-text-secondary text-sm">
                     Loading...
                   </div>
                 </div>
               ) : fileContent === null ? (
                 <div className="flex-1 flex items-center justify-center">
                   <div className="text-center">
-                    <div className="text-runway-text-secondary text-sm">
+                    <div className="text-berth-text-secondary text-sm">
                       No entrypoint file
                     </div>
-                    <div className="text-runway-text-tertiary text-xs mt-1">
+                    <div className="text-berth-text-tertiary text-xs mt-1">
                       This project has no entrypoint to view
                     </div>
                   </div>
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col min-h-0">
-                  <div className="flex items-center justify-between px-5 py-1.5 border-b border-runway-border-subtle">
-                    <span className="text-[11px] text-runway-text-tertiary font-mono">
+                  <div className="flex items-center justify-between px-5 py-1.5 border-b border-berth-border-subtle">
+                    <span className="text-[11px] text-berth-text-tertiary font-mono">
                       {project.entrypoint}
                     </span>
                     {fileDirty && (
@@ -923,7 +923,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
                       }
                     }}
                     spellCheck={false}
-                    className="flex-1 w-full p-4 bg-transparent text-sm font-mono text-runway-text-primary resize-none focus:outline-none leading-relaxed"
+                    className="flex-1 w-full p-4 bg-transparent text-sm font-mono text-berth-text-primary resize-none focus:outline-none leading-relaxed"
                   />
                 </div>
               )}
@@ -942,7 +942,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
               </span>
               <button
                 onClick={() => setActivePanel(null)}
-                className="text-runway-text-tertiary hover:text-runway-text-primary transition-colors"
+                className="text-berth-text-tertiary hover:text-berth-text-primary transition-colors"
               >
                 <X size={14} />
               </button>

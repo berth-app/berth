@@ -90,7 +90,7 @@ export default function Terminal({ logs, flush }: Props) {
   return (
     <div
       ref={containerRef}
-      className={`flex-1 overflow-hidden ${flush ? "" : "rounded-runway-lg glass-card-static"}`}
+      className={`flex-1 overflow-hidden ${flush ? "" : "rounded-berth-lg glass-card-static"}`}
     />
   );
 }

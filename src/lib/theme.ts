@@ -26,34 +26,34 @@ let currentPalette = "default";
 let currentMode = "system";
 
 const THEME_VARS = [
-  "--runway-bg",
-  "--runway-surface-0",
-  "--runway-surface-1",
-  "--runway-surface-2",
-  "--runway-surface-3",
-  "--runway-text-primary",
-  "--runway-text-secondary",
-  "--runway-text-tertiary",
-  "--runway-border",
-  "--runway-border-subtle",
-  "--runway-border-strong",
-  "--runway-accent",
-  "--runway-accent-light",
-  "--runway-accent-dark",
-  "--runway-accent-bg",
-  "--runway-accent-border",
-  "--runway-success",
-  "--runway-success-bg",
-  "--runway-warning",
-  "--runway-warning-bg",
-  "--runway-error",
-  "--runway-error-bg",
-  "--runway-shadow-sm",
-  "--runway-shadow-md",
-  "--runway-shadow-lg",
-  "--runway-shadow-glow",
-  "--runway-glass-bg",
-  "--runway-glass-border",
+  "--berth-bg",
+  "--berth-surface-0",
+  "--berth-surface-1",
+  "--berth-surface-2",
+  "--berth-surface-3",
+  "--berth-text-primary",
+  "--berth-text-secondary",
+  "--berth-text-tertiary",
+  "--berth-border",
+  "--berth-border-subtle",
+  "--berth-border-strong",
+  "--berth-accent",
+  "--berth-accent-light",
+  "--berth-accent-dark",
+  "--berth-accent-bg",
+  "--berth-accent-border",
+  "--berth-success",
+  "--berth-success-bg",
+  "--berth-warning",
+  "--berth-warning-bg",
+  "--berth-error",
+  "--berth-error-bg",
+  "--berth-shadow-sm",
+  "--berth-shadow-md",
+  "--berth-shadow-lg",
+  "--berth-shadow-glow",
+  "--berth-glass-bg",
+  "--berth-glass-border",
 ];
 
 export async function loadThemeManifest(): Promise<ThemeManifestEntry[]> {
@@ -114,7 +114,7 @@ export async function setTheme(
 
   if (paletteId === "default") {
     clearThemeVars();
-    localStorage.removeItem("runway_theme_cache");
+    localStorage.removeItem("berth_theme_cache");
     return;
   }
 
@@ -124,7 +124,7 @@ export async function setTheme(
   applyThemeVars(vars);
 
   localStorage.setItem(
-    "runway_theme_cache",
+    "berth_theme_cache",
     JSON.stringify({ palette: paletteId, mode: modeSetting, vars })
   );
 }
@@ -138,7 +138,7 @@ export function initThemeListener() {
         const mode = resolveMode("system");
         applyThemeVars(theme[mode]);
         localStorage.setItem(
-          "runway_theme_cache",
+          "berth_theme_cache",
           JSON.stringify({
             palette: currentPalette,
             mode: currentMode,
@@ -151,7 +151,7 @@ export function initThemeListener() {
 }
 
 export function applyThemeCacheFromLocalStorage() {
-  const raw = localStorage.getItem("runway_theme_cache");
+  const raw = localStorage.getItem("berth_theme_cache");
   if (!raw) return;
   try {
     const { palette, mode, vars } = JSON.parse(raw);

@@ -1,11 +1,11 @@
-# Runway - Project Instructions
+# Berth - Project Instructions
 
 > Mac-native deployment control plane for AI-generated code.
 > "Paste code. Pick a target. It's running."
 
 ## Project Overview
 
-Runway is a Tauri-based macOS app that lets developers deploy and manage code — especially AI-generated code from Claude Code, Codex, Cursor — to local machines, remote Linux servers, AWS Lambda, and Cloudflare Workers. It includes a lightweight Rust agent for remote execution and exposes an MCP server so AI coding agents can deploy and monitor programmatically.
+Berth is a Tauri-based macOS app that lets developers deploy and manage code — especially AI-generated code from Claude Code, Codex, Cursor — to local machines, remote Linux servers, AWS Lambda, and Cloudflare Workers. It includes a lightweight Rust agent for remote execution and exposes an MCP server so AI coding agents can deploy and monitor programmatically.
 
 ## Current Status (March 2026)
 
@@ -14,14 +14,14 @@ Phases 1-3 complete. Phase 4 (cloud targets + polish) is next.
 **Working end-to-end:** Project CRUD, runtime detection, agent-based Run/Stop with log streaming (local via UDS, remote via NATS), Paste & Deploy, xterm.js terminal, menu bar tray, cron scheduling.
 **MCP server:** 17 tools (stdio transport), Claude Code verified end-to-end.
 **CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets.
-**Remote agents:** Persistent agent with SQLite store (`~/.runway/agent.db`), 14 gRPC RPCs + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
+**Remote agents:** Persistent agent with SQLite store (`~/.berth/agent.db`), 14 gRPC RPCs + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
 **NATS command channel:** All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. `AgentTransport` trait abstracts gRPC vs NATS — transport selected per target based on `nats_enabled` flag.
 **Phase 4 progress:** macOS notifications on run complete/fail (manual + scheduled, local + remote, per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector.
 **Built but not wired:** mTLS certificate infrastructure (tls.rs), Keychain credential storage (credentials.rs).
 
 ### Persistent Remote Agent (March 7, 2026)
-The remote agent (`runway-agent`) was redesigned from a stateless gRPC server to a production-grade persistent service:
-- **AgentStore** (`agent_store.rs`): SQLite at `~/.runway/agent.db` with 5 tables (deployments, executions, execution_logs, events, schedules)
+The remote agent (`berth-agent`) was redesigned from a stateless gRPC server to a production-grade persistent service:
+- **AgentStore** (`agent_store.rs`): SQLite at `~/.berth/agent.db` with 5 tables (deployments, executions, execution_logs, events, schedules)
 - **PersistentAgentService** (`persistent_service.rs`): 14 gRPC RPCs — Deploy, Execute, Stop, Health, Status, StreamLogs + 8 new RPCs (GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade)
 - **Agent Scheduler** (`agent_scheduler.rs`): Independent tick() loop every 30s, runs cron jobs even when app is offline
 - **Store-and-forward events**: Agent stores events locally, app polls via GetEvents RPC when connected
@@ -34,9 +34,9 @@ The remote agent (`runway-agent`) was redesigned from a stateless gRPC server to
 Remote agent communication fully routed through NATS — no direct network connection needed between desktop and agent:
 - **AgentTransport trait** (`agent_transport.rs`): Unified async trait with health/status/stop/execute_streaming/deploy_streaming + schedule ops. Both `AgentClient` (gRPC) and `NatsAgentClient` (NATS) implement it.
 - **NatsAgentClient** (`nats_cmd_client.rs`): Desktop-side NATS command client. Uses request-reply for simple RPCs, publish+subscribe for streaming (Execute, Deploy, Logs).
-- **NatsCommandHandler** (`nats_cmd_handler.rs`): Agent-side NATS command subscriber. Listens on `runway.<agent_id>.cmd.>`, dispatches to `PersistentAgentService::do_*()` methods.
+- **NatsCommandHandler** (`nats_cmd_handler.rs`): Agent-side NATS command subscriber. Listens on `berth.<agent_id>.cmd.>`, dispatches to `PersistentAgentService::do_*()` methods.
 - **Transport selection**: `get_agent_client()` returns `Box<dyn AgentTransport>`. If target has `nats_enabled=true` + `nats_agent_id`, routes through NATS; otherwise falls back to gRPC.
-- **Subject hierarchy**: `runway.<agent_id>.cmd.<type>` for commands, `runway.<agent_id>.resp.<request_id>` for streaming responses, plus existing event/log/heartbeat subjects via JetStream.
+- **Subject hierarchy**: `berth.<agent_id>.cmd.<type>` for commands, `berth.<agent_id>.resp.<request_id>` for streaming responses, plus existing event/log/heartbeat subjects via JetStream.
 - **Target UI**: Add Target form includes optional "NATS Agent ID" field. Green "NATS" badge on enabled targets. `update_target_nats` Tauri command for toggling.
 - **Zero inbound ports**: Both desktop and agent connect outbound to `tls://connect.ngs.global`. Works behind NAT, firewalls, different networks.
 
@@ -58,7 +58,7 @@ See `tasks.md` for detailed pending work. The app runs via `cargo tauri dev` on 
 - Zero accounts required for local use. Sign-up only when you need remote/sync.
 
 ### AI-controllable by design
-- Runway exposes an MCP server. Claude Code (or any MCP client) can:
+- Berth exposes an MCP server. Claude Code (or any MCP client) can:
   - List projects and their status
   - Deploy code to any configured target
   - Read logs and monitoring data
@@ -70,11 +70,11 @@ See `tasks.md` for detailed pending work. The app runs via `cargo tauri dev` on 
 ## Architecture
 
 ```
-runway-app/          # Tauri 2.0 app (Rust backend + React frontend)
-runway-agent/        # Rust binary (runs locally or on remote targets)
-runway-cli/          # CLI interface (thin wrapper over core)
-runway-core/         # Shared Rust library (business logic, gRPC, models)
-runway-mcp/          # MCP server implementation (Rust)
+berth-app/          # Tauri 2.0 app (Rust backend + React frontend)
+berth-agent/        # Rust binary (runs locally or on remote targets)
+berth-cli/          # CLI interface (thin wrapper over core)
+berth-core/         # Shared Rust library (business logic, gRPC, models)
+berth-mcp/          # MCP server implementation (Rust)
 ```
 
 ### Communication
@@ -138,28 +138,28 @@ The MCP server is a CORE feature, not an add-on. It must be designed and shipped
 ### Tools exposed via MCP
 
 ```
-runway_list_projects      # List all projects with status
-runway_project_status     # Get detailed status of a project
-runway_deploy             # Deploy code to a target
-runway_stop               # Stop a running deployment
-runway_restart            # Restart a deployment
-runway_logs               # Stream or fetch logs
-runway_list_targets       # List configured deploy targets (local, VPS, Lambda, etc.)
-runway_add_target         # Configure a new deploy target
-runway_list_agents        # List connected agents and their status
-runway_import_code        # Import code from path or stdin
-runway_detect_runtime     # Auto-detect language, deps, schedule needs
-runway_health             # Overall system health check
+berth_list_projects      # List all projects with status
+berth_project_status     # Get detailed status of a project
+berth_deploy             # Deploy code to a target
+berth_stop               # Stop a running deployment
+berth_restart            # Restart a deployment
+berth_logs               # Stream or fetch logs
+berth_list_targets       # List configured deploy targets (local, VPS, Lambda, etc.)
+berth_add_target         # Configure a new deploy target
+berth_list_agents        # List connected agents and their status
+berth_import_code        # Import code from path or stdin
+berth_detect_runtime     # Auto-detect language, deps, schedule needs
+berth_health             # Overall system health check
 ```
 
 ### CLI mirrors MCP
 ```bash
-runway list                    # same as runway_list_projects
-runway deploy ./my-bot --target lambda-prod
-runway logs my-crawler --follow
-runway status my-bot
-runway targets add my-vps --host 192.168.1.50 --key ~/.ssh/id_ed25519
-runway agent install ubuntu@my-server.com
+berth list                    # same as berth_list_projects
+berth deploy ./my-bot --target lambda-prod
+berth logs my-crawler --follow
+berth status my-bot
+berth targets add my-vps --host 192.168.1.50 --key ~/.ssh/id_ed25519
+berth agent install ubuntu@my-server.com
 ```
 
 ## Roadmap
@@ -168,7 +168,7 @@ runway agent install ubuntu@my-server.com
 **Goal: App shell + local execution**
 
 - [x] Tauri app scaffold with React: project list, detail view, code import
-- [x] runway-core (Rust): project model, runtime detection (Python, Node, Go, shell)
+- [x] berth-core (Rust): project model, runtime detection (Python, Node, Go, shell)
 - [x] Local execution: Run/Stop via embedded agent (UDS), log streaming via events
 - [x] Local agent communication: gRPC service via tonic on localhost:50051
 - [x] "Paste & Deploy" flow: paste code → save to disk → detect runtime → run
@@ -179,10 +179,10 @@ runway agent install ubuntu@my-server.com
 **Ship:** Internal dogfood build. Use it yourself daily.
 
 ### Phase 2: MCP + CLI (Month 3)
-**Goal: AI agents can control Runway**
+**Goal: AI agents can control Berth**
 
 - [x] MCP server (stdio transport): 13 tools — list, status, deploy, run, stop, logs, import, detect, delete, health, schedule_add, schedule_list, schedule_remove
-- [x] CLI tool: `runway list|deploy|run|stop|status|logs|import|detect|delete|health|schedule`
+- [x] CLI tool: `berth list|deploy|run|stop|status|logs|import|detect|delete|health|schedule`
 - [x] .mcp.json config for easy Claude Code integration
 - [x] Test: Claude Code can deploy a script via MCP end-to-end (verified: deploy inline code, run, delete)
 - [x] Scheduling: cron-like local scheduling (@every, @hourly, @daily, @weekly, M H * * *) with CLI + MCP tools
@@ -196,12 +196,12 @@ runway agent install ubuntu@my-server.com
 - [x] Agent install script: `scripts/install-agent.sh` with systemd service, --uninstall flag
 - [x] gRPC + mTLS: secure agent-to-app communication over internet (rcgen CA + server/client certs, tonic TLS config helpers)
 - [x] Target management UI: add/edit/remove remote targets (React page + Tauri commands)
-- [x] Remote deploy: gRPC client in runway-core, CLI deploy to remote targets, MCP tools
+- [x] Remote deploy: gRPC client in berth-core, CLI deploy to remote targets, MCP tools
 - [x] Agent health monitoring: real CPU/mem via sysinfo crate, ping command in CLI + UI
 - [x] Credential management via security-framework (Keychain on Mac) — store/get/delete SSH keys and AWS credentials
-- [x] mDNS discovery for LAN agents — mdns-sd crate, register/discover `_runway._tcp.local.` services
+- [x] mDNS discovery for LAN agents — mdns-sd crate, register/discover `_berth._tcp.local.` services
 - [x] Target model: Target struct, SQLite table, store CRUD, 17 MCP tools total
-- [x] CLI: `runway targets add|list|remove|ping` with real gRPC health checks
+- [x] CLI: `berth targets add|list|remove|ping` with real gRPC health checks
 
 **Ship:** Beta expansion. Target 100 users.
 
@@ -261,8 +261,8 @@ runway agent install ubuntu@my-server.com
 - TypeScript components: PascalCase (`ProjectList.tsx`, `DeployWizard.tsx`)
 - TypeScript utilities: camelCase (`runtimeDetect.ts`, `invokeBackend.ts`)
 - Rust files: snake_case (`agent_server.rs`, `runtime_detect.rs`)
-- Proto files: snake_case (`runway_service.proto`)
-- Config files: lowercase with dots (`runway.config.json`)
+- Proto files: snake_case (`berth_service.proto`)
+- Config files: lowercase with dots (`berth.config.json`)
 
 ## Git Conventions
 - Branch format: `feat/short-description`, `fix/short-description`

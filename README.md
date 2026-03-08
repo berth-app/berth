@@ -1,9 +1,9 @@
-# Runway
+# Berth
 
 > Mac-native deployment control plane for AI-generated code.
 > "Paste code. Pick a target. It's running."
 
-Runway is a Tauri-based macOS app that lets developers deploy and manage code -- especially AI-generated code from Claude Code, Codex, Cursor -- to local machines, remote Linux servers, and (soon) AWS Lambda and Cloudflare Workers.
+Berth is a Tauri-based macOS app that lets developers deploy and manage code -- especially AI-generated code from Claude Code, Codex, Cursor -- to local machines, remote Linux servers, and (soon) AWS Lambda and Cloudflare Workers.
 
 ## Features
 
@@ -21,10 +21,10 @@ Runway is a Tauri-based macOS app that lets developers deploy and manage code --
 mac-rundeck/
   src-tauri/         Tauri 2.0 app (Rust backend + React frontend)
   crates/
-    runway-core/     Shared Rust library (projects, runtime, executor, gRPC client, SQLite)
-    runway-agent/    Persistent execution agent (14 gRPC RPCs, SQLite, scheduler)
-    runway-cli/      CLI interface
-    runway-mcp/      MCP server (stdio transport)
+    berth-core/     Shared Rust library (projects, runtime, executor, gRPC client, SQLite)
+    berth-agent/    Persistent execution agent (14 gRPC RPCs, SQLite, scheduler)
+    berth-cli/      CLI interface
+    berth-mcp/      MCP server (stdio transport)
   proto/             gRPC protobuf definitions
   src/               React 19 + TypeScript frontend
   docs/              Technical documentation
@@ -32,11 +32,11 @@ mac-rundeck/
 
 ### Communication
 
-- **Local**: Embedded agent via Unix Domain Socket (`~/.runway/agent.sock`)
+- **Local**: Embedded agent via Unix Domain Socket (`~/.berth/agent.sock`)
 - **Remote (NATS)**: All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. Works behind NAT, firewalls, and across different networks. `AgentTransport` trait abstracts transport selection per target.
 - **Remote (gRPC)**: Fallback for targets without NATS — gRPC over HTTP/2 (port 50051)
 - **MCP**: stdio transport (Claude Code spawns it)
-- **LAN Discovery**: mDNS (`_runway._tcp.local.`)
+- **LAN Discovery**: mDNS (`_berth._tcp.local.`)
 
 ## Quick Start
 
@@ -56,19 +56,19 @@ sudo apt install -y protobuf-compiler build-essential
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # 2. Build and install
-cargo build -p runway-agent --release
-sudo cp target/release/runway-agent /usr/local/bin/
+cargo build -p berth-agent --release
+sudo cp target/release/berth-agent /usr/local/bin/
 
 # 3. Create systemd service
-sudo tee /etc/systemd/system/runway-agent.service > /dev/null <<EOF
+sudo tee /etc/systemd/system/berth-agent.service > /dev/null <<EOF
 [Unit]
-Description=Runway Agent
+Description=Berth Agent
 After=network.target
 
 [Service]
 Type=simple
 User=$USER
-ExecStart=/usr/local/bin/runway-agent --listen-all --port 50051 --nats-url tls://connect.ngs.global --nats-creds /path/to/nats.creds --nats-agent-id my-server
+ExecStart=/usr/local/bin/berth-agent --listen-all --port 50051 --nats-url tls://connect.ngs.global --nats-creds /path/to/nats.creds --nats-agent-id my-server
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
@@ -78,15 +78,15 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now runway-agent
+sudo systemctl enable --now berth-agent
 ```
 
 ### Register Target in App
 
 ```bash
 # Via CLI
-runway targets add my-server --host 192.168.1.222 --port 50051
-runway targets ping my-server
+berth targets add my-server --host 192.168.1.222 --port 50051
+berth targets ping my-server
 
 # Or use the Targets page in the GUI
 ```
@@ -97,23 +97,23 @@ Add to your `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "runway": {
+    "berth": {
       "command": "cargo",
-      "args": ["run", "-p", "runway-mcp"]
+      "args": ["run", "-p", "berth-mcp"]
     }
   }
 }
 ```
 
-Then in Claude Code: "Deploy this script to my Linux server using Runway"
+Then in Claude Code: "Deploy this script to my Linux server using Berth"
 
 ## Remote Agent
 
-The remote agent (`runway-agent`) is a persistent Rust binary with:
+The remote agent (`berth-agent`) is a persistent Rust binary with:
 
-- **SQLite store** (`~/.runway/agent.db`) -- 5 tables: deployments, executions, execution_logs, events, schedules
+- **SQLite store** (`~/.berth/agent.db`) -- 5 tables: deployments, executions, execution_logs, events, schedules
 - **14 gRPC RPCs** -- Deploy, Execute, Stop, Health, Status, StreamLogs, GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade
-- **NATS command channel** -- All RPCs available over NATS relay. Desktop sends commands to `runway.<agent_id>.cmd.<type>`, agent responds via `runway.<agent_id>.resp.<request_id>`. Zero inbound ports required.
+- **NATS command channel** -- All RPCs available over NATS relay. Desktop sends commands to `berth.<agent_id>.cmd.<type>`, agent responds via `berth.<agent_id>.resp.<request_id>`. Zero inbound ports required.
 - **Agent-side scheduler** -- Runs cron jobs every 30s, even when the app is disconnected. Triggers macOS notifications on the desktop via NATS events.
 - **Store-and-forward events** -- Agent queues events, app polls when connected
 - **Remote upgrade** -- Upload new binary via gRPC, agent verifies and restarts via systemd

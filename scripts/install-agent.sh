@@ -1,20 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-# Runway Agent Installer
+# Berth Agent Installer
 # Usage:
-#   Install:    curl -sSL https://get.runway.dev | bash
-#   Uninstall:  curl -sSL https://get.runway.dev | bash -s -- --uninstall
+#   Install:    curl -sSL https://get.berth.dev | bash
+#   Uninstall:  curl -sSL https://get.berth.dev | bash -s -- --uninstall
 
-BINARY_NAME="runway-agent"
-SERVICE_NAME="runway-agent"
+BINARY_NAME="berth-agent"
+SERVICE_NAME="berth-agent"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-AGENT_USER="runway"
+AGENT_USER="berth"
 AGENT_HOME=""      # resolved after user creation
-RUNWAY_DIR=""      # resolved after user creation
+BERTH_DIR=""      # resolved after user creation
 INSTALL_PATH=""    # resolved after user creation
-BASE_URL="https://get.runway.dev/releases/latest"
-ROLLBACK_SCRIPT_DIR="/usr/local/lib/runway"
+BASE_URL="https://get.berth.dev/releases/latest"
+ROLLBACK_SCRIPT_DIR="/usr/local/lib/berth"
 ROLLBACK_SCRIPT_PATH="${ROLLBACK_SCRIPT_DIR}/rollback.sh"
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ need_root() {
 
 uninstall() {
   need_root
-  info "Uninstalling Runway agent..."
+  info "Uninstalling Berth agent..."
 
   # Stop and disable the systemd service
   if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
@@ -60,7 +60,7 @@ uninstall() {
   # Remove the binary (check both old and new locations)
   local agent_home
   agent_home=$(eval echo "~${AGENT_USER}" 2>/dev/null || echo "")
-  for bin_path in "/usr/local/bin/${BINARY_NAME}" "${agent_home}/.runway/bin/${BINARY_NAME}"; do
+  for bin_path in "/usr/local/bin/${BINARY_NAME}" "${agent_home}/.berth/bin/${BINARY_NAME}"; do
     if [ -f "${bin_path}" ]; then
       info "Removing binary ${bin_path}..."
       rm -f "${bin_path}"
@@ -74,7 +74,7 @@ uninstall() {
     rmdir "${ROLLBACK_SCRIPT_DIR}" 2>/dev/null || true
   fi
 
-  # Optionally remove the runway user
+  # Optionally remove the berth user
   if id "${AGENT_USER}" &>/dev/null; then
     printf "Remove the '%s' system user? [y/N] " "${AGENT_USER}"
     read -r answer
@@ -86,7 +86,7 @@ uninstall() {
     fi
   fi
 
-  ok "Runway agent uninstalled."
+  ok "Berth agent uninstalled."
   exit 0
 }
 
@@ -126,7 +126,7 @@ detect_arch() {
 }
 
 # ---------------------------------------------------------------------------
-# Create the runway system user (idempotent)
+# Create the berth system user (idempotent)
 # ---------------------------------------------------------------------------
 
 create_user() {
@@ -140,12 +140,12 @@ create_user() {
 
   # Resolve home dir and set paths
   AGENT_HOME=$(eval echo "~${AGENT_USER}")
-  RUNWAY_DIR="${AGENT_HOME}/.runway"
-  INSTALL_PATH="${RUNWAY_DIR}/bin/${BINARY_NAME}"
+  BERTH_DIR="${AGENT_HOME}/.berth"
+  INSTALL_PATH="${BERTH_DIR}/bin/${BINARY_NAME}"
 
   # Create directory structure
-  mkdir -p "${RUNWAY_DIR}/bin" "${RUNWAY_DIR}/deploys"
-  chown -R "${AGENT_USER}:${AGENT_USER}" "${RUNWAY_DIR}"
+  mkdir -p "${BERTH_DIR}/bin" "${BERTH_DIR}/deploys"
+  chown -R "${AGENT_USER}:${AGENT_USER}" "${BERTH_DIR}"
 }
 
 # ---------------------------------------------------------------------------
@@ -180,11 +180,11 @@ install_rollback_script() {
 
   # Prefer bundled script next to the installer, otherwise download
   local local_script
-  local_script="$(dirname "$0")/runway-agent-rollback.sh"
+  local_script="$(dirname "$0")/berth-agent-rollback.sh"
   if [ -f "${local_script}" ]; then
     install -m 755 "${local_script}" "${ROLLBACK_SCRIPT_PATH}"
   else
-    local url="${BASE_URL}/runway-agent-rollback.sh"
+    local url="${BASE_URL}/berth-agent-rollback.sh"
     if command -v curl &>/dev/null; then
       curl -fsSL -o "${ROLLBACK_SCRIPT_PATH}" "${url}"
     elif command -v wget &>/dev/null; then
@@ -204,7 +204,7 @@ install_rollback_script() {
 # ---------------------------------------------------------------------------
 
 install_env_file() {
-  local env_file="${RUNWAY_DIR}/agent.env"
+  local env_file="${BERTH_DIR}/agent.env"
   if [ -f "${env_file}" ]; then
     info "Environment file already exists, skipping."
     return
@@ -212,16 +212,16 @@ install_env_file() {
 
   info "Creating environment file at ${env_file}..."
   cat > "${env_file}" <<'ENVEOF'
-# Runway Agent Configuration
+# Berth Agent Configuration
 # Uncomment and edit the lines you need.
 
 # NATS relay (enables zero-port remote control from desktop app)
-# RUNWAY_NATS_URL=tls://connect.ngs.global
-# RUNWAY_NATS_CREDS=/home/runway/.runway/nats.creds
-# RUNWAY_NATS_AGENT_ID=my-server
+# BERTH_NATS_URL=tls://connect.ngs.global
+# BERTH_NATS_CREDS=/home/berth/.berth/nats.creds
+# BERTH_NATS_AGENT_ID=my-server
 
 # gRPC port (default 50051)
-# RUNWAY_PORT=50051
+# BERTH_PORT=50051
 
 # Log level
 RUST_LOG=info
@@ -240,7 +240,7 @@ install_service() {
 
   cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=Runway Deployment Agent
+Description=Berth Deployment Agent
 After=network-online.target
 Wants=network-online.target
 StartLimitBurst=5
@@ -254,7 +254,7 @@ Group=${AGENT_USER}
 ExecStart=${INSTALL_PATH}
 ExecStopPost=+${ROLLBACK_SCRIPT_PATH}
 
-EnvironmentFile=-${RUNWAY_DIR}/agent.env
+EnvironmentFile=-${BERTH_DIR}/agent.env
 
 Restart=always
 RestartSec=5
@@ -266,7 +266,7 @@ SuccessExitStatus=42
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=${RUNWAY_DIR}
+ReadWritePaths=${BERTH_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -283,7 +283,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 main() {
-  info "Installing Runway agent..."
+  info "Installing Berth agent..."
   need_root
   detect_os
   detect_arch
@@ -294,12 +294,12 @@ main() {
   install_service
 
   echo ""
-  ok "Runway agent is running."
+  ok "Berth agent is running."
   info "Configure NATS relay for remote control:"
-  echo "    sudo nano ${RUNWAY_DIR}/agent.env"
+  echo "    sudo nano ${BERTH_DIR}/agent.env"
   echo ""
-  info "Or add this target in Runway with your server's IP:"
-  echo "    runway targets add my-server --host <SERVER_IP> --port 50051"
+  info "Or add this target in Berth with your server's IP:"
+  echo "    berth targets add my-server --host <SERVER_IP> --port 50051"
   echo ""
   info "Useful commands:"
   echo "    systemctl status ${SERVICE_NAME}    # check status"

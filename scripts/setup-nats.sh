@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Runway NATS Relay Setup Script
+# Berth NATS Relay Setup Script
 # Prerequisites: Synadia Cloud account (https://cloud.synadia.com)
 #
 # Usage:
@@ -13,8 +13,8 @@ set -euo pipefail
 #   ./scripts/setup-nats.sh test <url> <creds>   # Test NATS connectivity
 #   ./scripts/setup-nats.sh status               # Show current setup status
 
-RUNWAY_DIR="$HOME/.runway"
-NATS_DIR="$RUNWAY_DIR/nats"
+BERTH_DIR="$HOME/.berth"
+NATS_DIR="$BERTH_DIR/nats"
 
 info()  { echo "==> $*"; }
 error() { echo "ERROR: $*" >&2; exit 1; }
@@ -35,7 +35,7 @@ cmd_install_tools() {
 }
 
 cmd_init() {
-    info "Initializing NATS configuration for Runway..."
+    info "Initializing NATS configuration for Berth..."
     info ""
     info "Before running this, you need to:"
     info "  1. Sign up at https://cloud.synadia.com"
@@ -49,8 +49,8 @@ cmd_init() {
     mkdir -p "$NATS_DIR"
 
     # Check if nsc operator exists
-    if nsc list operators 2>/dev/null | grep -q "runway"; then
-        info "Operator 'runway' already exists"
+    if nsc list operators 2>/dev/null | grep -q "berth"; then
+        info "Operator 'berth' already exists"
     else
         info "To connect nsc to your Synadia Cloud account, run:"
         info "  nsc login"
@@ -69,7 +69,7 @@ cmd_add_agent() {
 
     # Create user with publish permissions scoped to its own subjects
     nsc add user "$name" \
-        --allow-pub "runway.${name}.>" \
+        --allow-pub "berth.${name}.>" \
         --deny-sub ">" \
         2>/dev/null || info "User $name may already exist, regenerating creds..."
 
@@ -81,10 +81,10 @@ cmd_add_agent() {
     info "Credentials saved to: $creds_file"
     info ""
     info "To deploy to the agent server:"
-    info "  scp $creds_file user@server:~/.runway/nats.creds"
+    info "  scp $creds_file user@server:~/.berth/nats.creds"
     info ""
     info "Then start the agent with:"
-    info "  runway-agent --listen-all --nats-url tls://connect.ngs.global --nats-creds ~/.runway/nats.creds --nats-agent-id $name"
+    info "  berth-agent --listen-all --nats-url tls://connect.ngs.global --nats-creds ~/.berth/nats.creds --nats-agent-id $name"
 }
 
 cmd_add_desktop() {
@@ -92,9 +92,9 @@ cmd_add_desktop() {
 
     mkdir -p "$NATS_DIR"
 
-    # Desktop can subscribe to all runway subjects but cannot publish
+    # Desktop can subscribe to all berth subjects but cannot publish
     nsc add user desktop \
-        --allow-sub "runway.>" \
+        --allow-sub "berth.>" \
         --deny-pub ">" \
         2>/dev/null || info "User 'desktop' may already exist, regenerating creds..."
 
@@ -104,7 +104,7 @@ cmd_add_desktop() {
 
     info "Credentials saved to: $creds_file"
     info ""
-    info "Configure in Runway app Settings:"
+    info "Configure in Berth app Settings:"
     info "  NATS URL:   tls://connect.ngs.global"
     info "  NATS Creds: $creds_file"
 }
@@ -120,8 +120,8 @@ cmd_create_streams() {
     fi
 
     # Events stream: durable, 7-day retention
-    nats --server "$url" --creds "$creds" stream add RUNWAY_EVENTS \
-        --subjects "runway.*.event.>" \
+    nats --server "$url" --creds "$creds" stream add BERTH_EVENTS \
+        --subjects "berth.*.event.>" \
         --retention work \
         --max-age "7d" \
         --max-msgs 100000 \
@@ -132,12 +132,12 @@ cmd_create_streams() {
         --no-deny-delete \
         --no-deny-purge \
         --defaults \
-        2>/dev/null && info "Stream RUNWAY_EVENTS created" \
-        || info "Stream RUNWAY_EVENTS may already exist"
+        2>/dev/null && info "Stream BERTH_EVENTS created" \
+        || info "Stream BERTH_EVENTS may already exist"
 
     # Logs stream: shorter retention, higher volume
-    nats --server "$url" --creds "$creds" stream add RUNWAY_LOGS \
-        --subjects "runway.*.log.>" \
+    nats --server "$url" --creds "$creds" stream add BERTH_LOGS \
+        --subjects "berth.*.log.>" \
         --retention limits \
         --max-age "24h" \
         --max-msgs-per-subject 50000 \
@@ -148,8 +148,8 @@ cmd_create_streams() {
         --no-deny-delete \
         --no-deny-purge \
         --defaults \
-        2>/dev/null && info "Stream RUNWAY_LOGS created" \
-        || info "Stream RUNWAY_LOGS may already exist"
+        2>/dev/null && info "Stream BERTH_LOGS created" \
+        || info "Stream BERTH_LOGS may already exist"
 
     info ""
     info "Streams created. Verify with:"
@@ -179,13 +179,13 @@ cmd_test() {
 
     # Test publish/subscribe
     info "Testing publish..."
-    echo '{"test":true}' | nats --server "$url" --creds "$creds" pub runway.test.heartbeat 2>/dev/null \
+    echo '{"test":true}' | nats --server "$url" --creds "$creds" pub berth.test.heartbeat 2>/dev/null \
         && info "Publish OK" \
         || info "Publish test failed (may be expected if user lacks publish permissions)"
 }
 
 cmd_status() {
-    info "Runway NATS Setup Status"
+    info "Berth NATS Setup Status"
     info "========================"
 
     echo ""
@@ -216,7 +216,7 @@ case "${1:-help}" in
     test)           cmd_test "${2:-}" "${3:-}" ;;
     status)         cmd_status ;;
     help|*)
-        echo "Runway NATS Relay Setup"
+        echo "Berth NATS Relay Setup"
         echo ""
         echo "Usage: $0 <command> [args]"
         echo ""

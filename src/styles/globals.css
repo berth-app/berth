@@ -7,53 +7,53 @@
    ================================================================ */
 :root {
   /* Surface hierarchy */
-  --runway-bg: #1a1a1c;
-  --runway-surface-0: #232326;
-  --runway-surface-1: #2c2c2f;
-  --runway-surface-2: #38383b;
-  --runway-surface-3: #48484b;
+  --berth-bg: #1a1a1c;
+  --berth-surface-0: #232326;
+  --berth-surface-1: #2c2c2f;
+  --berth-surface-2: #38383b;
+  --berth-surface-3: #48484b;
 
   /* Text hierarchy */
-  --runway-text-primary: #f5f5f7;
-  --runway-text-secondary: #a1a1a6;
-  --runway-text-tertiary: #636366;
+  --berth-text-primary: #f5f5f7;
+  --berth-text-secondary: #a1a1a6;
+  --berth-text-tertiary: #636366;
 
   /* Borders */
-  --runway-border: #3a3a3c;
-  --runway-border-subtle: #2c2c2e;
-  --runway-border-strong: #48484a;
+  --berth-border: #3a3a3c;
+  --berth-border-subtle: #2c2c2e;
+  --berth-border-strong: #48484a;
 
   /* Accent */
-  --runway-accent: #0a84ff;
-  --runway-accent-light: #409cff;
-  --runway-accent-dark: #0066cc;
-  --runway-accent-bg: rgba(10, 132, 255, 0.1);
-  --runway-accent-border: rgba(10, 132, 255, 0.3);
+  --berth-accent: #0a84ff;
+  --berth-accent-light: #409cff;
+  --berth-accent-dark: #0066cc;
+  --berth-accent-bg: rgba(10, 132, 255, 0.1);
+  --berth-accent-border: rgba(10, 132, 255, 0.3);
 
   /* Semantic */
-  --runway-success: #30d158;
-  --runway-success-bg: rgba(48, 209, 88, 0.1);
-  --runway-warning: #ffd60a;
-  --runway-warning-bg: rgba(255, 214, 10, 0.1);
-  --runway-error: #ff453a;
-  --runway-error-bg: rgba(255, 69, 58, 0.1);
+  --berth-success: #30d158;
+  --berth-success-bg: rgba(48, 209, 88, 0.1);
+  --berth-warning: #ffd60a;
+  --berth-warning-bg: rgba(255, 214, 10, 0.1);
+  --berth-error: #ff453a;
+  --berth-error-bg: rgba(255, 69, 58, 0.1);
 
   /* Shadows */
-  --runway-shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
-  --runway-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-  --runway-shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
-  --runway-shadow-glow: 0 0 20px rgba(10, 132, 255, 0.15);
+  --berth-shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
+  --berth-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+  --berth-shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
+  --berth-shadow-glow: 0 0 20px rgba(10, 132, 255, 0.15);
 
   /* Glass */
-  --runway-glass-bg: rgba(36, 36, 39, 0.75);
-  --runway-glass-border: rgba(255, 255, 255, 0.06);
-  --runway-glass-blur: 20px;
+  --berth-glass-bg: rgba(36, 36, 39, 0.75);
+  --berth-glass-border: rgba(255, 255, 255, 0.06);
+  --berth-glass-blur: 20px;
 
   /* Radius */
-  --runway-radius-sm: 6px;
-  --runway-radius-md: 10px;
-  --runway-radius-lg: 14px;
-  --runway-radius-xl: 20px;
+  --berth-radius-sm: 6px;
+  --berth-radius-md: 10px;
+  --berth-radius-lg: 14px;
+  --berth-radius-xl: 20px;
 }
 
 /* ================================================================
@@ -61,97 +61,97 @@
    ================================================================ */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --runway-bg: #f2f2f7;
-    --runway-surface-0: #ffffff;
-    --runway-surface-1: #f9f9fb;
-    --runway-surface-2: #ececee;
-    --runway-surface-3: #e0e0e2;
-    --runway-text-primary: #1c1c1e;
-    --runway-text-secondary: #6e6e73;
-    --runway-text-tertiary: #aeaeb2;
-    --runway-border: #d1d1d6;
-    --runway-border-subtle: #e5e5ea;
-    --runway-border-strong: #c7c7cc;
-    --runway-accent: #007aff;
-    --runway-accent-light: #409cff;
-    --runway-accent-dark: #0055b3;
-    --runway-accent-bg: rgba(0, 122, 255, 0.08);
-    --runway-accent-border: rgba(0, 122, 255, 0.25);
-    --runway-success: #34c759;
-    --runway-success-bg: rgba(52, 199, 89, 0.1);
-    --runway-warning: #ff9f0a;
-    --runway-warning-bg: rgba(255, 159, 10, 0.1);
-    --runway-error: #ff3b30;
-    --runway-error-bg: rgba(255, 59, 48, 0.1);
-    --runway-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-    --runway-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-    --runway-shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
-    --runway-shadow-glow: 0 0 20px rgba(0, 122, 255, 0.1);
-    --runway-glass-bg: rgba(255, 255, 255, 0.75);
-    --runway-glass-border: rgba(0, 0, 0, 0.06);
+    --berth-bg: #f2f2f7;
+    --berth-surface-0: #ffffff;
+    --berth-surface-1: #f9f9fb;
+    --berth-surface-2: #ececee;
+    --berth-surface-3: #e0e0e2;
+    --berth-text-primary: #1c1c1e;
+    --berth-text-secondary: #6e6e73;
+    --berth-text-tertiary: #aeaeb2;
+    --berth-border: #d1d1d6;
+    --berth-border-subtle: #e5e5ea;
+    --berth-border-strong: #c7c7cc;
+    --berth-accent: #007aff;
+    --berth-accent-light: #409cff;
+    --berth-accent-dark: #0055b3;
+    --berth-accent-bg: rgba(0, 122, 255, 0.08);
+    --berth-accent-border: rgba(0, 122, 255, 0.25);
+    --berth-success: #34c759;
+    --berth-success-bg: rgba(52, 199, 89, 0.1);
+    --berth-warning: #ff9f0a;
+    --berth-warning-bg: rgba(255, 159, 10, 0.1);
+    --berth-error: #ff3b30;
+    --berth-error-bg: rgba(255, 59, 48, 0.1);
+    --berth-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+    --berth-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --berth-shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+    --berth-shadow-glow: 0 0 20px rgba(0, 122, 255, 0.1);
+    --berth-glass-bg: rgba(255, 255, 255, 0.75);
+    --berth-glass-border: rgba(0, 0, 0, 0.06);
   }
 }
 
 [data-theme="dark"] {
-  --runway-bg: #1a1a1c;
-  --runway-surface-0: #232326;
-  --runway-surface-1: #2c2c2f;
-  --runway-surface-2: #38383b;
-  --runway-surface-3: #48484b;
-  --runway-text-primary: #f5f5f7;
-  --runway-text-secondary: #a1a1a6;
-  --runway-text-tertiary: #636366;
-  --runway-border: #3a3a3c;
-  --runway-border-subtle: #2c2c2e;
-  --runway-border-strong: #48484a;
-  --runway-accent: #0a84ff;
-  --runway-accent-light: #409cff;
-  --runway-accent-dark: #0066cc;
-  --runway-accent-bg: rgba(10, 132, 255, 0.1);
-  --runway-accent-border: rgba(10, 132, 255, 0.3);
-  --runway-success: #30d158;
-  --runway-success-bg: rgba(48, 209, 88, 0.1);
-  --runway-warning: #ffd60a;
-  --runway-warning-bg: rgba(255, 214, 10, 0.1);
-  --runway-error: #ff453a;
-  --runway-error-bg: rgba(255, 69, 58, 0.1);
-  --runway-shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
-  --runway-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-  --runway-shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
-  --runway-shadow-glow: 0 0 20px rgba(10, 132, 255, 0.15);
-  --runway-glass-bg: rgba(36, 36, 39, 0.75);
-  --runway-glass-border: rgba(255, 255, 255, 0.06);
+  --berth-bg: #1a1a1c;
+  --berth-surface-0: #232326;
+  --berth-surface-1: #2c2c2f;
+  --berth-surface-2: #38383b;
+  --berth-surface-3: #48484b;
+  --berth-text-primary: #f5f5f7;
+  --berth-text-secondary: #a1a1a6;
+  --berth-text-tertiary: #636366;
+  --berth-border: #3a3a3c;
+  --berth-border-subtle: #2c2c2e;
+  --berth-border-strong: #48484a;
+  --berth-accent: #0a84ff;
+  --berth-accent-light: #409cff;
+  --berth-accent-dark: #0066cc;
+  --berth-accent-bg: rgba(10, 132, 255, 0.1);
+  --berth-accent-border: rgba(10, 132, 255, 0.3);
+  --berth-success: #30d158;
+  --berth-success-bg: rgba(48, 209, 88, 0.1);
+  --berth-warning: #ffd60a;
+  --berth-warning-bg: rgba(255, 214, 10, 0.1);
+  --berth-error: #ff453a;
+  --berth-error-bg: rgba(255, 69, 58, 0.1);
+  --berth-shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
+  --berth-shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+  --berth-shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
+  --berth-shadow-glow: 0 0 20px rgba(10, 132, 255, 0.15);
+  --berth-glass-bg: rgba(36, 36, 39, 0.75);
+  --berth-glass-border: rgba(255, 255, 255, 0.06);
 }
 
 [data-theme="light"] {
-  --runway-bg: #f2f2f7;
-  --runway-surface-0: #ffffff;
-  --runway-surface-1: #f9f9fb;
-  --runway-surface-2: #ececee;
-  --runway-surface-3: #e0e0e2;
-  --runway-text-primary: #1c1c1e;
-  --runway-text-secondary: #6e6e73;
-  --runway-text-tertiary: #aeaeb2;
-  --runway-border: #d1d1d6;
-  --runway-border-subtle: #e5e5ea;
-  --runway-border-strong: #c7c7cc;
-  --runway-accent: #007aff;
-  --runway-accent-light: #409cff;
-  --runway-accent-dark: #0055b3;
-  --runway-accent-bg: rgba(0, 122, 255, 0.08);
-  --runway-accent-border: rgba(0, 122, 255, 0.25);
-  --runway-success: #34c759;
-  --runway-success-bg: rgba(52, 199, 89, 0.1);
-  --runway-warning: #ff9f0a;
-  --runway-warning-bg: rgba(255, 159, 10, 0.1);
-  --runway-error: #ff3b30;
-  --runway-error-bg: rgba(255, 59, 48, 0.1);
-  --runway-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-  --runway-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-  --runway-shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
-  --runway-shadow-glow: 0 0 20px rgba(0, 122, 255, 0.1);
-  --runway-glass-bg: rgba(255, 255, 255, 0.75);
-  --runway-glass-border: rgba(0, 0, 0, 0.06);
+  --berth-bg: #f2f2f7;
+  --berth-surface-0: #ffffff;
+  --berth-surface-1: #f9f9fb;
+  --berth-surface-2: #ececee;
+  --berth-surface-3: #e0e0e2;
+  --berth-text-primary: #1c1c1e;
+  --berth-text-secondary: #6e6e73;
+  --berth-text-tertiary: #aeaeb2;
+  --berth-border: #d1d1d6;
+  --berth-border-subtle: #e5e5ea;
+  --berth-border-strong: #c7c7cc;
+  --berth-accent: #007aff;
+  --berth-accent-light: #409cff;
+  --berth-accent-dark: #0055b3;
+  --berth-accent-bg: rgba(0, 122, 255, 0.08);
+  --berth-accent-border: rgba(0, 122, 255, 0.25);
+  --berth-success: #34c759;
+  --berth-success-bg: rgba(52, 199, 89, 0.1);
+  --berth-warning: #ff9f0a;
+  --berth-warning-bg: rgba(255, 159, 10, 0.1);
+  --berth-error: #ff3b30;
+  --berth-error-bg: rgba(255, 59, 48, 0.1);
+  --berth-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --berth-shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --berth-shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+  --berth-shadow-glow: 0 0 20px rgba(0, 122, 255, 0.1);
+  --berth-glass-bg: rgba(255, 255, 255, 0.75);
+  --berth-glass-border: rgba(0, 0, 0, 0.06);
 }
 
 /* ================================================================
@@ -167,7 +167,7 @@ body {
 }
 
 ::selection {
-  background: var(--runway-accent-bg);
+  background: var(--berth-accent-bg);
 }
 
 ::-webkit-scrollbar {
@@ -179,39 +179,39 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--runway-surface-3);
+  background: var(--berth-surface-3);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--runway-text-tertiary);
+  background: var(--berth-text-tertiary);
 }
 
 /* ================================================================
    Glass Effects
    ================================================================ */
 .glass-card {
-  background: var(--runway-glass-bg);
-  -webkit-backdrop-filter: blur(var(--runway-glass-blur));
-  backdrop-filter: blur(var(--runway-glass-blur));
-  border: 1px solid var(--runway-glass-border);
-  border-radius: var(--runway-radius-lg);
-  box-shadow: var(--runway-shadow-sm);
+  background: var(--berth-glass-bg);
+  -webkit-backdrop-filter: blur(var(--berth-glass-blur));
+  backdrop-filter: blur(var(--berth-glass-blur));
+  border: 1px solid var(--berth-glass-border);
+  border-radius: var(--berth-radius-lg);
+  box-shadow: var(--berth-shadow-sm);
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .glass-card:hover {
-  box-shadow: var(--runway-shadow-md);
-  border-color: var(--runway-accent-border);
+  box-shadow: var(--berth-shadow-md);
+  border-color: var(--berth-accent-border);
 }
 
 .glass-card-static {
-  background: var(--runway-glass-bg);
-  -webkit-backdrop-filter: blur(var(--runway-glass-blur));
-  backdrop-filter: blur(var(--runway-glass-blur));
-  border: 1px solid var(--runway-glass-border);
-  border-radius: var(--runway-radius-lg);
-  box-shadow: var(--runway-shadow-sm);
+  background: var(--berth-glass-bg);
+  -webkit-backdrop-filter: blur(var(--berth-glass-blur));
+  backdrop-filter: blur(var(--berth-glass-blur));
+  border: 1px solid var(--berth-glass-border);
+  border-radius: var(--berth-radius-lg);
+  box-shadow: var(--berth-shadow-sm);
 }
 
 /* ================================================================
@@ -224,7 +224,7 @@ body {
   gap: 6px;
   font-size: 13px;
   font-weight: 500;
-  border-radius: var(--runway-radius-sm);
+  border-radius: var(--berth-radius-sm);
   padding: 6px 14px;
   transition: all 0.15s ease;
   cursor: pointer;
@@ -234,7 +234,7 @@ body {
 }
 
 .btn:focus-visible {
-  box-shadow: 0 0 0 2px var(--runway-bg), 0 0 0 4px var(--runway-accent);
+  box-shadow: 0 0 0 2px var(--berth-bg), 0 0 0 4px var(--berth-accent);
 }
 
 .btn:disabled {
@@ -243,46 +243,46 @@ body {
 }
 
 .btn-primary {
-  background: var(--runway-accent);
+  background: var(--berth-accent);
   color: white;
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--runway-accent-light);
+  background: var(--berth-accent-light);
 }
 .btn-primary:active:not(:disabled) {
-  background: var(--runway-accent-dark);
+  background: var(--berth-accent-dark);
   transform: scale(0.98);
 }
 
 .btn-secondary {
-  background: var(--runway-surface-1);
-  color: var(--runway-text-primary);
-  border: 1px solid var(--runway-border);
+  background: var(--berth-surface-1);
+  color: var(--berth-text-primary);
+  border: 1px solid var(--berth-border);
 }
 .btn-secondary:hover:not(:disabled) {
-  background: var(--runway-surface-2);
-  border-color: var(--runway-border-strong);
+  background: var(--berth-surface-2);
+  border-color: var(--berth-border-strong);
 }
 .btn-secondary:active:not(:disabled) {
-  background: var(--runway-surface-3);
+  background: var(--berth-surface-3);
   transform: scale(0.98);
 }
 
 .btn-ghost {
   background: transparent;
-  color: var(--runway-text-secondary);
+  color: var(--berth-text-secondary);
 }
 .btn-ghost:hover:not(:disabled) {
-  background: var(--runway-surface-2);
-  color: var(--runway-text-primary);
+  background: var(--berth-surface-2);
+  color: var(--berth-text-primary);
 }
 .btn-ghost:active:not(:disabled) {
-  background: var(--runway-surface-3);
+  background: var(--berth-surface-3);
 }
 
 .btn-danger {
-  background: var(--runway-error-bg);
-  color: var(--runway-error);
+  background: var(--berth-error-bg);
+  color: var(--berth-error);
   border: 1px solid rgba(255, 69, 58, 0.2);
 }
 .btn-danger:hover:not(:disabled) {
@@ -291,11 +291,11 @@ body {
 }
 
 .btn-sm { font-size: 11px; padding: 4px 10px; }
-.btn-lg { font-size: 14px; padding: 10px 20px; border-radius: var(--runway-radius-md); }
+.btn-lg { font-size: 14px; padding: 10px 20px; border-radius: var(--berth-radius-md); }
 
 .btn-icon {
   padding: 6px;
-  border-radius: var(--runway-radius-sm);
+  border-radius: var(--berth-radius-sm);
 }
 
 /* ================================================================
@@ -305,22 +305,22 @@ body {
   width: 100%;
   padding: 8px 12px;
   font-size: 13px;
-  color: var(--runway-text-primary);
-  background: var(--runway-surface-0);
-  border: 1px solid var(--runway-border);
-  border-radius: var(--runway-radius-sm);
+  color: var(--berth-text-primary);
+  background: var(--berth-surface-0);
+  border: 1px solid var(--berth-border);
+  border-radius: var(--berth-radius-sm);
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
 }
 
 .input::placeholder {
-  color: var(--runway-text-tertiary);
+  color: var(--berth-text-tertiary);
 }
 
 .input:focus {
-  border-color: var(--runway-accent);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.06), 0 0 0 3px var(--runway-accent-bg);
+  border-color: var(--berth-accent);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.06), 0 0 0 3px var(--berth-accent-bg);
 }
 
 /* ================================================================
@@ -331,7 +331,7 @@ body {
   width: 36px;
   height: 22px;
   border-radius: 11px;
-  background: var(--runway-surface-3);
+  background: var(--berth-surface-3);
   cursor: pointer;
   transition: background 0.2s ease;
   border: none;
@@ -341,7 +341,7 @@ body {
 }
 
 .toggle[data-checked="true"] {
-  background: var(--runway-accent);
+  background: var(--berth-accent);
 }
 
 .toggle::after {
@@ -368,31 +368,31 @@ body {
   display: inline-flex;
   gap: 1px;
   padding: 2px;
-  background: var(--runway-surface-0);
-  border-radius: var(--runway-radius-sm);
-  border: 1px solid var(--runway-border);
+  background: var(--berth-surface-0);
+  border-radius: var(--berth-radius-sm);
+  border: 1px solid var(--berth-border);
 }
 
 .segmented-control button {
   padding: 5px 14px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--runway-text-secondary);
+  color: var(--berth-text-secondary);
   background: transparent;
   border: none;
-  border-radius: calc(var(--runway-radius-sm) - 2px);
+  border-radius: calc(var(--berth-radius-sm) - 2px);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .segmented-control button:hover {
-  color: var(--runway-text-primary);
+  color: var(--berth-text-primary);
 }
 
 .segmented-control button[data-active="true"] {
-  background: var(--runway-surface-2);
-  color: var(--runway-text-primary);
-  box-shadow: var(--runway-shadow-sm);
+  background: var(--berth-surface-2);
+  color: var(--berth-text-primary);
+  box-shadow: var(--berth-shadow-sm);
 }
 
 /* ================================================================
@@ -409,11 +409,11 @@ body {
   line-height: 1.4;
 }
 
-.badge-neutral { background: var(--runway-surface-2); color: var(--runway-text-secondary); }
-.badge-accent  { background: var(--runway-accent-bg); color: var(--runway-accent); }
-.badge-success { background: var(--runway-success-bg); color: var(--runway-success); }
-.badge-error   { background: var(--runway-error-bg); color: var(--runway-error); }
-.badge-warning { background: var(--runway-warning-bg); color: var(--runway-warning); }
+.badge-neutral { background: var(--berth-surface-2); color: var(--berth-text-secondary); }
+.badge-accent  { background: var(--berth-accent-bg); color: var(--berth-accent); }
+.badge-success { background: var(--berth-success-bg); color: var(--berth-success); }
+.badge-error   { background: var(--berth-error-bg); color: var(--berth-error); }
+.badge-warning { background: var(--berth-warning-bg); color: var(--berth-warning); }
 
 /* ================================================================
    Context Menu
@@ -421,12 +421,12 @@ body {
 .context-menu {
   min-width: 160px;
   padding: 4px;
-  background: var(--runway-glass-bg);
+  background: var(--berth-glass-bg);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
-  border: 1px solid var(--runway-glass-border);
-  border-radius: var(--runway-radius-md);
-  box-shadow: var(--runway-shadow-lg);
+  border: 1px solid var(--berth-glass-border);
+  border-radius: var(--berth-radius-md);
+  box-shadow: var(--berth-shadow-lg);
 }
 
 .context-menu-item {
@@ -436,8 +436,8 @@ body {
   width: 100%;
   padding: 6px 10px;
   font-size: 13px;
-  color: var(--runway-text-primary);
-  border-radius: var(--runway-radius-sm);
+  color: var(--berth-text-primary);
+  border-radius: var(--berth-radius-sm);
   background: none;
   border: none;
   cursor: pointer;
@@ -446,12 +446,12 @@ body {
 }
 
 .context-menu-item:hover {
-  background: var(--runway-accent);
+  background: var(--berth-accent);
   color: white;
 }
 
 .context-menu-item--danger:hover {
-  background: var(--runway-error);
+  background: var(--berth-error);
 }
 
 /* ================================================================
@@ -473,10 +473,10 @@ body {
 .modal-content {
   width: 400px;
   max-width: 90%;
-  background: var(--runway-surface-0);
-  border: 1px solid var(--runway-border);
-  border-radius: var(--runway-radius-lg);
-  box-shadow: var(--runway-shadow-lg);
+  background: var(--berth-surface-0);
+  border: 1px solid var(--berth-border);
+  border-radius: var(--berth-radius-lg);
+  box-shadow: var(--berth-shadow-lg);
   padding: 24px;
   animation: modal-scale-in 0.2s ease-out;
 }
@@ -489,10 +489,10 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--runway-glass-bg);
-  -webkit-backdrop-filter: blur(var(--runway-glass-blur));
-  backdrop-filter: blur(var(--runway-glass-blur));
-  border-right: 1px solid var(--runway-border-subtle);
+  background: var(--berth-glass-bg);
+  -webkit-backdrop-filter: blur(var(--berth-glass-blur));
+  backdrop-filter: blur(var(--berth-glass-blur));
+  border-right: 1px solid var(--berth-border-subtle);
   user-select: none;
   flex-shrink: 0;
 }
@@ -506,7 +506,7 @@ body {
   padding-left: 78px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--runway-text-primary);
+  color: var(--berth-text-primary);
   letter-spacing: -0.01em;
 }
 
@@ -524,8 +524,8 @@ body {
   padding: 7px 10px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--runway-text-secondary);
-  border-radius: var(--runway-radius-sm);
+  color: var(--berth-text-secondary);
+  border-radius: var(--berth-radius-sm);
   cursor: pointer;
   transition: all 0.1s ease;
   border: none;
@@ -535,19 +535,19 @@ body {
 }
 
 .sidebar-nav-item:hover {
-  background: var(--runway-surface-2);
-  color: var(--runway-text-primary);
+  background: var(--berth-surface-2);
+  color: var(--berth-text-primary);
 }
 
 .sidebar-nav-item[data-active="true"] {
-  background: var(--runway-accent-bg);
-  color: var(--runway-accent);
+  background: var(--berth-accent-bg);
+  color: var(--berth-accent);
 }
 
 .sidebar-divider {
   height: 1px;
   margin: 8px 16px;
-  background: var(--runway-border-subtle);
+  background: var(--berth-border-subtle);
 }
 
 .sidebar-section {
@@ -571,7 +571,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--runway-text-tertiary);
+  color: var(--berth-text-tertiary);
 }
 
 .sidebar-project-list {
@@ -589,8 +589,8 @@ body {
   gap: 8px;
   padding: 5px 10px;
   font-size: 12px;
-  color: var(--runway-text-secondary);
-  border-radius: var(--runway-radius-sm);
+  color: var(--berth-text-secondary);
+  border-radius: var(--berth-radius-sm);
   cursor: pointer;
   transition: all 0.1s ease;
   border: none;
@@ -602,13 +602,13 @@ body {
 }
 
 .sidebar-project-item:hover {
-  background: var(--runway-surface-2);
-  color: var(--runway-text-primary);
+  background: var(--berth-surface-2);
+  color: var(--berth-text-primary);
 }
 
 .sidebar-project-item[data-active="true"] {
-  background: var(--runway-accent-bg);
-  color: var(--runway-text-primary);
+  background: var(--berth-accent-bg);
+  color: var(--berth-text-primary);
 }
 
 /* ================================================================
@@ -658,13 +658,13 @@ body {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--runway-surface-0) 25%,
-    var(--runway-surface-2) 50%,
-    var(--runway-surface-0) 75%
+    var(--berth-surface-0) 25%,
+    var(--berth-surface-2) 50%,
+    var(--berth-surface-0) 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
-  border-radius: var(--runway-radius-sm);
+  border-radius: var(--berth-radius-sm);
 }
 
 /* ================================================================
@@ -673,7 +673,7 @@ body {
 .workspace-tab-bar {
   display: flex;
   gap: 0;
-  border-bottom: 1px solid var(--runway-border-subtle);
+  border-bottom: 1px solid var(--berth-border-subtle);
   padding: 0 20px;
   flex-shrink: 0;
 }
@@ -682,7 +682,7 @@ body {
   padding: 8px 16px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--runway-text-tertiary);
+  color: var(--berth-text-tertiary);
   border: none;
   background: none;
   cursor: pointer;
@@ -692,12 +692,12 @@ body {
 }
 
 .workspace-tab:hover {
-  color: var(--runway-text-secondary);
+  color: var(--berth-text-secondary);
 }
 
 .workspace-tab[data-active="true"] {
-  color: var(--runway-text-primary);
-  border-bottom-color: var(--runway-accent);
+  color: var(--berth-text-primary);
+  border-bottom-color: var(--berth-accent);
 }
 
 /* ================================================================
@@ -714,8 +714,8 @@ body {
   top: 0;
   bottom: 0;
   width: 320px;
-  background: var(--runway-surface-0);
-  border-left: 1px solid var(--runway-border-subtle);
+  background: var(--berth-surface-0);
+  border-left: 1px solid var(--berth-border-subtle);
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.2);
   animation: panel-slide-in 0.2s ease-out;
   z-index: 10;
@@ -729,10 +729,10 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
-  border-bottom: 1px solid var(--runway-border-subtle);
+  border-bottom: 1px solid var(--berth-border-subtle);
   font-size: 13px;
   font-weight: 600;
-  color: var(--runway-text-primary);
+  color: var(--berth-text-primary);
   flex-shrink: 0;
 }
 
@@ -752,17 +752,17 @@ body {
   padding: 4px 10px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--runway-text-primary);
-  background: var(--runway-surface-1);
-  border: 1px solid var(--runway-border);
-  border-radius: var(--runway-radius-sm);
+  color: var(--berth-text-primary);
+  background: var(--berth-surface-1);
+  border: 1px solid var(--berth-border);
+  border-radius: var(--berth-radius-sm);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .target-trigger:hover {
-  background: var(--runway-surface-2);
-  border-color: var(--runway-border-strong);
+  background: var(--berth-surface-2);
+  border-color: var(--berth-border-strong);
 }
 
 .target-popover {
@@ -772,12 +772,12 @@ body {
   z-index: 20;
   min-width: 180px;
   padding: 4px;
-  background: var(--runway-glass-bg);
+  background: var(--berth-glass-bg);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
-  border: 1px solid var(--runway-glass-border);
-  border-radius: var(--runway-radius-md);
-  box-shadow: var(--runway-shadow-lg);
+  border: 1px solid var(--berth-glass-border);
+  border-radius: var(--berth-radius-md);
+  box-shadow: var(--berth-shadow-lg);
   animation: modal-scale-in 0.15s ease-out;
 }
 
@@ -788,8 +788,8 @@ body {
   width: 100%;
   padding: 6px 10px;
   font-size: 12px;
-  color: var(--runway-text-primary);
-  border-radius: var(--runway-radius-sm);
+  color: var(--berth-text-primary);
+  border-radius: var(--berth-radius-sm);
   background: none;
   border: none;
   cursor: pointer;
@@ -798,17 +798,17 @@ body {
 }
 
 .target-option:hover {
-  background: var(--runway-accent);
+  background: var(--berth-accent);
   color: white;
 }
 
 .target-option[data-selected="true"] {
-  background: var(--runway-accent-bg);
-  color: var(--runway-accent);
+  background: var(--berth-accent-bg);
+  color: var(--berth-accent);
 }
 
 .target-option[data-selected="true"]:hover {
-  background: var(--runway-accent);
+  background: var(--berth-accent);
   color: white;
 }
 
@@ -819,28 +819,28 @@ body {
   font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   padding: 3px 8px;
-  background: var(--runway-surface-1);
+  background: var(--berth-surface-1);
   border-radius: 4px;
   display: inline-block;
-  color: var(--runway-text-primary);
+  color: var(--berth-text-primary);
 }
 
 .schedule-quick-btn {
   font-size: 11px;
   font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
   padding: 3px 10px;
-  background: var(--runway-surface-1);
-  border: 1px solid var(--runway-border);
+  background: var(--berth-surface-1);
+  border: 1px solid var(--berth-border);
   border-radius: 100px;
   cursor: pointer;
-  color: var(--runway-text-secondary);
+  color: var(--berth-text-secondary);
   transition: all 0.15s ease;
 }
 
 .schedule-quick-btn:hover {
-  background: var(--runway-accent-bg);
-  border-color: var(--runway-accent-border);
-  color: var(--runway-accent);
+  background: var(--berth-accent-bg);
+  border-color: var(--berth-accent-border);
+  color: var(--berth-accent);
 }
 
 /* ================================================================
@@ -858,7 +858,7 @@ body {
   top: 12px;
   bottom: 12px;
   width: 1px;
-  background: var(--runway-border-subtle);
+  background: var(--berth-border-subtle);
 }
 
 .history-item {
@@ -876,14 +876,14 @@ body {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  border: 2px solid var(--runway-surface-0);
+  border: 2px solid var(--berth-surface-0);
 }
 
 .history-item:first-child .history-dot { top: 3px; }
 
-.history-dot--success { background: var(--runway-success); }
-.history-dot--error { background: var(--runway-error); }
-.history-dot--running { background: var(--runway-accent); animation: pulse-soft 1.5s ease-in-out infinite; }
+.history-dot--success { background: var(--berth-success); }
+.history-dot--error { background: var(--berth-error); }
+.history-dot--running { background: var(--berth-accent); animation: pulse-soft 1.5s ease-in-out infinite; }
 
 /* ================================================================
    Toolbar Icon Button (active state for panel toggles)
@@ -893,20 +893,20 @@ body {
   align-items: center;
   justify-content: center;
   padding: 5px;
-  border-radius: var(--runway-radius-sm);
+  border-radius: var(--berth-radius-sm);
   border: none;
   background: none;
-  color: var(--runway-text-tertiary);
+  color: var(--berth-text-tertiary);
   cursor: pointer;
   transition: all 0.1s ease;
 }
 
 .toolbar-icon:hover {
-  background: var(--runway-surface-2);
-  color: var(--runway-text-secondary);
+  background: var(--berth-surface-2);
+  color: var(--berth-text-secondary);
 }
 
 .toolbar-icon[data-active="true"] {
-  background: var(--runway-accent-bg);
-  color: var(--runway-accent);
+  background: var(--berth-accent-bg);
+  color: var(--berth-accent);
 }

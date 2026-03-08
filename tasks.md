@@ -1,4 +1,4 @@
-# Runway - Pending Tasks
+# Berth - Pending Tasks
 
 > Comprehensive task tracker. Synced with CLAUDE.md roadmap.
 
@@ -26,9 +26,9 @@ The TLS infrastructure exists (`tls.rs`) and Keychain storage exists (`credentia
 
 ### mTLS Connection Security
 - [ ] **P0** Agent: add `--tls` flag to load server cert and enable `ServerTlsConfig`
-- [ ] **P0** Agent: require client certs signed by Runway CA when TLS is enabled
+- [ ] **P0** Agent: require client certs signed by Berth CA when TLS is enabled
 - [ ] **P0** Tauri `run_project` command (remote target path): use `client_tls_config()` when connecting to TLS-enabled agents
-- [ ] **P1** Target registration: distribute server cert to agent during `runway agent install`
+- [ ] **P1** Target registration: distribute server cert to agent during `berth agent install`
 - [ ] **P1** Store CA private key in macOS Keychain instead of plaintext on disk
 - [ ] **P2** Cert rotation / expiry management
 
@@ -36,7 +36,7 @@ The TLS infrastructure exists (`tls.rs`) and Keychain storage exists (`credentia
 - [ ] **P1** Shared secret / API key auth: agent requires token on gRPC metadata, app sends it
 - [ ] **P1** UI: per-target auth token field in target add/edit form
 - [ ] **P1** Store agent auth tokens in macOS Keychain via `credentials.rs`
-- [ ] **P1** CLI: `runway targets add --auth-token <token>` flag
+- [ ] **P1** CLI: `berth targets add --auth-token <token>` flag
 - [ ] **P2** Agent: `--generate-token` flag to create and display a random auth token on first run
 - [ ] **P2** Agent: rate limiting on unauthenticated requests
 - [ ] **P2** SSH key-based agent auth as alternative to token-based
@@ -56,7 +56,7 @@ Phase 3 is marked complete in CLAUDE.md but has loose ends:
 
 ## Architecture: Agent-Only Refactor (Complete)
 
-- [x] Move AgentServiceImpl to runway-core (shared across all crates)
+- [x] Move AgentServiceImpl to berth-core (shared across all crates)
 - [x] UDS transport helpers (`uds.rs` — serve + connect)
 - [x] Local agent bootstrap with lockfile coordination (`local_agent.rs`)
 - [x] Proto: exit_code + is_final fields on ExecuteResponse
@@ -138,7 +138,7 @@ Phase 3 is marked complete in CLAUDE.md but has loose ends:
 
 ## Technical Debt
 
-- [ ] **P1** Test coverage: 23.27% overall — target 50%+ for runway-core
+- [ ] **P1** Test coverage: 23.27% overall — target 50%+ for berth-core
 - [ ] **P1** Clippy: run `cargo clippy` with strict lints and fix all warnings
 - [ ] **P2** Frontend tests: component tests for ProjectDetail, PasteAndDeploy, Targets
 - [ ] **P2** CI/CD: GitHub Actions for `cargo test`, `cargo clippy`, `npm run build`
