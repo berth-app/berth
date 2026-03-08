@@ -214,6 +214,7 @@ runway agent install ubuntu@my-server.com
 - [ ] Deployment history and rollback
 - [x] Notification system: macOS notifications for failures, completions (manual + scheduled + remote via NATS)
 - [ ] Settings, onboarding flow, empty states
+- [ ] Anonymized telemetry: opt-in collection of crash reports, error frequency, and usage stats to improve code quality (no PII, transparent data policy)
 - [ ] Code signing, notarization, DMG packaging, Homebrew cask
 
 **Ship:** Public launch via direct download + Homebrew cask.
@@ -246,6 +247,7 @@ runway agent install ubuntu@my-server.com
 - Deployment history/rollback
 - mDNS LAN discovery
 - Agent auto-update mechanism
+- Anonymized telemetry for crash reports and error tracking (opt-in, no PII)
 
 ### WON'T have at launch
 - Team/collaboration features

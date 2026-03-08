@@ -1,0 +1,62 @@
+[
+  {
+    "id": "default",
+    "name": "Default",
+    "file": "default.json",
+    "preview": { "bg": "#1a1a1c", "surface": "#232326", "accent": "#0a84ff", "success": "#30d158", "error": "#ff453a" }
+  },
+  {
+    "id": "nord",
+    "name": "Nord",
+    "file": "nord.json",
+    "preview": { "bg": "#2e3440", "surface": "#3b4252", "accent": "#88c0d0", "success": "#a3be8c", "error": "#bf616a" }
+  },
+  {
+    "id": "dracula",
+    "name": "Dracula",
+    "file": "dracula.json",
+    "preview": { "bg": "#282a36", "surface": "#44475a", "accent": "#bd93f9", "success": "#50fa7b", "error": "#ff5555" }
+  },
+  {
+    "id": "solarized",
+    "name": "Solarized",
+    "file": "solarized.json",
+    "preview": { "bg": "#002b36", "surface": "#073642", "accent": "#268bd2", "success": "#859900", "error": "#dc322f" }
+  },
+  {
+    "id": "tokyo-night",
+    "name": "Tokyo Night",
+    "file": "tokyo-night.json",
+    "preview": { "bg": "#1a1b26", "surface": "#24283b", "accent": "#7aa2f7", "success": "#9ece6a", "error": "#f7768e" }
+  },
+  {
+    "id": "catppuccin",
+    "name": "Catppuccin",
+    "file": "catppuccin.json",
+    "preview": { "bg": "#1e1e2e", "surface": "#313244", "accent": "#89b4fa", "success": "#a6e3a1", "error": "#f38ba8" }
+  },
+  {
+    "id": "gruvbox",
+    "name": "Gruvbox",
+    "file": "gruvbox.json",
+    "preview": { "bg": "#282828", "surface": "#3c3836", "accent": "#d79921", "success": "#b8bb26", "error": "#fb4934" }
+  },
+  {
+    "id": "rose-pine",
+    "name": "Rosé Pine",
+    "file": "rose-pine.json",
+    "preview": { "bg": "#191724", "surface": "#1f1d2e", "accent": "#c4a7e7", "success": "#9ccfd8", "error": "#eb6f92" }
+  },
+  {
+    "id": "one-dark",
+    "name": "One Dark",
+    "file": "one-dark.json",
+    "preview": { "bg": "#282c34", "surface": "#2c313a", "accent": "#61afef", "success": "#98c379", "error": "#e06c75" }
+  },
+  {
+    "id": "synthwave",
+    "name": "Synthwave",
+    "file": "synthwave.json",
+    "preview": { "bg": "#1a1025", "surface": "#241b2f", "accent": "#f72585", "success": "#72efdd", "error": "#ff6b6b" }
+  }
+]

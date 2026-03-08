@@ -1,0 +1,266 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0009-4000-8000-000000000001"
+  title: "Growth Strategy: Distribution, Traction, and Go-to-Market Playbook"
+  domain: "business"
+  intent: "Define the distribution channels, launch strategy, and sustained growth plan for Runway's first 2 years"
+  related_decisions:
+    - id: "b1c2d3e4-0008-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "Business model tiers determine what's free vs paid in each channel"
+    - id: "b1c2d3e4-0003-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "Product positioning determines messaging and target audience"
+
+context:
+  constraints:
+    - description: "Solo founder — no marketing team, limited bandwidth for content/outreach"
+      source: "organizational"
+      negotiable: false
+    - description: "Mac-only at launch — limits total addressable audience"
+      source: "product"
+      negotiable: true
+    - description: "Zero marketing budget — must rely on organic channels and product-led growth"
+      source: "budget"
+      negotiable: true
+    - description: "Agent binary runs on user's servers — trust is critical for adoption"
+      source: "security"
+      negotiable: false
+  objectives:
+    - description: "5,000 free users in Year 1"
+      priority: "must_have"
+      measurable: true
+    - description: "500 Pro subscribers in Year 1 ($72K ARR)"
+      priority: "should_have"
+      measurable: true
+    - description: "Top 5 on Product Hunt launch day"
+      priority: "should_have"
+      measurable: true
+    - description: "1,000+ GitHub stars on agent repo in Year 1"
+      priority: "nice_to_have"
+      measurable: true
+  environment:
+    organizational: "Solo founder, bootstrapped, March 2026"
+    temporal: "AI code generation exploding. Agentic traffic up 6,900% YoY. 'Vibe coding' entering mainstream developer vocabulary. Window of opportunity for deployment tooling."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 70
+  phase_notes: "Strategy designed but untested. Confidence will increase after Product Hunt launch and first 100 users. Key risk: solo founder bandwidth for content + development simultaneously."
+
+reasoning:
+  patterns_applied:
+    - comparative
+    - staged_rollout
+    - product_led_growth
+  notes: |
+    Growth strategy modeled after successful indie dev tools:
+    - Tower (Git client): direct download + Homebrew, no App Store, profitable indie business
+    - Raycast: Product Hunt launch (#1), Homebrew, direct download, developer community
+    - ngrok: developer word-of-mouth, generous free tier, open-source agent
+    - Linear: invite-only beta, Product Hunt, developer-first marketing
+
+    Key insight: Runway's MCP integration is a unique growth vector. AI coding tools (Claude Code, Codex, Cursor)
+    can recommend Runway to users via MCP. This is an organic distribution channel that doesn't exist for
+    traditional dev tools. Every AI-assisted deployment is implicit marketing.
+
+    Template library doubles as content marketing — each template is an SEO-friendly landing page
+    ("How to deploy a Python stock watcher") that converts browsers into users.
+
+synthesis:
+  decision: |
+    Five-phase growth strategy spanning pre-launch through Year 2+.
+
+    PHASE A — PRE-LAUNCH (Before public release):
+    1. Build in public: X/Twitter, Reddit (r/selfhosted, r/devops, r/learnprogramming), Hacker News
+       - Share demo videos (30-60s): paste code → running in 3 clicks
+       - "I'm building a Mac-native deploy tool for AI-generated code"
+    2. Waitlist/early access: landing page with email capture
+       - Target: 500-1000 emails before launch
+       - Tagline: "Paste code. Pick a target. It's running."
+
+    PHASE B — LAUNCH WEEK:
+    3. Product Hunt launch
+       - Prepare: 5+ screenshots, 60s demo video, compelling tagline
+       - Launch on Tuesday/Wednesday for best visibility
+       - Rally early access users for day-1 upvotes
+       - Target: Top 5 of the day (2,000-5,000 visits)
+    4. Hacker News "Show HN"
+       - Post after Product Hunt momentum
+       - Lead with zero-infra angle: "I built a Mac app that deploys AI-generated code to your own servers"
+       - Target: Front page (10,000-30,000 visits)
+    5. Reddit blitz (staggered over launch week)
+       - r/selfhosted (900K) — "Run your AI bots on your own hardware"
+       - r/homelab (1.3M) — "Deploy scripts to your homelab from a Mac app"
+       - r/devops (300K) — "Mac-native alternative to Rundeck"
+       - r/ChatGPT, r/ClaudeAI — "Deploy code that Claude wrote for you"
+       - r/algotrading — "Deploy trading bots with one click"
+
+    PHASE C — SUSTAINED GROWTH (Month 1-6):
+    6. AI coding tool integrations (PRIMARY CHANNEL)
+       - Create tutorials: "How to deploy from Claude Code using Runway"
+       - Get listed in MCP tool directories, awesome-mcp lists
+       - Reach out to Anthropic, OpenAI (Codex), Cursor for partnership/listing
+       - Each AI-assisted deployment is implicit marketing
+    7. YouTube / content marketing
+       - Template showcase videos (each template = content)
+       - "Vibe coding to production" series — build with Claude Code, deploy with Runway
+       - Short tutorials: "Deploy a stock watcher in 2 minutes"
+    8. Homebrew Cask
+       - `brew install --cask runway`
+       - Listed on formulae.brew.sh (searchable, discoverable)
+    9. GitHub presence — source-available agent
+       - Publish runway-agent on GitHub under source-available license (BSL or similar)
+       - Users can inspect what runs on their servers (trust), but cannot commercially clone the system
+       - README links back to Mac app for the full GUI experience
+       - Target: 1,000+ stars in Year 1
+    10. Template library as content marketing
+        - Each template gets a landing page optimized for search
+        - "How to deploy a Python stock watcher" ranks for long-tail keywords
+        - Free users browse → want to deploy → sign up for Pro
+
+    PHASE D — AMPLIFICATION (Month 6-12):
+    11. Setapp distribution
+        - ~1M subscribers, developer-heavy audience
+        - Setapp includes Free-tier features only (local + direct-connect agents)
+        - NATS relay, cloud targets, templates still require Runway Pro subscription
+        - Distribution without cannibalizing Pro revenue
+    12. Developer newsletters
+        - TLDR, Bytes, Console.dev, Changelog — submit for inclusion
+    13. VPS provider partnerships
+        - Hetzner, DigitalOcean — "One-click Runway agent" on their marketplace
+        - Natural cross-sell: they sell VPS, we help users deploy to them
+    14. Indie dev podcasts
+        - Indie Hackers, Software Social, Under the Radar
+        - Topic: "Building a zero-infra deployment tool as a solo founder"
+
+    PHASE E — YEAR 2+:
+    15. Mac App Store (deferred)
+        - Investigate sandbox compatibility with agent communication
+        - If needed: "lite" version on App Store + "full" version via direct download
+        - Use for discovery + trust signal
+    16. Open marketplace for community templates
+        - Creators promote their own templates (viral distribution)
+        - Marketplace itself becomes a growth channel
+    17. Web dashboard companion
+        - Enables non-Mac users to monitor deployments
+        - Broadens addressable market beyond macOS
+
+  rationale: |
+    Product-led growth is the only viable strategy for a solo bootstrapped founder.
+    The product must sell itself — every feature should reduce friction and create word-of-mouth.
+
+    MCP integration is the unique advantage: no other deployment tool can be invoked directly by AI coding agents.
+    This creates an organic distribution channel where AI tools effectively recommend Runway to developers.
+
+    The source-available agent (not fully open source) balances trust (users can inspect server-side code)
+    with IP protection (BSL/SSPL prevents commercial cloning). The Mac app, MCP server, template library,
+    and NATS relay infrastructure remain proprietary — that's where the real value lives.
+
+    Setapp is treated as a distribution channel for the Free tier only. This avoids cannibalizing
+    Pro subscriptions while reaching Setapp's developer-heavy audience.
+
+  follow_ups:
+    - action: "Build landing page with email capture (waitlist)"
+      owner: "founder"
+      phase: "A"
+    - action: "Prepare Product Hunt assets (screenshots, demo video, tagline)"
+      owner: "founder"
+      phase: "B"
+    - action: "Write 3 tutorial posts for Claude Code + Runway MCP integration"
+      owner: "founder"
+      phase: "C"
+    - action: "Choose source-available license for runway-agent (BSL vs SSPL vs FSL)"
+      owner: "founder"
+      phase: "C"
+    - action: "Create template landing page template (for SEO)"
+      owner: "founder"
+      phase: "C"
+    - action: "Apply to Setapp partner program"
+      owner: "founder"
+      phase: "D"
+    - action: "Contact Hetzner/DigitalOcean about marketplace listing"
+      owner: "founder"
+      phase: "D"
+
+  alternatives:
+    - decision: "Fully open-source agent (MIT/Apache)"
+      rationale_against: "Reduces friction for installing on servers but enables commercial cloning. Source-available license achieves the trust goal while protecting IP."
+      conditions_for_reconsideration: "If a competitor forks and out-markets Runway, full open source becomes the defensive play."
+    - decision: "Mac App Store at launch"
+      rationale_against: "Sandboxing conflicts with agent communication (UDS, gRPC, SSH keys). Developer tools typically distribute outside App Store (Tower, iTerm, Raycast). Defer to Year 2."
+      conditions_for_reconsideration: "If Apple relaxes sandboxing for developer tools, or if Tauri 2.x adds App Store sandbox compatibility."
+    - decision: "Paid marketing (ads, sponsorships)"
+      rationale_against: "Bootstrapped budget. Product-led growth is more sustainable and builds genuine community. Consider paid channels only after validating organic conversion rate."
+      conditions_for_reconsideration: "If organic channels plateau below 5,000 users and there's budget from Pro revenue."
+
+  agent_licensing:
+    approach: "Source-available"
+    description: |
+      Publish runway-agent on GitHub under a source-available license (Business Source License or similar).
+      Users can read, audit, and inspect the agent code — critical for trust when installing on their servers.
+      The license prevents commercial use of the agent outside of Runway (no cloning the system).
+      The Mac app, MCP server, template library, and NATS relay remain fully proprietary.
+    benefits:
+      - "Trust: users can verify what runs on their servers"
+      - "Community contributions: bug reports, PRs for agent improvements"
+      - "GitHub stars drive organic discovery"
+      - "Reduces 'installing closed-source binary on my server' friction"
+    protections:
+      - "BSL/SSPL prevents competitors from commercially cloning the agent"
+      - "Mac app + MCP + templates + NATS relay are proprietary (the real value)"
+      - "Protocol/API is the moat, not the agent binary"
+
+  distribution_channels:
+    primary:
+      - channel: "Direct download (DMG)"
+        cost: "Free (hosting only)"
+        control: "Full"
+        timeline: "Launch"
+      - channel: "Homebrew Cask"
+        cost: "Free"
+        control: "Full"
+        timeline: "Launch"
+      - channel: "Product Hunt"
+        cost: "Free"
+        control: "One-shot (launch day)"
+        timeline: "Launch week"
+    secondary:
+      - channel: "GitHub (agent repo)"
+        cost: "Free"
+        control: "Full"
+        timeline: "Month 1"
+      - channel: "MCP tool directories"
+        cost: "Free"
+        control: "Listing"
+        timeline: "Month 1"
+      - channel: "Setapp"
+        cost: "Revenue share (~30%)"
+        control: "Limited"
+        timeline: "Month 6-12"
+    deferred:
+      - channel: "Mac App Store"
+        cost: "15-30% commission"
+        control: "Apple review"
+        timeline: "Year 2+"
+      - channel: "VPS provider marketplaces"
+        cost: "Partnership"
+        control: "Joint"
+        timeline: "Month 6-12"
+
+meta:
+  created_at: "2026-03-08T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "brainstorm_session"
+  tags:
+    - "business"
+    - "growth"
+    - "distribution"
+    - "marketing"
+    - "go-to-market"
+    - "open-source"
+    - "licensing"

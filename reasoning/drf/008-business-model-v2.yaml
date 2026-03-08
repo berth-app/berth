@@ -1,0 +1,253 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0008-4000-8000-000000000001"
+  title: "Refined Freemium Model: Transport-Gated Tiers with Template Marketplace"
+  domain: "business"
+  intent: "Redefine the Free/Pro boundary around transport type (direct connectivity vs NATS relay) instead of project/agent count limits, add template library as a conversion driver and future revenue stream"
+  related_decisions:
+    - id: "b1c2d3e4-0004-4000-8000-000000000001"
+      relationship: "supersedes"
+      description: "Replaces DRF-004 count-based tier gates with transport-based gates"
+    - id: "b1c2d3e4-0003-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "Product positioning determines target personas and value tiers"
+
+context:
+  constraints:
+    - description: "Bootstrapped — cannot subsidize free users with VC money"
+      source: "budget"
+      negotiable: false
+    - description: "NATS relay (Synadia Cloud) is the primary cost center — aligning cost with revenue gate"
+      source: "architecture"
+      negotiable: false
+    - description: "MCP server must remain free on all tiers to maximize AI-agent adoption moat"
+      source: "strategy"
+      negotiable: false
+    - description: "Developers are price-sensitive and expect generous free tiers"
+      source: "market"
+      negotiable: false
+    - description: "Zero-infra model (user's compute, not ours) must be preserved through Year 2"
+      source: "architecture"
+      negotiable: true
+  objectives:
+    - description: "5,000 free users in Year 1"
+      priority: "must_have"
+      measurable: true
+    - description: "Path to $100K ARR within 2 years"
+      priority: "should_have"
+      measurable: true
+    - description: "Zero marginal cost per free user (no NATS relay, no cloud targets)"
+      priority: "must_have"
+      measurable: true
+    - description: "Template library as a high-visibility conversion trigger"
+      priority: "should_have"
+      measurable: true
+  environment:
+    organizational: "Solo founder, bootstrapped"
+    temporal: "NATS command channel is built and working (March 2026). Cloud targets (Lambda, Vercel, CF Workers) planned for Phase 4. Template library planned for Phase 5."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 85
+  phase_notes: "Refined from DRF-004 based on architectural reality — NATS relay is the natural cost/value boundary. Higher confidence than DRF-004 because the transport layer is now built and validated."
+
+reasoning:
+  patterns_applied:
+    - comparative
+    - cost_benefit
+    - architectural_alignment
+  notes: |
+    Key insight from DRF-004 refinement: the original model gated on project count (3 free) and agent count (1 free).
+    Now that NATS relay is built, the natural gate is transport type — direct gRPC connectivity is free (zero cost to us),
+    NATS relay is paid (Synadia Cloud cost). This aligns revenue with actual infrastructure cost.
+
+    The transport gate is also a better UX signal: "your code runs anywhere you can reach directly — pay when you want
+    the convenience of zero-config NAT traversal." This mirrors ngrok's model (free tunnels with limits, paid for
+    custom domains and always-on).
+
+    Template library adds a second conversion vector: free users browse 50+ ready-to-deploy projects (stock watcher,
+    web scraper, Discord bot, trading bot, cron jobs) but need Pro to deploy them. This is the "App Store window
+    shopping" effect — see what you want, upgrade to get it.
+
+    MCP remains fully free because AI-agent adoption is the strategic moat. Gating MCP would limit the ecosystem
+    that makes Runway uniquely valuable.
+
+synthesis:
+  decision: |
+    Three-tier freemium model with transport-based gating and template marketplace:
+
+    FREE TIER:
+    - Unlimited local Mac execution (no project limits)
+    - Unlimited direct-connect remote agents (gRPC over LAN/VPN/static IP)
+    - Full MCP server access (all 17+ tools)
+    - Full monitoring and execution history
+    - Browse entire template library (read-only, cannot deploy)
+
+    PRO TIER ($12/month):
+    - Everything in Free
+    - NATS relay for up to 10 remote agents (NAT traversal, zero inbound ports)
+    - Cloud targets: AWS Lambda, Vercel, Cloudflare Workers (deploys to user's own account)
+    - Webhooks: inbound triggers (GitHub, Stripe → execute) + outbound notifications (Slack, Discord)
+    - 3 shared projects (share with anyone, recipients don't need Pro)
+    - Deploy from template library (50+ first-party templates)
+    - Buy and deploy from curated marketplace (future)
+
+    TEAM TIER ($25/user/month):
+    - Everything in Pro
+    - Unlimited NATS relay agents
+    - Unlimited shared projects
+    - Creator = admin (only creator can delete shared projects)
+    - Team member management
+
+    FUTURE ADD-ONS:
+    - Managed compute via spot instances (Year 3+, Phase 6)
+    - Curated template marketplace with revenue share (Year 2+, Phase 5)
+
+  rationale: |
+    Transport-based gating is superior to count-based gating for three reasons:
+
+    1. COST ALIGNMENT: Free users cost nothing (direct gRPC = peer-to-peer). Paid users use NATS relay
+       (Synadia Cloud cost). Revenue directly offsets infrastructure spend.
+
+    2. NATURAL CONVERSION: Users start locally or with direct-connect VPS. When they want the convenience
+       of deploying behind NAT without opening ports — that's the upgrade moment. The template library adds
+       a second conversion vector for less technical users.
+
+    3. GENEROUS FREE TIER: No artificial limits on projects or agents. Power users with static-IP servers
+       get unlimited free usage. This maximizes word-of-mouth and community growth. The bet is that most
+       users prefer NATS convenience over manual port forwarding.
+
+    Pricing unchanged at $12/mo (Pro) and $25/user/mo (Team). $12 maintains the "premium indie tool" signal
+    (Tower $69/yr ≈ $5.75/mo, Bear $1.49/mo, Dash $49.99 one-time). $25/user is standard for team dev tools.
+
+  follow_ups:
+    - action: "Implement license key or subscription system (RevenueCat or Stripe)"
+      owner: "founder"
+    - action: "Build tier-checking middleware in Rust backend (check subscription status before NATS/cloud/webhook operations)"
+      owner: "founder"
+    - action: "Create 10 starter templates for launch (stock watcher, web scraper, Discord bot, cron examples, etc.)"
+      owner: "founder"
+    - action: "Design template manifest format (code + runtime config + schedule + env vars + deps)"
+      owner: "founder"
+    - action: "Validate pricing with beta users (willingness to pay survey)"
+      owner: "founder"
+    - action: "Implement sharing: project-level share with creator-as-admin permissions"
+      owner: "founder"
+
+  alternatives:
+    - decision: "Transport gate + project/agent count limits (hybrid)"
+      rationale_against: "Adds artificial friction without aligning to real costs. Count limits feel arbitrary and punish power users who drive word-of-mouth."
+      conditions_for_reconsideration: "If free-tier abuse becomes significant (users running hundreds of agents via direct gRPC)."
+    - decision: "Transport gate + monitoring time limits (1hr free, 30 days Pro)"
+      rationale_against: "Monitoring history is cheap to store locally (SQLite). Gating it feels petty and doesn't align with a real cost. Better to be generous here."
+      conditions_for_reconsideration: "If cloud-synced monitoring history becomes a feature (then storage cost justifies gating)."
+    - decision: "Gate MCP behind Pro"
+      rationale_against: "MCP is the strategic moat — AI agents deploying via Runway. Gating MCP kills the ecosystem play. Keep it free to maximize AI-agent adoption."
+      conditions_for_reconsideration: "Never. MCP must remain free."
+    - decision: "One-time purchase ($49-99)"
+      rationale_against: "No recurring revenue. Cannot fund NATS relay costs or ongoing development."
+      conditions_for_reconsideration: "If subscription fatigue becomes a major barrier to adoption during beta."
+    - decision: "Open marketplace (anyone can publish and sell)"
+      rationale_against: "Solo founder cannot moderate an open marketplace. Quality control is critical for brand trust. Start with first-party templates, then curated community submissions."
+      conditions_for_reconsideration: "If community demand for publishing exceeds curation capacity (likely Year 3+)."
+
+  revenue_streams:
+    - name: "Pro subscription"
+      description: "NATS relay + cloud targets + webhooks + sharing + template deploy"
+      pricing: "$12/month"
+      margin: "~90% (only cost is Synadia Cloud NATS relay)"
+      timeline: "Phase 4 launch"
+    - name: "Team subscription"
+      description: "Unlimited sharing + collaboration + unlimited NATS agents"
+      pricing: "$25/user/month"
+      margin: "~90%"
+      timeline: "Phase 5"
+    - name: "Template marketplace fees"
+      description: "Curated community templates with revenue share (70/30 creator/Runway)"
+      pricing: "$0.99-$9.99 per template"
+      margin: "30% take rate"
+      timeline: "Phase 5+ (Year 2)"
+    - name: "Managed compute add-on"
+      description: "Spot instances on AWS/GCP for users who don't want to manage their own servers"
+      pricing: "Usage-based (~$0.01/hr)"
+      margin: "~40% (spot instance markup)"
+      timeline: "Phase 6+ (Year 3)"
+
+  revenue_projections:
+    - year: 1
+      free_users: 5000
+      pro_users: 500
+      team_seats: 0
+      arr: "$72K"
+      notes: "Pro subscriptions only. Templates bundled, no marketplace yet."
+    - year: 2
+      free_users: 25000
+      pro_users: 2500
+      team_seats: 200
+      arr: "$420K"
+      notes: "Team tier launches. Curated marketplace opens. Template revenue ~$20K."
+    - year: 3
+      free_users: 100000
+      pro_users: 8000
+      team_seats: 1000
+      arr: "$1.5M"
+      notes: "Managed compute add-on launches. Marketplace revenue ~$100K."
+
+  conversion_triggers:
+    - trigger: "NATS relay"
+      description: "User has agent behind NAT/firewall, can't open ports → upgrade to Pro for zero-config connectivity"
+      tier: "Free → Pro"
+    - trigger: "Cloud targets"
+      description: "User wants to deploy to Lambda/Vercel/CF Workers → upgrade to Pro"
+      tier: "Free → Pro"
+    - trigger: "Webhooks"
+      description: "User wants GitHub push → auto-deploy, or Slack notifications → upgrade to Pro"
+      tier: "Free → Pro"
+    - trigger: "Template deploy"
+      description: "User browses stock watcher template, clicks Deploy → prompted to upgrade to Pro"
+      tier: "Free → Pro"
+    - trigger: "Sharing limit"
+      description: "Pro user hits 3 shared project limit → upgrade to Team for unlimited sharing"
+      tier: "Pro → Team"
+    - trigger: "Team growth"
+      description: "Multiple people need access to shared projects and targets → Team tier"
+      tier: "Pro → Team"
+
+  template_strategy:
+    phase_1:
+      description: "50+ first-party templates created by founder"
+      categories:
+        - "Monitoring: stock watcher, uptime checker, price alerts"
+        - "Scraping: web scraper, RSS aggregator, social media monitor"
+        - "Bots: Discord bot, Telegram bot, Slack bot"
+        - "Trading: crypto trading bot, portfolio tracker, market scanner"
+        - "AI agents: research agent, data pipeline, content generator"
+        - "DevOps: log rotator, backup script, health checker, cron jobs"
+        - "Automation: email sender, file syncer, webhook relay"
+      access: "Free users browse, Pro users deploy"
+      format: "Target-agnostic: same template deploys to local Mac, Linux VPS, or Lambda with one click"
+    phase_2:
+      description: "Curated community marketplace"
+      model: "Hand-picked quality templates from community contributors"
+      revenue_share: "70% creator / 30% Runway"
+      pricing: "$0.99-$9.99 per template"
+      access: "Free users browse, Pro users buy and deploy"
+      quality: "Every template reviewed before listing. No open submission — invitation or application only."
+
+meta:
+  created_at: "2026-03-08T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "brainstorm_session"
+  supersedes: "drf/004-business-model.yaml"
+  tags:
+    - "business"
+    - "pricing"
+    - "freemium"
+    - "templates"
+    - "marketplace"
+    - "nats"
+    - "transport-gating"

@@ -100,24 +100,31 @@ Your cost is purely software distribution. Like Terraform: you're the control pl
 
 Nobody offers this today. Not Vercel, not Railway, not Render.
 
-## Business Model: 4 Revenue Streams
+## Business Model: Transport-Gated Freemium (DRF-008)
 
 ### Pricing Tiers
 
-| Feature             | Free          | Pro ($12/mo)      | Team ($25/user/mo) |
-|---------------------|---------------|-------------------|---------------------|
-| Local execution     | 3 projects    | Unlimited         | Unlimited           |
-| Remote agents       | 1 agent       | 10 agents         | Unlimited           |
-| Deploy to user AWS  | -             | Included          | Included + templates|
-| Managed hosting     | -             | -                 | Optional add-on     |
-| AI code import      | Basic         | Smart detection   | Shared library      |
-| Monitoring          | 1hr history   | 30 days           | 90 days + alerts    |
+| Feature | Free | Pro ($12/mo) | Team ($25/user/mo) |
+|---------|------|-------------|-------------------|
+| Local Mac execution | Unlimited | Unlimited | Unlimited |
+| Direct-connect remote agents (gRPC) | Unlimited | Unlimited | Unlimited |
+| NATS relay (NAT traversal, no ports) | — | 10 agents | Unlimited |
+| Cloud targets (Lambda, Vercel, CF Workers) | — | Included | Included |
+| Webhooks (inbound + outbound) | — | Included | Included |
+| Shared projects | — | 3 projects | Unlimited |
+| Template library (50+ projects) | Browse only | Deploy + use | Deploy + use |
+| Curated marketplace (future) | Browse only | Buy + deploy | Buy + deploy |
+| MCP server | Full access | Full access | Full access |
+| Monitoring / execution history | Full | Full | Full |
+| Managed compute (future) | — | — | Add-on |
+
+**Free gate = transport type, not count.** Direct gRPC connectivity (LAN, VPN, static IP) is free with no limits. NATS relay, cloud targets, webhooks, sharing, and template deploy require Pro. MCP is fully free on all tiers — AI-agent adoption is the moat.
 
 ### Revenue Streams
-1. **Desktop App Subscription** (Pro tier) - anchor product
-2. **Remote Agent Tier** (Pro/Team) - growth driver
-3. **Serverless Orchestration** (usage on user's own AWS/GCP) - zero cost to us
-4. **Team Collaboration** (shared runbooks, RBAC, audit logs) - enterprise expansion
+1. **Pro Subscription** — NATS relay + cloud targets + webhooks + sharing + template deploy
+2. **Team Subscription** — unlimited sharing, unlimited NATS agents, team collaboration
+3. **Template Marketplace Fees** — curated community templates, 70/30 revenue share (Year 2+)
+4. **Managed Compute Add-on** — spot instances on user's AWS/GCP (Year 3+)
 
 ## Revenue Projections
 
@@ -170,25 +177,51 @@ Nobody offers this today. Not Vercel, not Railway, not Render.
 
 ## Differentiation Moat
 
-1. **Native macOS UX** - SwiftUI, Keychain, Shortcuts, menu bar, notifications
-2. **Agent protocol** - lightweight Go binary deploys anywhere in seconds
-3. **Zero-infra model** - runs on user's compute, not yours (Terraform-like)
-4. **AI code import** - auto-detect runtime, dependencies, scheduling needs
-5. **Timing** - AI code generation is exploding, deployment is the bottleneck
+1. **Native macOS UX** — Tauri + Rust, Keychain, notifications, menu bar
+2. **MCP-first** — AI coding agents can deploy via MCP (no other tool has this)
+3. **Zero-infra model** — runs on user's compute, not yours (Terraform-like economics)
+4. **Agent protocol** — lightweight Rust binary, single `curl | sh` install
+5. **AI code import** — auto-detect runtime, dependencies, scheduling needs
+6. **Timing** — AI code generation exploding, deployment is the bottleneck
 
-## MVP Scope (Phase 1)
+## Distribution & Growth Strategy (DRF-009)
 
-1. Mac app: project list, code import, local execution, basic monitoring
-2. Local agent: run Python/Node/Go scripts with scheduling
-3. One remote target: AWS Lambda deploy from Mac app
-4. "Paste & Deploy" flow for Claude Code / Codex output
+### Distribution Channels
 
-## Next Steps
+| Channel | Timeline | Cost | Notes |
+|---------|----------|------|-------|
+| Direct download (DMG) | Launch | Free | Notarized + signed |
+| Homebrew Cask | Launch | Free | `brew install --cask runway` |
+| Product Hunt | Launch week | Free | Target: Top 5 of the day |
+| Hacker News "Show HN" | Launch week | Free | Zero-infra angle |
+| GitHub (agent repo) | Month 1 | Free | Source-available license (BSL) |
+| MCP tool directories | Month 1 | Free | awesome-mcp, Claude Code listings |
+| Setapp | Month 6-12 | ~30% rev share | Free-tier features only, Pro upsell |
+| Mac App Store | Year 2+ | 15-30% commission | Deferred — sandbox challenges |
 
-1. Pick a product name (evokes "launch/deploy from Mac")
-2. Build MVP in SwiftUI + Go agent
-3. Ship on TestFlight, get 100 users from AI coding communities
-4. Validate willingness to pay before building remote agent features
+### Growth Playbook
+
+**Pre-launch:** Build in public (X, Reddit, HN). Waitlist with 500-1000 emails.
+
+**Launch week:** Product Hunt + Show HN + Reddit blitz (r/selfhosted, r/homelab, r/devops, r/ClaudeAI, r/algotrading).
+
+**Sustained (Month 1-6):**
+- AI coding tool integrations — tutorials, MCP directory listings, Anthropic/Cursor partnerships
+- YouTube content — template showcases, "vibe coding to production" series
+- Template library as SEO — each template = landing page ranking for long-tail searches
+- GitHub agent repo — source-available, stars drive discovery
+
+**Amplification (Month 6-12):** Setapp, dev newsletters (TLDR, Changelog), VPS provider partnerships (Hetzner, DigitalOcean), indie dev podcasts.
+
+**Year 2+:** Mac App Store (lite version), open marketplace for community templates, web dashboard companion.
+
+### Agent Licensing
+
+Source-available (Business Source License or similar). Users can inspect what runs on their servers — critical for trust. License prevents commercial cloning. Mac app, MCP server, template library, and NATS relay remain fully proprietary.
+
+### Setapp Strategy
+
+Setapp includes Free-tier features only (local execution + direct-connect agents). NATS relay, cloud targets, webhooks, sharing, and template deploy still require a Runway Pro subscription. Distribution without cannibalizing Pro revenue.
 
 ---
 

@@ -1,0 +1,171 @@
+---
+# Decision Record Format (DRF) - Go-Live Requirements
+# https://github.com/reasoning-formats/drf
+
+type: decision-record
+version: "1.0"
+id: DRF-010
+title: "Go-Live Requirements for First Public Release"
+date: "2026-03-08"
+status: approved
+decision_maker: founder
+participants:
+  - claude-opus-4-6 (analysis + document generation)
+
+context: |
+  Runway is at v0.1.4 with 9/10 MVP must-haves complete. The architecture is
+  production-quality but the project has significant gaps in distribution
+  infrastructure, legal compliance, naming, website, and polish. This DRF
+  documents every requirement for the first public release.
+
+decisions:
+  - name: "AWS Lambda"
+    choice: "Deferred to post-launch"
+    rationale: "Launch with local + remote VPS. Lambda adds 2-3 weeks. Ship sooner."
+
+  - name: "Apple Developer Account"
+    choice: "Set up ASAP (not yet enrolled)"
+    rationale: "24-48hr approval time. Hard blocker for code signing + notarization."
+
+  - name: "Website"
+    choice: "Full marketing site (multi-page)"
+    rationale: "Docs, pricing, blog, download page. Needed for credibility at public launch."
+
+  - name: "Naming"
+    choice: "Decision required before launch"
+    rationale: "Conflicts with runway.team (SAP) and RunwayML. Must run trademark search and decide."
+
+summary: |
+  52 items across 9 categories:
+  - 16 P0 blockers (naming, signing, website, legal, CI/CD)
+  - 23 P1 critical (onboarding, tests, auto-updater, docs)
+  - 13 P2 important (visual identity, universal binary, SEO)
+
+  Estimated 8-10 weeks solo. 5-6 weeks if P0-only focus.
+
+  Full checklist at: reasoning/drf/010-go-live-requirements.yaml
+  Detailed plan at: .claude/plans/stateful-snuggling-cookie.md
+
+categories:
+  naming_and_branding:
+    p0:
+      - "Name decision: keep Runway or rename (USPTO TESS search)"
+      - "Domain acquisition"
+      - "App icon (replace 32x32 placeholder with proper icns)"
+    p1:
+      - "Bundle identifier finalization"
+    p2:
+      - "Visual identity kit"
+
+  code_quality:
+    p0:
+      - "Remove hardcoded dev paths from tauri.conf.json"
+      - "Fix test compilation (remote_agent test, 6 errors)"
+    p1:
+      - "Fix clippy warnings"
+      - "Cargo.toml metadata (all 5 crates)"
+      - "ESLint + Prettier setup"
+      - "Audit ~249 unwrap/expect calls"
+      - "Test coverage 23% → 40%"
+    p2:
+      - "package.json metadata"
+      - "TypeScript strict checks"
+
+  distribution:
+    p0:
+      - "Apple Developer Program enrollment ($99/yr)"
+      - "Code signing certificate"
+      - "Notarization setup"
+      - "Entitlements.plist"
+      - "DMG packaging"
+    p1:
+      - "Auto-updater (tauri-plugin-updater)"
+      - "Homebrew cask formula"
+    p2:
+      - "Version bump script"
+      - "Universal binary (arm64 + x86_64)"
+
+  legal:
+    p0:
+      - "LICENSE file (App=Proprietary, Agent=BSL-1.1)"
+      - "Dependency license audit (cargo license + npx license-checker)"
+      - "Privacy policy"
+    p1:
+      - "Terms of service"
+    p2:
+      - "Third-party notices"
+
+  website_and_marketing:
+    p0:
+      - "Landing page (hero, features, download CTA)"
+      - "Download page (DMG, Homebrew, checksums)"
+    p1:
+      - "Documentation site (Getting Started, CLI, MCP, Agent)"
+      - "Pricing page (Free/Pro/Team)"
+      - "Blog launch post"
+    p2:
+      - "SEO basics"
+
+  ux_polish:
+    p1:
+      - "Onboarding flow (first-launch wizard)"
+      - "Empty states with CTAs"
+      - "About dialog"
+      - "Error states (NATS/agent connectivity)"
+      - "README screenshots"
+    p2:
+      - "Keyboard shortcuts"
+      - "Syntax highlighting (CodeMirror 6)"
+
+  ci_cd:
+    p0:
+      - "PR check workflow (clippy, tests, typecheck)"
+      - "macOS app build workflow (tauri-action)"
+      - "Signing + notarization in CI"
+    p1:
+      - "Release automation (tag → DMG → GitHub release)"
+      - "CHANGELOG.md"
+
+  launch_prep:
+    p0:
+      - "Beta program (20-50 testers, 4 weeks before)"
+    p1:
+      - "Product Hunt page"
+      - "Hacker News Show HN post"
+      - "GitHub repo setup (agent, if open-sourcing)"
+      - "Support channel (Discussions or Discord)"
+    p2:
+      - "Crash reporting (Sentry, opt-in)"
+
+  post_launch:
+    - "AWS Lambda target (2-3 weeks)"
+    - "Cloudflare Workers (1-2 weeks)"
+    - "Opt-in telemetry (1 week)"
+    - "Deployment rollback (1 week)"
+    - "Pro tier: Stripe + license keys (2-3 weeks)"
+
+critical_path:
+  - week: 1
+    focus: "Foundation"
+    items: "Apple Developer, name decision, domain, fix hardcoded paths, fix tests"
+  - week: 2
+    focus: "Code Quality"
+    items: "App icon, ESLint+Prettier, PR check CI, LICENSE, dep audit"
+  - week: 3
+    focus: "Signing"
+    items: "Code signing, notarization, entitlements, macOS build CI, clippy, unwrap audit"
+  - week: 4
+    focus: "Distribution"
+    items: "DMG packaging, privacy policy, ToS, begin website, Cargo metadata"
+  - week: 5
+    focus: "UX"
+    items: "Auto-updater, onboarding, empty states, error states, test coverage"
+  - week: 6
+    focus: "Website"
+    items: "Website launch, Homebrew cask, release automation, beta invites"
+  - week: 7
+    focus: "Beta"
+    items: "Beta testing, blog post, screenshots, CHANGELOG, bug fixes"
+  - week: 8
+    focus: "Launch"
+    items: "Product Hunt, HN, final polish, PUBLIC LAUNCH"
