@@ -140,6 +140,7 @@ download_binary() {
   fi
 
   chmod +x "${INSTALL_PATH}"
+  # Ownership set after create_user() via fix_ownership()
   ok "Binary installed to ${INSTALL_PATH}"
 }
 
@@ -221,6 +222,13 @@ EOF
 # Main
 # ---------------------------------------------------------------------------
 
+fix_ownership() {
+  # The agent needs write access to its own binary for self-upgrade
+  info "Setting binary ownership to ${AGENT_USER}..."
+  chown "${AGENT_USER}:${AGENT_USER}" "${INSTALL_PATH}"
+  ok "Binary owned by ${AGENT_USER} (enables self-upgrade)"
+}
+
 main() {
   info "Installing Runway agent..."
   need_root
@@ -228,6 +236,7 @@ main() {
   detect_arch
   download_binary
   create_user
+  fix_ownership
   install_rollback_script
   install_service
 
