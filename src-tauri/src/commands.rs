@@ -898,36 +898,24 @@ pub fn check_agent_upgrade(id: String) -> Result<UpgradeCheck, String> {
     })
 }
 
-/// Download (or load from cache/settings) the agent binary for the given version and arch.
-async fn get_agent_binary(version: &str, arch: &str) -> Result<Vec<u8>, String> {
-    // Check if user has configured a local binary path in settings
-    let store = get_store()?;
-    if let Ok(settings) = store.get_all_settings() {
-        if let Some(binary_path) = settings.get("agent_binary_path") {
-            if !binary_path.is_empty() {
-                return std::fs::read(binary_path)
-                    .map_err(|e| format!("Failed to read agent binary from {binary_path}: {e}"));
-            }
-        }
-    }
+/// Resolve the download URL and SHA-256 checksum for an agent binary.
+/// Downloads the binary on desktop to compute checksum, caches it, returns (url, checksum, token).
+async fn get_agent_download_info(version: &str, arch: &str) -> Result<(String, String, Option<String>), String> {
+    use sha2::{Sha256, Digest};
 
-    // Check local cache
+    let store = get_store()?;
+    let binary_name = format!("runway-agent-linux-{arch}");
+
+    // Check local cache for pre-computed checksum
     let cache_dir = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
         .join("com.runway.app")
         .join("agent-binaries")
         .join(format!("v{version}"));
 
-    let binary_name = format!("runway-agent-linux-{arch}");
     let cached_path = cache_dir.join(&binary_name);
+    let checksum_path = cache_dir.join(format!("{binary_name}.sha256"));
 
-    if cached_path.exists() {
-        return std::fs::read(&cached_path)
-            .map_err(|e| format!("Failed to read cached binary: {e}"));
-    }
-
-    // Download from GitHub Releases
-    // Private repo: use GitHub API to get asset download URL with auth
     let github_token = store
         .get_all_settings()
         .ok()
@@ -939,8 +927,8 @@ async fn get_agent_binary(version: &str, arch: &str) -> Result<Vec<u8>, String> 
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
-    let response = if let Some(token) = &github_token {
-        // Use GitHub API to find asset and download via API (works for private repos)
+    // Resolve the download URL the agent will use
+    let (download_url, is_private) = if let Some(token) = &github_token {
         let api_url = format!(
             "https://api.github.com/repos/carlosinfantes/runway/releases/tags/v{version}"
         );
@@ -964,18 +952,31 @@ async fn get_agent_binary(version: &str, arch: &str) -> Result<Vec<u8>, String> 
             .ok_or_else(|| format!("Asset {binary_name} not found in release v{version}"))?
             .to_string();
 
+        (asset_url, true)
+    } else {
+        let url = format!(
+            "https://github.com/carlosinfantes/runway/releases/download/v{version}/{binary_name}"
+        );
+        (url, false)
+    };
+
+    // If we have a cached checksum, use it
+    if checksum_path.exists() {
+        let checksum = std::fs::read_to_string(&checksum_path)
+            .map_err(|e| format!("Failed to read cached checksum: {e}"))?;
+        return Ok((download_url, checksum.trim().to_string(), if is_private { github_token } else { None }));
+    }
+
+    // Download binary to compute checksum
+    let response = if let Some(token) = &github_token {
         client
-            .get(&asset_url)
+            .get(&download_url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Accept", "application/octet-stream")
             .send()
             .await
             .map_err(|e| format!("Failed to download agent binary: {e}"))?
     } else {
-        // Public repo: direct download
-        let download_url = format!(
-            "https://github.com/carlosinfantes/runway/releases/download/v{version}/{binary_name}"
-        );
         client
             .get(&download_url)
             .send()
@@ -1000,13 +1001,20 @@ async fn get_agent_binary(version: &str, arch: &str) -> Result<Vec<u8>, String> 
         .await
         .map_err(|e| format!("Failed to read download response: {e}"))?;
 
-    // Cache for future use
+    // Compute SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let checksum = format!("{:x}", hasher.finalize());
+
+    // Cache binary and checksum
     std::fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("Failed to create cache directory: {e}"))?;
     std::fs::write(&cached_path, &bytes)
         .map_err(|e| format!("Failed to cache binary: {e}"))?;
+    std::fs::write(&checksum_path, &checksum)
+        .map_err(|e| format!("Failed to cache checksum: {e}"))?;
 
-    Ok(bytes.to_vec())
+    Ok((download_url, checksum, if is_private { github_token } else { None }))
 }
 
 #[tauri::command]
@@ -1029,11 +1037,11 @@ pub async fn upgrade_agent(id: String) -> Result<UpgradeResult, String> {
 
     let arch = health.arch.as_deref().unwrap_or("x86_64");
 
-    // Get the binary
-    let binary_data = get_agent_binary(APP_VERSION, arch).await?;
+    // Resolve download URL and checksum from GitHub
+    let (download_url, checksum, github_token) = get_agent_download_info(APP_VERSION, arch).await?;
 
-    // Send upgrade
-    match client.upgrade(&binary_data).await {
+    // Send upgrade command — agent downloads directly
+    match client.upgrade(APP_VERSION, &download_url, github_token.as_deref(), &checksum).await {
         Ok((success, new_version, message)) => {
             if success {
                 let _ = store.update_target_status(

@@ -397,113 +397,80 @@ async fn handle_command(
             }
         }
 
-        NatsCommandKind::UpgradeStart {
-            total_size,
-            chunk_count: _,
+        NatsCommandKind::UpgradeDownload {
+            version,
+            download_url,
+            github_token,
             checksum_sha256,
         } => {
-            // Create a unique subject for receiving binary chunks
-            let upload_subject = format!("runway.{}.upload.{}", agent_id, request_id);
+            let result_subject = runway_core::nats_relay::resp_subject(&agent_id, &request_id);
 
-            // Subscribe to chunk subject before replying
-            let mut chunk_sub = match client.subscribe(upload_subject.clone()).await {
-                Ok(s) => s,
+            tracing::info!("Upgrade requested: v{version}, downloading from {download_url}");
+
+            // Download binary from URL
+            let http_client = match reqwest::Client::builder().user_agent("runway-agent").build() {
+                Ok(c) => c,
                 Err(e) => {
                     let resp = NatsResponse {
                         request_id,
-                        status: NatsResponseStatus::Error(format!("Failed to subscribe for chunks: {e}")),
+                        status: NatsResponseStatus::Error(format!("Failed to create HTTP client: {e}")),
                         body: NatsResponseBody::Empty,
                     };
-                    send_reply(&client, &reply_to, &resp).await;
+                    send_reply(&client, &result_subject, &resp).await;
                     return;
                 }
             };
 
-            // Reply with UpgradeReady
-            let ready_resp = NatsResponse {
-                request_id: request_id.clone(),
-                status: NatsResponseStatus::Ok,
-                body: NatsResponseBody::UpgradeReady {
-                    upload_subject: upload_subject.clone(),
-                },
-            };
-            send_reply(&client, &reply_to, &ready_resp).await;
-
-            // Collect chunks with timeout
-            let mut data = Vec::with_capacity(total_size as usize);
-            let mut received_chunks = 0u32;
-
-            let chunk_timeout = tokio::time::Duration::from_secs(120);
-            loop {
-                match tokio::time::timeout(chunk_timeout, chunk_sub.next()).await {
-                    Ok(Some(msg)) => {
-                        let chunk_msg: serde_json::Value = match serde_json::from_slice(&msg.payload) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!("Failed to parse upgrade chunk: {e}");
-                                continue;
-                            }
-                        };
-
-                        // Check for done marker
-                        if chunk_msg.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
-                            break;
-                        }
-
-                        // Decode base64 chunk data
-                        if let Some(b64_data) = chunk_msg.get("data").and_then(|v| v.as_str()) {
-                            match base64::engine::general_purpose::STANDARD.decode(b64_data) {
-                                Ok(chunk_bytes) => {
-                                    data.extend_from_slice(&chunk_bytes);
-                                    received_chunks += 1;
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to decode chunk {}: {e}", received_chunks);
-                                }
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        let resp = NatsResponse {
-                            request_id: request_id.clone(),
-                            status: NatsResponseStatus::Error("Chunk stream ended unexpectedly".into()),
-                            body: NatsResponseBody::Empty,
-                        };
-                        let result_subject = runway_core::nats_relay::resp_subject(
-                            &agent_id,
-                            &request_id,
-                        );
-                        send_reply(&client, &result_subject, &resp).await;
-                        return;
-                    }
-                    Err(_) => {
-                        let resp = NatsResponse {
-                            request_id: request_id.clone(),
-                            status: NatsResponseStatus::Error("Chunk transfer timed out".into()),
-                            body: NatsResponseBody::Empty,
-                        };
-                        let result_subject = runway_core::nats_relay::resp_subject(
-                            &agent_id,
-                            &request_id,
-                        );
-                        send_reply(&client, &result_subject, &resp).await;
-                        return;
-                    }
-                }
+            let mut req = http_client.get(&download_url);
+            if let Some(token) = &github_token {
+                req = req.header("Authorization", format!("Bearer {token}"));
+                req = req.header("Accept", "application/octet-stream");
             }
 
-            tracing::info!("Received {} chunks, {} bytes total", received_chunks, data.len());
+            let response = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(format!("Download failed: {e}")),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &result_subject, &resp).await;
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let resp = NatsResponse {
+                    request_id,
+                    status: NatsResponseStatus::Error(format!("Download failed: HTTP {status}")),
+                    body: NatsResponseBody::Empty,
+                };
+                send_reply(&client, &result_subject, &resp).await;
+                return;
+            }
+
+            let data = match response.bytes().await {
+                Ok(b) => b.to_vec(),
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(format!("Failed to read download: {e}")),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &result_subject, &resp).await;
+                    return;
+                }
+            };
+
+            tracing::info!("Downloaded {} bytes", data.len());
 
             // Verify SHA-256 checksum
             use sha2::{Sha256, Digest};
             let mut hasher = Sha256::new();
             hasher.update(&data);
             let actual_checksum = format!("{:x}", hasher.finalize());
-
-            let result_subject = runway_core::nats_relay::resp_subject(
-                &agent_id,
-                &request_id,
-            );
 
             if actual_checksum != checksum_sha256 {
                 let resp = NatsResponse {
@@ -535,8 +502,159 @@ async fn handle_command(
                 },
             };
             send_reply(&client, &result_subject, &resp).await;
-            // Flush to ensure result is delivered before systemd restart
             let _ = client.flush().await;
+        }
+
+        NatsCommandKind::DeployChunked {
+            project_id,
+            runtime,
+            entrypoint,
+            containerfile,
+            version,
+            setup_commands,
+            total_size,
+            chunk_count: _,
+            checksum_sha256,
+        } => {
+            // Create upload subject for receiving archive chunks
+            let upload_subject = format!("runway.{}.upload.{}", agent_id, request_id);
+
+            let mut chunk_sub = match client.subscribe(upload_subject.clone()).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(format!("Failed to subscribe for chunks: {e}")),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                    return;
+                }
+            };
+
+            // Reply with DeployReady
+            let ready_resp = NatsResponse {
+                request_id: request_id.clone(),
+                status: NatsResponseStatus::Ok,
+                body: NatsResponseBody::DeployReady {
+                    upload_subject: upload_subject.clone(),
+                },
+            };
+            send_reply(&client, &reply_to, &ready_resp).await;
+
+            // Collect chunks
+            let mut archive = Vec::with_capacity(total_size as usize);
+            let mut received_chunks = 0u32;
+            let chunk_timeout = tokio::time::Duration::from_secs(120);
+
+            loop {
+                match tokio::time::timeout(chunk_timeout, chunk_sub.next()).await {
+                    Ok(Some(msg)) => {
+                        let chunk_msg: serde_json::Value = match serde_json::from_slice(&msg.payload) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!("Failed to parse deploy chunk: {e}");
+                                continue;
+                            }
+                        };
+
+                        if chunk_msg.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            break;
+                        }
+
+                        if let Some(b64_data) = chunk_msg.get("data").and_then(|v| v.as_str()) {
+                            match base64::engine::general_purpose::STANDARD.decode(b64_data) {
+                                Ok(chunk_bytes) => {
+                                    archive.extend_from_slice(&chunk_bytes);
+                                    received_chunks += 1;
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to decode chunk {}: {e}", received_chunks);
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        let result_subject = runway_core::nats_relay::resp_subject(&agent_id, &request_id);
+                        let resp = NatsResponse {
+                            request_id: request_id.clone(),
+                            status: NatsResponseStatus::Error("Deploy chunk stream ended unexpectedly".into()),
+                            body: NatsResponseBody::Empty,
+                        };
+                        send_reply(&client, &result_subject, &resp).await;
+                        return;
+                    }
+                    Err(_) => {
+                        let result_subject = runway_core::nats_relay::resp_subject(&agent_id, &request_id);
+                        let resp = NatsResponse {
+                            request_id: request_id.clone(),
+                            status: NatsResponseStatus::Error("Deploy chunk transfer timed out".into()),
+                            body: NatsResponseBody::Empty,
+                        };
+                        send_reply(&client, &result_subject, &resp).await;
+                        return;
+                    }
+                }
+            }
+
+            tracing::info!("Received {} deploy chunks, {} bytes total", received_chunks, archive.len());
+
+            // Verify checksum
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(&archive);
+            let actual_checksum = format!("{:x}", hasher.finalize());
+
+            let resp_subj = runway_core::nats_relay::resp_subject(&agent_id, &request_id);
+
+            if actual_checksum != checksum_sha256 {
+                let resp = NatsResponse {
+                    request_id,
+                    status: NatsResponseStatus::Error(format!(
+                        "Archive checksum mismatch: expected {checksum_sha256}, got {actual_checksum}"
+                    )),
+                    body: NatsResponseBody::Empty,
+                };
+                send_reply(&client, &resp_subj, &resp).await;
+                return;
+            }
+
+            // Proceed with deploy using existing do_deploy
+            let mut rx = match service
+                .do_deploy(&project_id, &runtime, &entrypoint, &archive, &containerfile, version, setup_commands)
+                .await
+            {
+                Ok(rx) => rx,
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(e.to_string()),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &resp_subj, &resp).await;
+                    return;
+                }
+            };
+
+            while let Some(line) = rx.recv().await {
+                let resp = NatsResponse {
+                    request_id: request_id.clone(),
+                    status: NatsResponseStatus::Ok,
+                    body: NatsResponseBody::DeployLine {
+                        phase: line.phase,
+                        text: line.text,
+                        timestamp: line.timestamp,
+                        image_tag: line.image_tag,
+                        version: line.version,
+                        is_final: line.is_final,
+                        success: line.success,
+                    },
+                };
+                send_reply(&client, &resp_subj, &resp).await;
+                if line.is_final {
+                    break;
+                }
+            }
         }
 
         NatsCommandKind::ListSchedules { project_id } => {

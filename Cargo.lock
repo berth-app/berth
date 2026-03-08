@@ -4018,7 +4018,7 @@ dependencies = [
 
 [[package]]
 name = "runway-agent"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4027,6 +4027,7 @@ dependencies = [
  "clap",
  "dirs-next",
  "futures",
+ "reqwest 0.12.28",
  "runway-core",
  "rusqlite",
  "serde",
@@ -4043,7 +4044,7 @@ dependencies = [
 
 [[package]]
 name = "runway-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4055,6 +4056,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
@@ -4068,7 +4070,7 @@ dependencies = [
 
 [[package]]
 name = "runway-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4082,7 +4084,7 @@ dependencies = [
 
 [[package]]
 name = "runway-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -4120,7 +4122,7 @@ dependencies = [
 
 [[package]]
 name = "runway-mcp"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",

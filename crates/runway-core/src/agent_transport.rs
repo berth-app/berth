@@ -115,6 +115,6 @@ pub trait AgentTransport: Send + Sync {
     async fn add_schedule(&self, project_id: &str, cron_expr: &str) -> Result<(String, String)>;
     async fn remove_schedule(&self, schedule_id: &str) -> Result<bool>;
     async fn list_schedules(&self, project_id: &str) -> Result<Vec<RemoteSchedule>>;
-    async fn upgrade(&self, binary_data: &[u8]) -> Result<(bool, String, String)>;
+    async fn upgrade(&self, version: &str, download_url: &str, github_token: Option<&str>, checksum: &str) -> Result<(bool, String, String)>;
     async fn rollback(&self) -> Result<(bool, String, String)>;
 }

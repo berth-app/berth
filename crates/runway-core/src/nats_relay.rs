@@ -98,7 +98,20 @@ pub enum NatsCommandKind {
     AddSchedule { project_id: String, cron_expr: String },
     RemoveSchedule { schedule_id: String },
     ListSchedules { project_id: String },
-    UpgradeStart {
+    UpgradeDownload {
+        version: String,
+        download_url: String,
+        #[serde(default)]
+        github_token: Option<String>,
+        checksum_sha256: String,
+    },
+    DeployChunked {
+        project_id: String,
+        runtime: String,
+        entrypoint: String,
+        containerfile: String,
+        version: u32,
+        setup_commands: Vec<String>,
         total_size: u64,
         chunk_count: u32,
         checksum_sha256: String,
@@ -179,7 +192,7 @@ pub enum NatsResponseBody {
     Schedules {
         schedules: Vec<NatsScheduleInfo>,
     },
-    UpgradeReady {
+    DeployReady {
         upload_subject: String,
     },
     UpgradeResult {

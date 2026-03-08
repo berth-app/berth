@@ -542,30 +542,8 @@ impl AgentTransport for AgentClient {
             .collect())
     }
 
-    async fn upgrade(&self, binary_data: &[u8]) -> Result<(bool, String, String)> {
-        let total_size = binary_data.len() as u64;
-        let chunk_size = 1024 * 1024;
-
-        let chunks: Vec<proto::UpgradeChunk> = binary_data
-            .chunks(chunk_size)
-            .enumerate()
-            .map(|(i, chunk)| proto::UpgradeChunk {
-                data: chunk.to_vec(),
-                total_size: if i == 0 { total_size } else { 0 },
-            })
-            .collect();
-
-        let stream = tokio_stream::iter(chunks);
-
-        let response = self
-            .inner
-            .clone()
-            .upgrade(stream)
-            .await
-            .context("Upgrade RPC failed")?
-            .into_inner();
-
-        Ok((response.success, response.new_version, response.message))
+    async fn upgrade(&self, _version: &str, _download_url: &str, _github_token: Option<&str>, _checksum: &str) -> Result<(bool, String, String)> {
+        anyhow::bail!("Agent upgrade via URL is only supported over NATS transport")
     }
 
     async fn rollback(&self) -> Result<(bool, String, String)> {

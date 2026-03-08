@@ -212,63 +212,161 @@ impl AgentTransport for NatsAgentClient {
         params: &DeployParams,
     ) -> Result<tokio::sync::mpsc::Receiver<DeployResponseLine>> {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let archive_b64 = base64::engine::general_purpose::STANDARD.encode(&params.source_archive);
+        let chunk_threshold = 500 * 1024; // 500KB — use chunked for larger archives
 
-        let command = NatsCommand {
-            request_id: request_id.clone(),
-            reply_to: resp_subject(&self.agent_id, &request_id),
-            cmd: NatsCommandKind::Deploy {
-                project_id: params.project_id.clone(),
-                runtime: params.runtime.clone(),
-                entrypoint: params.entrypoint.clone(),
-                containerfile: params.containerfile.clone(),
-                version: params.version,
-                setup_commands: params.setup_commands.clone(),
-                archive_base64: archive_b64,
-            },
+        let command = if params.source_archive.len() <= chunk_threshold {
+            // Small archive: single message (existing path)
+            let archive_b64 = base64::engine::general_purpose::STANDARD.encode(&params.source_archive);
+            NatsCommand {
+                request_id: request_id.clone(),
+                reply_to: resp_subject(&self.agent_id, &request_id),
+                cmd: NatsCommandKind::Deploy {
+                    project_id: params.project_id.clone(),
+                    runtime: params.runtime.clone(),
+                    entrypoint: params.entrypoint.clone(),
+                    containerfile: params.containerfile.clone(),
+                    version: params.version,
+                    setup_commands: params.setup_commands.clone(),
+                    archive_base64: archive_b64,
+                },
+            }
+        } else {
+            // Large archive: chunked transfer
+            use sha2::{Sha256, Digest};
+            let chunk_size = 768 * 1024;
+            let chunk_count = ((params.source_archive.len() + chunk_size - 1) / chunk_size) as u32;
+            let mut hasher = Sha256::new();
+            hasher.update(&params.source_archive);
+            let checksum = format!("{:x}", hasher.finalize());
+
+            NatsCommand {
+                request_id: request_id.clone(),
+                reply_to: String::new(),
+                cmd: NatsCommandKind::DeployChunked {
+                    project_id: params.project_id.clone(),
+                    runtime: params.runtime.clone(),
+                    entrypoint: params.entrypoint.clone(),
+                    containerfile: params.containerfile.clone(),
+                    version: params.version,
+                    setup_commands: params.setup_commands.clone(),
+                    total_size: params.source_archive.len() as u64,
+                    chunk_count,
+                    checksum_sha256: checksum,
+                },
+            }
         };
 
-        let mut sub = self.streaming_command("deploy", command).await?;
-        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let is_chunked = params.source_archive.len() > chunk_threshold;
 
-        tokio::spawn(async move {
-            while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_secs(600), sub.next())
-                .await
-            {
-                let resp: NatsResponse = match serde_json::from_slice(&msg.payload) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                match resp.body {
-                    NatsResponseBody::DeployLine {
-                        phase,
-                        text,
-                        timestamp,
-                        image_tag,
-                        version,
-                        is_final,
-                        success,
-                    } => {
-                        let line = DeployResponseLine {
-                            phase,
-                            text,
-                            timestamp,
-                            image_tag,
-                            version,
-                            is_final,
-                            success,
-                        };
-                        let done = is_final;
-                        if tx.send(line).await.is_err() || done {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
+        if is_chunked {
+            // Chunked path: handshake → send chunks → stream deploy lines
+            let payload = serde_json::to_vec(&command).context("Failed to serialize deploy command")?;
+            let subject = cmd_subject(&self.agent_id, "deploy");
+
+            // Request-reply for handshake
+            let msg = tokio::time::timeout(
+                Duration::from_secs(15),
+                self.client.request(subject, payload.into()),
+            )
+            .await
+            .context("Deploy handshake timed out")?
+            .context("Deploy handshake failed")?;
+
+            let ready_resp: NatsResponse = serde_json::from_slice(&msg.payload)
+                .context("Failed to deserialize deploy ready response")?;
+
+            let upload_subject = match &ready_resp.body {
+                NatsResponseBody::DeployReady { upload_subject } => upload_subject.clone(),
+                _ => anyhow::bail!("Unexpected response to DeployChunked"),
+            };
+
+            // Subscribe to response stream before sending chunks
+            let resp_subj = resp_subject(&self.agent_id, &request_id);
+            let mut sub = self.client.subscribe(resp_subj).await
+                .context("Failed to subscribe to deploy response")?;
+
+            // Send chunks
+            let chunk_size = 768 * 1024;
+            for (i, chunk) in params.source_archive.chunks(chunk_size).enumerate() {
+                let chunk_payload = serde_json::json!({
+                    "seq": i,
+                    "data": base64::engine::general_purpose::STANDARD.encode(chunk),
+                });
+                let chunk_bytes = serde_json::to_vec(&chunk_payload)?;
+                self.client.publish(upload_subject.clone(), chunk_bytes.into()).await
+                    .context("Failed to publish deploy chunk")?;
             }
-        });
 
-        Ok(rx)
+            // Flush to ensure all chunks are sent
+            self.client.flush().await.context("Failed to flush NATS")?;
+
+            // Send done marker
+            let done_payload = serde_json::json!({"seq": -1, "done": true});
+            let done_bytes = serde_json::to_vec(&done_payload)?;
+            self.client.publish(upload_subject, done_bytes.into()).await
+                .context("Failed to publish deploy done marker")?;
+            self.client.flush().await.context("Failed to flush NATS")?;
+
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+
+            tokio::spawn(async move {
+                while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_secs(600), sub.next())
+                    .await
+                {
+                    let resp: NatsResponse = match serde_json::from_slice(&msg.payload) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+                    match resp.body {
+                        NatsResponseBody::DeployLine {
+                            phase, text, timestamp, image_tag, version, is_final, success,
+                        } => {
+                            let line = DeployResponseLine {
+                                phase, text, timestamp, image_tag, version, is_final, success,
+                            };
+                            let done = is_final;
+                            if tx.send(line).await.is_err() || done {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            Ok(rx)
+        } else {
+            // Small archive: existing single-message path
+            let mut sub = self.streaming_command("deploy", command).await?;
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+
+            tokio::spawn(async move {
+                while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_secs(600), sub.next())
+                    .await
+                {
+                    let resp: NatsResponse = match serde_json::from_slice(&msg.payload) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+                    match resp.body {
+                        NatsResponseBody::DeployLine {
+                            phase, text, timestamp, image_tag, version, is_final, success,
+                        } => {
+                            let line = DeployResponseLine {
+                                phase, text, timestamp, image_tag, version, is_final, success,
+                            };
+                            let done = is_final;
+                            if tx.send(line).await.is_err() || done {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            Ok(rx)
+        }
     }
 
     async fn get_executions(&self, project_id: &str, limit: u32) -> Result<Vec<RemoteExecution>> {
@@ -409,93 +507,47 @@ impl AgentTransport for NatsAgentClient {
         }
     }
 
-    async fn upgrade(&self, binary_data: &[u8]) -> Result<(bool, String, String)> {
-        use sha2::{Sha256, Digest};
-
-        let chunk_size = 768 * 1024; // 768KB — well under NATS 1MB limit
-        let total_size = binary_data.len() as u64;
-        let chunk_count = ((binary_data.len() + chunk_size - 1) / chunk_size) as u32;
-
-        let mut hasher = Sha256::new();
-        hasher.update(binary_data);
-        let checksum = format!("{:x}", hasher.finalize());
-
-        // Step 1: Send UpgradeStart command
+    async fn upgrade(&self, version: &str, download_url: &str, github_token: Option<&str>, checksum: &str) -> Result<(bool, String, String)> {
         let request_id = uuid::Uuid::new_v4().to_string();
         let command = NatsCommand {
             request_id: request_id.clone(),
-            reply_to: String::new(),
-            cmd: NatsCommandKind::UpgradeStart {
-                total_size,
-                chunk_count,
-                checksum_sha256: checksum,
+            reply_to: resp_subject(&self.agent_id, &request_id),
+            cmd: NatsCommandKind::UpgradeDownload {
+                version: version.to_string(),
+                download_url: download_url.to_string(),
+                github_token: github_token.map(|t| t.to_string()),
+                checksum_sha256: checksum.to_string(),
             },
         };
 
+        // Subscribe before publishing so we don't miss the response
+        let resp_subj = resp_subject(&self.agent_id, &request_id);
+        let mut sub = self.client.subscribe(resp_subj).await
+            .context("Failed to subscribe to upgrade response")?;
+
         let payload = serde_json::to_vec(&command).context("Failed to serialize upgrade command")?;
         let subject = cmd_subject(&self.agent_id, "upgrade");
+        self.client.publish(subject, payload.into()).await
+            .context("Failed to publish upgrade command")?;
 
-        // Use request-reply for the initial handshake
-        let msg = tokio::time::timeout(
-            Duration::from_secs(15),
-            self.client.request(subject, payload.into()),
-        )
-        .await
-        .context("Upgrade handshake timed out")?
-        .context("Upgrade handshake failed")?;
+        // 120s timeout: agent needs to download binary + verify + swap + restart
+        let msg = tokio::time::timeout(Duration::from_secs(120), sub.next())
+            .await
+            .context("Upgrade timed out — agent may still be downloading")?
+            .context("Upgrade response stream ended unexpectedly")?;
 
-        let ready_resp: NatsResponse = serde_json::from_slice(&msg.payload)
-            .context("Failed to deserialize upgrade ready response")?;
+        let resp: NatsResponse = serde_json::from_slice(&msg.payload)
+            .context("Failed to deserialize upgrade response")?;
 
-        let upload_subject = match &ready_resp.body {
-            NatsResponseBody::UpgradeReady { upload_subject } => upload_subject.clone(),
-            _ => anyhow::bail!("Unexpected response to UpgradeStart"),
-        };
-
-        // Step 2: Subscribe to result subject before sending chunks
-        let result_subject = resp_subject(&self.agent_id, &request_id);
-        let mut result_sub = self.client.subscribe(result_subject).await
-            .context("Failed to subscribe to upgrade result")?;
-
-        // Step 3: Send binary chunks
-        for (i, chunk) in binary_data.chunks(chunk_size).enumerate() {
-            let chunk_payload = serde_json::json!({
-                "seq": i,
-                "data": base64::engine::general_purpose::STANDARD.encode(chunk),
-            });
-            let chunk_bytes = serde_json::to_vec(&chunk_payload)?;
-            self.client.publish(upload_subject.clone(), chunk_bytes.into()).await
-                .context("Failed to publish upgrade chunk")?;
-        }
-
-        // Step 4: Send "done" marker
-        let done_payload = serde_json::json!({"seq": -1, "done": true});
-        let done_bytes = serde_json::to_vec(&done_payload)?;
-        self.client.publish(upload_subject, done_bytes.into()).await
-            .context("Failed to publish upgrade done marker")?;
-
-        // Step 5: Wait for result (longer timeout for upgrade — binary verification + restart)
-        let result_msg = tokio::time::timeout(
-            Duration::from_secs(120),
-            result_sub.next(),
-        )
-        .await
-        .context("Upgrade timed out waiting for result")?
-        .context("Upgrade result stream ended unexpectedly")?;
-
-        let result_resp: NatsResponse = serde_json::from_slice(&result_msg.payload)
-            .context("Failed to deserialize upgrade result")?;
-
-        // Check for error status first
-        if let NatsResponseStatus::Error(e) = &result_resp.status {
+        if let NatsResponseStatus::Error(e) = &resp.status {
             anyhow::bail!("Agent upgrade failed: {e}");
         }
 
-        match result_resp.body {
+        match resp.body {
             NatsResponseBody::UpgradeResult { success, new_version, message } => {
                 Ok((success, new_version, message))
             }
-            other => anyhow::bail!("Unexpected upgrade result response type: {:?}", other),
+            _ => anyhow::bail!("Unexpected response type for upgrade"),
         }
     }
 
