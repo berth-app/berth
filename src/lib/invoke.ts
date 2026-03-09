@@ -14,6 +14,10 @@ export interface Project {
   run_count: number;
   notify_on_complete: boolean;
   default_target: string | null;
+  tunnel_url: string | null;
+  tunnel_provider: string | null;
+  run_mode: "oneshot" | "service";
+  service_port: number | null;
 }
 
 export interface RuntimeInfo {
@@ -92,6 +96,7 @@ export interface TargetInfo {
   last_seen_at: string | null;
   nats_agent_id: string | null;
   nats_enabled: boolean;
+  tunnel_providers: string[];
 }
 
 export async function listTargets(): Promise<TargetInfo[]> {
@@ -150,6 +155,7 @@ export interface AgentStats {
   running_projects: AgentRunningProject[];
   os: string | null;
   arch: string | null;
+  tunnel_providers: string[];
 }
 
 export async function getAgentStats(id: string): Promise<AgentStats> {
@@ -241,6 +247,18 @@ export async function setProjectNotify(
   return tauriInvoke("set_project_notify", { id, enabled });
 }
 
+export async function setProjectRunMode(
+  id: string,
+  runMode: "oneshot" | "service",
+  servicePort?: number
+): Promise<void> {
+  return tauriInvoke("set_project_run_mode", {
+    id,
+    runMode,
+    servicePort: servicePort ?? null,
+  });
+}
+
 // --- Project File Access ---
 
 export async function readProjectFile(id: string): Promise<string> {
@@ -297,5 +315,73 @@ export async function rollbackAgent(id: string): Promise<RollbackResult> {
 
 export async function upgradeAllAgents(): Promise<UpgradeResult[]> {
   return tauriInvoke<UpgradeResult[]>("upgrade_all_agents");
+}
+
+// --- Publish / Tunnel ---
+
+export interface PublishResult {
+  success: boolean;
+  url: string;
+  provider: string;
+  message: string;
+}
+
+export interface UnpublishResult {
+  success: boolean;
+  message: string;
+}
+
+export async function publishProject(
+  id: string,
+  port: number,
+  provider?: string,
+  target?: string,
+): Promise<PublishResult> {
+  return tauriInvoke<PublishResult>("publish_project", {
+    id,
+    port,
+    provider: provider ?? null,
+    target: target ?? null,
+  });
+}
+
+export async function unpublishProject(
+  id: string,
+  target?: string,
+): Promise<UnpublishResult> {
+  return tauriInvoke<UnpublishResult>("unpublish_project", {
+    id,
+    target: target ?? null,
+  });
+}
+
+// --- Environment Variables ---
+
+export async function getEnvVars(
+  projectId: string
+): Promise<Record<string, string>> {
+  return tauriInvoke<Record<string, string>>("get_env_vars", { projectId });
+}
+
+export async function setEnvVar(
+  projectId: string,
+  key: string,
+  value: string
+): Promise<void> {
+  return tauriInvoke("set_env_var", { projectId, key, value });
+}
+
+export async function deleteEnvVar(
+  projectId: string,
+  key: string
+): Promise<void> {
+  return tauriInvoke("delete_env_var", { projectId, key });
+}
+
+export async function importEnvFile(
+  projectId: string,
+  content: string
+): Promise<number> {
+  return tauriInvoke<number>("import_env_file", { projectId, content });
 }
 

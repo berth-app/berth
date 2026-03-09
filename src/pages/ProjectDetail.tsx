@@ -10,6 +10,10 @@ import {
   X,
   ChevronDown,
   Settings,
+  Globe,
+  Copy,
+  Key,
+  RefreshCw,
 } from "lucide-react";
 import {
   runProject,
@@ -26,6 +30,10 @@ import {
   writeProjectFile,
   setProjectNotify,
   setProjectTarget,
+  publishProject,
+  unpublishProject,
+  pingTarget,
+  setProjectRunMode,
   type Project,
   type LogEvent,
   type StatusEvent,
@@ -35,6 +43,7 @@ import {
 } from "../lib/invoke";
 import { useToast } from "../components/Toast";
 import Terminal from "../components/Terminal";
+import EnvVarsPanel from "../components/EnvVarsPanel";
 
 interface Props {
   projectId: string;
@@ -328,13 +337,19 @@ function SettingsPanel({
   notifyEnabled,
   onToggleNotify,
   onDelete,
+  onRefreshProject,
 }: {
   project: Project;
   notifyEnabled: boolean;
   onToggleNotify: () => void;
   onDelete: () => void;
+  onRefreshProject: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const isService = project.run_mode === "service";
+  const [servicePort, setServicePort] = useState<string>(
+    project.service_port?.toString() ?? ""
+  );
 
   return (
     <div className="side-panel-body flex flex-col gap-5">
@@ -356,6 +371,51 @@ function SettingsPanel({
         <div className="text-[11px] text-berth-text-tertiary mt-1 ml-5">
           Notify on completion or failure
         </div>
+      </div>
+
+      {/* Service mode toggle */}
+      <div className="border-t border-berth-border-subtle pt-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <RefreshCw size={13} className="text-berth-text-secondary" />
+            <span className="text-xs font-medium text-berth-text-primary">
+              Service Mode
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              const newMode = isService ? "oneshot" : "service";
+              const port = servicePort ? parseInt(servicePort) : undefined;
+              await setProjectRunMode(project.id, newMode as "oneshot" | "service", port);
+              onRefreshProject();
+            }}
+            className="toggle"
+            data-checked={isService}
+            style={{ width: 32, height: 19 }}
+          />
+        </div>
+        <div className="text-[11px] text-berth-text-tertiary mt-1 ml-5">
+          Auto-restart on crash with exponential backoff
+        </div>
+        {isService && (
+          <div className="mt-2 ml-5">
+            <label className="text-[10px] text-berth-text-tertiary block mb-1">
+              Service Port (optional)
+            </label>
+            <input
+              type="number"
+              value={servicePort}
+              onChange={(e) => setServicePort(e.target.value)}
+              onBlur={async () => {
+                const port = servicePort ? parseInt(servicePort) : undefined;
+                await setProjectRunMode(project.id, "service", port);
+                onRefreshProject();
+              }}
+              placeholder="8080"
+              className="w-full px-2 py-1 text-xs rounded bg-berth-bg-secondary border border-berth-border text-berth-text-primary"
+            />
+          </div>
+        )}
       </div>
 
       <div className="border-t border-berth-border-subtle pt-4">
@@ -412,6 +472,129 @@ function SettingsPanel({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Publish Panel ─────────────────────────────────────────────────
+
+function PublishPanel({
+  project,
+  selectedTarget,
+  onPublished,
+  targetTunnelProviders,
+}: {
+  project: Project;
+  selectedTarget: string | null;
+  onPublished: () => void;
+  targetTunnelProviders: string[];
+}) {
+  const [publishing, setPublishing] = useState(false);
+  const [port, setPort] = useState("8080");
+  const { toast } = useToast();
+  const isRemote = selectedTarget !== null && selectedTarget !== "local" && selectedTarget !== "";
+  const canPublish = !isRemote || targetTunnelProviders.includes("cloudflared");
+
+  const isPublished = !!project.tunnel_url;
+
+  async function handlePublish() {
+    const portNum = parseInt(port, 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      toast("Invalid port number", "error");
+      return;
+    }
+    setPublishing(true);
+    try {
+      const result = await publishProject(
+        project.id,
+        portNum,
+        "cloudflared",
+        selectedTarget || undefined,
+      );
+      if (result.success) {
+        toast("Published! URL copied to clipboard", "success");
+        navigator.clipboard.writeText(result.url);
+        onPublished();
+      } else {
+        toast(`Publish failed: ${result.message}`, "error");
+      }
+    } catch (e) {
+      toast(`Publish failed: ${e}`, "error");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleUnpublish() {
+    try {
+      await unpublishProject(project.id, selectedTarget || undefined);
+      toast("Unpublished", "info");
+      onPublished();
+    } catch (e) {
+      toast(`Unpublish failed: ${e}`, "error");
+    }
+  }
+
+  if (isPublished) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-berth-success/10 rounded-lg border border-berth-success/20">
+        <Globe size={13} className="text-berth-success shrink-0" />
+        <a
+          href={project.tunnel_url!}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-berth-success hover:underline truncate flex-1"
+        >
+          {project.tunnel_url}
+        </a>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(project.tunnel_url!);
+            toast("Copied", "success");
+          }}
+          className="text-berth-text-tertiary hover:text-berth-text-primary p-0.5"
+          title="Copy URL"
+        >
+          <Copy size={11} />
+        </button>
+        <button
+          onClick={handleUnpublish}
+          className="text-xs text-berth-text-tertiary hover:text-berth-error"
+        >
+          Unpublish
+        </button>
+      </div>
+    );
+  }
+
+  if (isRemote && !canPublish) {
+    return (
+      <div className="flex items-center gap-2">
+        <Globe size={11} className="text-berth-text-tertiary" />
+        <span className="text-xs text-berth-text-tertiary">
+          cloudflared not installed on target
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="number"
+        value={port}
+        onChange={(e) => setPort(e.target.value)}
+        placeholder="Port"
+        className="input !py-1 !text-xs w-20"
+      />
+      <button
+        onClick={handlePublish}
+        disabled={publishing}
+        className="btn btn-secondary btn-sm"
+      >
+        <Globe size={11} />
+        {publishing ? "..." : "Publish"}
+      </button>
     </div>
   );
 }
@@ -510,7 +693,7 @@ function TargetDropdown({
 
 // ─── Main Component ────────────────────────────────────────────────
 
-type PanelType = "schedule" | "history" | "settings" | null;
+type PanelType = "schedule" | "history" | "settings" | "env" | null;
 
 export default function ProjectDetail({ projectId, onBack }: Props) {
   const [project, setProject] = useState<Project | null>(null);
@@ -528,7 +711,19 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
   const [fileLoading, setFileLoading] = useState(false);
   const [fileDirty, setFileDirty] = useState(false);
   const [activePanel, setActivePanel] = useState<PanelType>(null);
+  const [targetTunnelProviders, setTargetTunnelProviders] = useState<string[]>([]);
   const { toast } = useToast();
+
+  // Ping selected remote target to get tunnel_providers
+  useEffect(() => {
+    if (selectedTarget && selectedTarget !== "local" && selectedTarget !== "") {
+      pingTarget(selectedTarget)
+        .then((info) => setTargetTunnelProviders(info.tunnel_providers ?? []))
+        .catch(() => setTargetTunnelProviders([]));
+    } else {
+      setTargetTunnelProviders([]);
+    }
+  }, [selectedTarget]);
 
   useEffect(() => {
     listProjects().then((projects) => {
@@ -734,6 +929,12 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
               {uptime}
             </span>
           )}
+          {project.run_mode === "service" && (
+            <span className="badge badge-neutral text-[10px]">
+              <RefreshCw size={9} className="mr-1" />
+              service
+            </span>
+          )}
         </div>
 
         {/* Actions */}
@@ -779,8 +980,31 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
           </span>
         </div>
 
+        {/* Publish */}
+        {isRunning && (
+          <PublishPanel
+            project={project}
+            selectedTarget={selectedTarget}
+            targetTunnelProviders={targetTunnelProviders}
+            onPublished={() => {
+              listProjects().then((projects) => {
+                const p = projects.find((p) => p.id === projectId);
+                if (p) setProject(p);
+              });
+            }}
+          />
+        )}
+
         {/* Panel toggles */}
         <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => togglePanel("env")}
+            className="toolbar-icon"
+            data-active={activePanel === "env"}
+            title="Environment Variables"
+          >
+            <Key size={15} strokeWidth={1.75} />
+          </button>
           <button
             onClick={() => togglePanel("schedule")}
             className="toolbar-icon"
@@ -936,6 +1160,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
           <div className="side-panel">
             <div className="side-panel-header">
               <span>
+                {activePanel === "env" && "Environment"}
                 {activePanel === "schedule" && "Schedules"}
                 {activePanel === "history" && "History"}
                 {activePanel === "settings" && "Settings"}
@@ -948,6 +1173,9 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
               </button>
             </div>
 
+            {activePanel === "env" && (
+              <EnvVarsPanel projectId={projectId} />
+            )}
             {activePanel === "schedule" && (
               <SchedulePanel projectId={projectId} />
             )}
@@ -963,6 +1191,12 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
                 notifyEnabled={notifyEnabled}
                 onToggleNotify={handleToggleNotify}
                 onDelete={handleDelete}
+                onRefreshProject={() => {
+                  listProjects().then((projects) => {
+                    const p = projects.find((p) => p.id === projectId);
+                    if (p) setProject(p);
+                  });
+                }}
               />
             )}
           </div>

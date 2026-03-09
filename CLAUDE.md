@@ -9,20 +9,22 @@ Berth is a Tauri-based macOS app that lets developers deploy and manage code —
 
 ## Current Status (March 2026)
 
-Phases 1-3 complete. Phase 4 (cloud targets + polish) is next.
+Phases 1-3 complete. Phase 4 (real workloads + polish) in progress. Strategic pivot: cloud targets (Lambda, Workers) deferred to Phase 5 — focusing instead on features that make Berth handle real projects: env vars, service mode, Docker Compose, public URL publishing.
 
 **Working end-to-end:** Project CRUD, runtime detection, agent-based Run/Stop with log streaming (local via UDS, remote via NATS), Paste & Deploy, xterm.js terminal, menu bar tray, cron scheduling.
-**MCP server:** 17 tools (stdio transport), Claude Code verified end-to-end.
-**CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets.
-**Remote agents:** Persistent agent with SQLite store (`~/.berth/agent.db`), 14 gRPC RPCs + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
+**MCP server:** 23 tools (stdio transport), Claude Code verified end-to-end. Includes publish/unpublish and env var management.
+**CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets, publish, unpublish, env.
+**Remote agents:** Persistent agent with SQLite store (`~/.berth/agent.db`), 16 gRPC RPCs (incl. Publish/Unpublish) + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
 **NATS command channel:** All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. `AgentTransport` trait abstracts gRPC vs NATS — transport selected per target based on `nats_enabled` flag.
-**Phase 4 progress:** macOS notifications on run complete/fail (manual + scheduled, local + remote, per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector.
+**Agent self-upgrade:** Cloudflared-model upgrade tested end-to-end (v0.1.7 → v0.1.8). Agent downloads binary from GitHub, atomic swap, exit(42), systemd restarts with new binary. Rollback on failed probation.
+**Phase 4 progress:** macOS notifications on run complete/fail (manual + scheduled, local + remote, per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector, **public URL publishing via cloudflared tunnels** (tested end-to-end March 9, 2026), **per-project environment variables** (store + UI + MCP + CLI + .env import + log masking, March 9, 2026).
+**Auth model designed (DRF-012):** Supabase auth (magic links, Raycast model), Stripe subscriptions, progressive identity (Anonymous → Free → Pro → Team). No code yet — design document only.
 **Built but not wired:** mTLS certificate infrastructure (tls.rs), Keychain credential storage (credentials.rs).
 
 ### Persistent Remote Agent (March 7, 2026)
 The remote agent (`berth-agent`) was redesigned from a stateless gRPC server to a production-grade persistent service:
 - **AgentStore** (`agent_store.rs`): SQLite at `~/.berth/agent.db` with 5 tables (deployments, executions, execution_logs, events, schedules)
-- **PersistentAgentService** (`persistent_service.rs`): 14 gRPC RPCs — Deploy, Execute, Stop, Health, Status, StreamLogs + 8 new RPCs (GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade)
+- **PersistentAgentService** (`persistent_service.rs`): 16 gRPC RPCs — Deploy, Execute, Stop, Health, Status, StreamLogs + 10 RPCs (GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade, Publish, Unpublish). Includes TunnelManager for public URL publishing.
 - **Agent Scheduler** (`agent_scheduler.rs`): Independent tick() loop every 30s, runs cron jobs even when app is offline
 - **Store-and-forward events**: Agent stores events locally, app polls via GetEvents RPC when connected
 - **Remote upgrade**: Client-streaming Upgrade RPC — receive binary, verify, swap, restart via systemd
@@ -39,6 +41,46 @@ Remote agent communication fully routed through NATS — no direct network conne
 - **Subject hierarchy**: `berth.<agent_id>.cmd.<type>` for commands, `berth.<agent_id>.resp.<request_id>` for streaming responses, plus existing event/log/heartbeat subjects via JetStream.
 - **Target UI**: Add Target form includes optional "NATS Agent ID" field. Green "NATS" badge on enabled targets. `update_target_nats` Tauri command for toggling.
 - **Zero inbound ports**: Both desktop and agent connect outbound to `tls://connect.ngs.global`. Works behind NAT, firewalls, different networks.
+
+### Authentication Model (March 8, 2026) — DRF-012
+Auth model designed but not yet implemented. Key decisions:
+- **Provider:** Supabase (GoTrue auth + PostgreSQL + Edge Functions). 50K MAU free.
+- **Login method:** Magic links only at launch (Raycast model). No passwords, no OAuth. GitHub OAuth added post-launch.
+- **Identity lifecycle:** Anonymous (download) → Free (magic link signup, settings sync) → Pro ($12/mo, NATS relay + cloud) → Team ($25/user/mo, unlimited)
+- **Auth state:** Tokens in macOS Keychain (never SQLite). Cached tier in SQLite settings table.
+- **Tier enforcement:** Dual layer — client-side for UX gating, server-side (Supabase RLS + Edge Functions) for security. NATS creds provisioned server-side only for Pro+. MCP has NO tier checks.
+- **Settings sync:** LWW merge for theme, default_target, auto_run, log_scrollback. Local-only: nats_url, nats_creds, github_token, install_id.
+- **Subscription:** Stripe Checkout + Customer Portal. 7-day offline grace period.
+- **Desktop flow:** Email input in Settings modal → Supabase magic link → `auth.berth.sh/callback` bridge page → `berth://auth/callback` deep link → Tauri handles token exchange.
+- **Implementation:** Phase 5 — `auth.rs`, `supabase.rs` in berth-core, `AccountSection.tsx` + `AuthModal.tsx` in React, Supabase Edge Functions for profile/sync/checkout/nats-provisioning.
+
+### Agent Self-Upgrade (March 8, 2026) — Cloudflared Model
+Tested end-to-end: v0.1.7 → v0.1.8 fully automated, zero manual intervention.
+- **Pattern:** Agent downloads binary from GitHub, atomic rename swap, exit(42), systemd restarts with new binary
+- **Key systemd settings:** `SuccessExitStatus=42` (prevents rate-limiting), `ExecStopPost=+/usr/local/lib/berth/rollback.sh` (runs as root)
+- **Probation:** 30s window, 3 TCP self-connects required to pass. Rollback on failure.
+- **CLI:** `berth-agent update [--version X.Y.Z] [--yes]` for self-serve updates
+
+### Public URL Publishing (March 9, 2026) — Cloudflared Tunnels
+Tested end-to-end: run a Python HTTP server, click Publish, get a public trycloudflare.com URL.
+- **Architecture:** Pluggable `TunnelProvider` enum in `tunnel.rs`. Only cloudflared implemented initially. Adding a new provider (ngrok, bore, custom) requires changes to ONE file only.
+- **TunnelManager:** Spawns cloudflared, parses URL from stderr (30s timeout), keeps stderr drained to prevent SIGPIPE. Stores active tunnels in memory. Stop project = stop tunnel.
+- **Full stack:** Proto RPCs → AgentTransport trait → gRPC client/NATS client → Agent service (local + remote) → NATS command handler → Tauri commands → React PublishPanel → MCP tools → CLI commands
+- **SQLite:** `tunnel_url` and `tunnel_provider` columns on `projects` table. `set_tunnel_url()`, `clear_tunnel_url()` store methods.
+- **UI:** PublishPanel component in ProjectDetail toolbar. Port input + Publish button when running. Green URL bar with copy + Unpublish when published.
+- **MCP:** `berth_publish(project_id, port, provider?)`, `berth_unpublish(project_id)`
+- **CLI:** `berth publish <project> --port 8080 [--provider cloudflared]`, `berth unpublish <project>`
+- **Bug fixes during implementation:** (1) Local agent had stub publish — now real TunnelManager. (2) cloudflared SIGPIPE — stderr drain task. (3) Stop returning error when process already exited — now resets status to idle.
+
+### Per-Project Environment Variables (March 9, 2026)
+Full-stack implementation: store env vars per project, pass to process at runtime, mask values in logs.
+- **Core module** (`env.rs`): `parse_dotenv()` for .env file parsing (comments, quotes, `export` prefix), `mask_env_values()` for log masking (values ≥ 3 chars replaced with `***`, longest-first).
+- **Store layer**: `project_env_vars` table already existed. `set_env_var()`, `get_env_vars()`, `delete_env_var()` methods in `store.rs`.
+- **Execution wiring**: `run_project()` in commands.rs loads env vars from store, passes via `ExecuteParams`, masks values in log events and execution history before storage.
+- **UI**: `EnvVarsPanel` component in ProjectDetail side panel (Key icon in toolbar). Key/value rows with eye-toggle reveal, delete button, add form, .env import textarea.
+- **MCP**: 4 tools — `berth_env_set(project_id, key, value)`, `berth_env_get(project_id)`, `berth_env_delete(project_id, key)`, `berth_env_import(project_id, content)`. Also wired env vars into `handle_run` and `handle_deploy`.
+- **CLI**: `berth env set|list|remove|import` subcommand. Also wired env vars into `berth run`, `berth deploy`, `berth logs`.
+- **Design decisions**: Desktop-side storage only (env vars never persisted on remote agent). All values treated as secrets (no "secret" flag). .env import merges (upsert).
 
 See `tasks.md` for detailed pending work. The app runs via `cargo tauri dev` on macOS.
 
@@ -150,6 +192,12 @@ berth_list_agents        # List connected agents and their status
 berth_import_code        # Import code from path or stdin
 berth_detect_runtime     # Auto-detect language, deps, schedule needs
 berth_health             # Overall system health check
+berth_publish            # Publish a running project to a public URL via tunnel
+berth_unpublish          # Stop the public URL tunnel for a project
+berth_env_set            # Set an environment variable for a project
+berth_env_get            # Get all environment variables for a project
+berth_env_delete         # Delete an environment variable from a project
+berth_env_import         # Import variables from .env format
 ```
 
 ### CLI mirrors MCP
@@ -159,7 +207,12 @@ berth deploy ./my-bot --target lambda-prod
 berth logs my-crawler --follow
 berth status my-bot
 berth targets add my-vps --host 192.168.1.50 --key ~/.ssh/id_ed25519
-berth agent install ubuntu@my-server.com
+berth publish my-api --port 8080       # Public URL via cloudflared
+berth unpublish my-api
+berth env set my-bot API_KEY sk-123    # Set env var
+berth env list my-bot                  # List env vars (values masked)
+berth env remove my-bot API_KEY        # Remove env var
+berth env import my-bot .env           # Import from .env file
 ```
 
 ## Roadmap
@@ -200,56 +253,66 @@ berth agent install ubuntu@my-server.com
 - [x] Agent health monitoring: real CPU/mem via sysinfo crate, ping command in CLI + UI
 - [x] Credential management via security-framework (Keychain on Mac) — store/get/delete SSH keys and AWS credentials
 - [x] mDNS discovery for LAN agents — mdns-sd crate, register/discover `_berth._tcp.local.` services
-- [x] Target model: Target struct, SQLite table, store CRUD, 17 MCP tools total
+- [x] Target model: Target struct, SQLite table, store CRUD, 23 MCP tools total
 - [x] CLI: `berth targets add|list|remove|ping` with real gRPC health checks
 
 **Ship:** Beta expansion. Target 100 users.
 
-### Phase 4: Cloud Targets + Polish (Month 5-6)
-**Goal: AWS Lambda deploy + production readiness**
+### Phase 4: Real Workloads + Polish (Month 5-6)
+**Goal: Handle real projects, not just scripts**
 
-- [ ] AWS Lambda target: package code, create/update function, configure trigger
-- [ ] AWS credential management (stored in Keychain, assumed roles)
-- [ ] Cloudflare Workers target (stretch goal)
-- [ ] Deployment history and rollback
+- [x] Per-project environment variables: SQLite store + EnvVarsPanel UI (key/value editor with reveal toggle, .env import) + 4 MCP tools (`berth_env_set/get/delete/import`) + CLI `berth env set|list|remove|import` + log masking of secret values. Env vars loaded from store and passed to agent at execute time. March 9, 2026.
+- [x] Service mode (keep running): `run_mode: oneshot | service` on Project, auto-restart on crash with exponential backoff (1s→60s cap), uptime tracking, restart count, port config for web services, supervisor loop in agent. March 9, 2026.
+- [ ] Docker-Compose support: detect docker-compose.yml/compose.yaml in runtime detection, new `DockerCompose` runtime variant, `compose.rs` module (up/down/ps/logs via podman-compose or docker-compose), transparent through existing deploy/run/stop commands
+- [x] Public URL publishing (pluggable providers): "Publish" button on running projects. Berth orchestrates, user picks tunnel provider — Cloudflare Quick Tunnel (free, no account). Publish/Unpublish gRPC RPCs, MCP `berth_publish`/`berth_unpublish` tools, CLI `berth publish/unpublish`. Zero Berth-side infrastructure or liability. Tested end-to-end March 9, 2026.
 - [x] Notification system: macOS notifications for failures, completions (manual + scheduled + remote via NATS)
-- [ ] Settings, onboarding flow, empty states
-- [ ] Anonymized telemetry: opt-in collection of crash reports, error frequency, and usage stats to improve code quality (no PII, transparent data policy)
 - [ ] Code signing, notarization, DMG packaging, Homebrew cask
+- [ ] Settings, onboarding flow, empty states
 
 **Ship:** Public launch via direct download + Homebrew cask.
 
-### Phase 5: Growth (Month 7+)
-- [ ] Pro tier + subscription infrastructure
+### Phase 5: Cloud Targets + Growth (Month 7+)
+- [ ] AWS Lambda target: package code, create/update function, configure trigger
+- [ ] AWS credential management (stored in Keychain, assumed roles)
+- [ ] Cloudflare Workers target
+- [ ] Auth implementation: Supabase magic links, AccountSection in Settings, deep link handler (DRF-012)
+- [ ] Stripe subscription: Pro $12/mo, Team $25/user/mo, Checkout + Customer Portal
+- [ ] Settings sync: cloud backup via Supabase (synced on login, debounced on change)
+- [ ] NATS credential provisioning: server-side via Supabase Edge Function (Pro+ only)
 - [ ] Team features: shared projects, shared targets
 - [ ] Web dashboard (companion, not replacement)
 - [ ] Template library: common deployment patterns
 - [ ] Community agent registry
 - [ ] Windows/Linux builds (same Tauri codebase, platform-specific adaptations)
 - [ ] App Store distribution (optional, if sandboxing requirements are met)
+- [ ] Deployment history and rollback
+- [ ] Anonymized telemetry: opt-in collection of crash reports, error frequency, and usage stats (no PII)
 
 ## MVP Definition (What ships publicly at Month 6)
 
 ### MUST have (launch blockers)
 - Tauri macOS app with project list and detail views
 - Paste & Deploy: paste code or select directory -> run locally
-- Runtime detection: Python, Node, Go, Rust, shell scripts
+- Runtime detection: Python, Node, Go, Rust, shell scripts, Docker Compose
+- Per-project environment variables (stored, masked in logs)
+- Service mode: keep-running with auto-restart for API servers, bots, workers
 - Local scheduling (cron-like)
 - Remote agent deploy to Linux VPS
-- AWS Lambda deploy (single function)
-- MCP server with core tools (deploy, status, logs, list)
+- Public URL publishing via pluggable tunnel providers (cloudflared/ngrok/custom — click Publish → get a URL)
+- MCP server with core tools (deploy, status, logs, list, env, publish)
 - CLI with matching commands
 - xterm.js log viewer with streaming output
 - Menu bar quick access via system tray
 
 ### SHOULD have (important but won't block launch)
-- Cloudflare Workers target
+- Custom domain publishing (users bring their own Cloudflare/ngrok account)
 - Deployment history/rollback
 - mDNS LAN discovery
 - Agent auto-update mechanism
-- Anonymized telemetry for crash reports and error tracking (opt-in, no PII)
+- Code signing, notarization, DMG, Homebrew cask
 
 ### WON'T have at launch
+- AWS Lambda / Cloudflare Workers targets
 - Team/collaboration features
 - Web dashboard
 - Windows/Linux builds
@@ -281,7 +344,13 @@ berth agent install ubuntu@my-server.com
 | Local DB | SQLite (rusqlite) | Cross-platform, no server, shared between app and agent |
 | Min macOS | 13 (Ventura) | Tauri 2.0 minimum; wider user base than macOS 15 |
 | Distribution | Direct download + Homebrew cask (primary) | Developer-native distribution; App Store optional later |
-| Pricing model | Freemium | Free local use, Pro for remote + cloud targets |
+| Pricing model | Freemium (transport-gated) | Free = direct gRPC (zero cost). Pro = NATS relay + cloud targets. MCP free on all tiers (DRF 008) |
 | Backend storage | SQLite (rusqlite) | 3-way debate: SQLite won 3-0 over YAML/JSON. AI agents get JSON via MCP, not flat files (DRF 006) |
 | Execution architecture | Agent-only (no direct executor) | 4-round 3-way debate: Agent-Only won 2-1. Unified local+remote through AgentClient→AgentService. UDS for local, TCP gRPC for remote (DRF 007) |
 | Remote transport | NATS command channel (primary) | Zero inbound ports, works behind NAT. AgentTransport trait unifies gRPC and NATS. gRPC fallback for targets without NATS |
+| Auth provider | Supabase (GoTrue + PostgreSQL + Edge Functions) | 50K MAU free, auth+DB+edge functions in one, REST API via reqwest (DRF 012) |
+| Auth method | Magic links only (Raycast model) | No passwords, no OAuth at launch. Simplest possible auth surface. GitHub OAuth added post-launch (DRF 012) |
+| Subscription | Stripe Checkout + Customer Portal | No PCI scope. Webhooks handled by Supabase Edge Functions (DRF 012) |
+| Agent self-upgrade | Cloudflared model — exit(42) + systemd restart | Atomic binary swap, 30s probation, automatic rollback on failure |
+| Phase 4 pivot | Real workloads over cloud targets | Cloud targets (Lambda, Workers) deferred to Phase 5. Env vars, service mode, Compose, public URLs increase value for existing local+remote story. 3.4:1 infra-to-feature ratio indicated over-engineering — focus on user value |
+| Public URL publishing | Pluggable tunnel providers (cloudflared/ngrok/custom) | Berth orchestrates, user picks provider. Zero Berth infrastructure or liability. No relay server to host. Users who want custom domains bring their own Cloudflare/ngrok account |

@@ -25,6 +25,7 @@ pub struct AgentHealth {
     pub os: Option<String>,
     pub arch: Option<String>,
     pub probation_status: String,
+    pub tunnel_providers: Vec<String>,
 }
 
 /// Execution history entry from a remote agent.
@@ -145,6 +146,8 @@ impl AgentClient {
             image_tag: image_tag.unwrap_or_default().to_string(),
             env_vars,
             container_name,
+            run_mode: String::new(),
+            service_port: 0,
         };
 
         let response = tokio::time::timeout(Duration::from_secs(300), self.inner.clone().execute(request))
@@ -242,6 +245,8 @@ impl AgentClient {
             code: code.map(|c| c.to_vec()),
             image_tag: image_tag.map(|s| s.to_string()),
             env_vars,
+            run_mode: String::new(),
+            service_port: 0,
         };
         AgentTransport::execute(self, &params).await
     }
@@ -301,6 +306,7 @@ impl AgentTransport for AgentClient {
             os,
             arch,
             probation_status: response.probation_status,
+            tunnel_providers: response.tunnel_providers,
         })
     }
 
@@ -352,17 +358,29 @@ impl AgentTransport for AgentClient {
         &self,
         params: &ExecuteParams,
     ) -> Result<tokio::sync::mpsc::Receiver<ExecuteResponseLine>> {
-        let mut stream = self
-            .execute_streaming_raw(
-                &params.project_id,
-                &params.runtime,
-                &params.entrypoint,
-                &params.working_dir,
-                params.code.as_deref(),
-                params.image_tag.as_deref(),
-                params.env_vars.clone(),
-            )
-            .await?;
+        // For gRPC transport, construct the request with run_mode
+        let container_name = if params.image_tag.is_some() {
+            format!("berth-{}", params.project_id)
+        } else {
+            String::new()
+        };
+        let request = proto::ExecuteRequest {
+            project_id: params.project_id.clone(),
+            runtime: params.runtime.clone(),
+            entrypoint: params.entrypoint.clone(),
+            working_dir: params.working_dir.clone(),
+            code: params.code.clone().unwrap_or_default(),
+            image_tag: params.image_tag.clone().unwrap_or_default(),
+            env_vars: params.env_vars.clone(),
+            container_name,
+            run_mode: params.run_mode.clone(),
+            service_port: params.service_port as u32,
+        };
+        let response = tokio::time::timeout(Duration::from_secs(300), self.inner.clone().execute(request))
+            .await
+            .context("Execute RPC timed out after 5 minutes")?
+            .context("Execute RPC failed — check the agent logs for details")?;
+        let mut stream = response.into_inner();
 
         let (tx, rx) = tokio::sync::mpsc::channel(256);
 
@@ -556,5 +574,42 @@ impl AgentTransport for AgentClient {
             .into_inner();
 
         Ok((response.success, response.restored_version, response.message))
+    }
+
+    async fn publish(
+        &self,
+        project_id: &str,
+        port: u16,
+        provider: &str,
+        provider_config: &str,
+    ) -> Result<(bool, String, String, String)> {
+        let response = self
+            .inner
+            .clone()
+            .publish(proto::PublishRequest {
+                project_id: project_id.to_string(),
+                port: port as u32,
+                provider: provider.to_string(),
+                provider_config: provider_config.to_string(),
+            })
+            .await
+            .context("Publish RPC failed — check that cloudflared is installed on the agent")?
+            .into_inner();
+
+        Ok((response.success, response.url, response.provider, response.message))
+    }
+
+    async fn unpublish(&self, project_id: &str) -> Result<(bool, String)> {
+        let response = self
+            .inner
+            .clone()
+            .unpublish(proto::UnpublishRequest {
+                project_id: project_id.to_string(),
+            })
+            .await
+            .context("Unpublish RPC failed")?
+            .into_inner();
+
+        Ok((response.success, response.message))
     }
 }

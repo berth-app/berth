@@ -82,6 +82,19 @@ Phase 3 is marked complete in CLAUDE.md but has loose ends:
 - [ ] **P2** Workers target type: wrangler-compatible deploy
 - [ ] **P2** Workers KV / D1 binding configuration
 
+### Environment Variables
+- [x] **P0** Core module `env.rs`: `parse_dotenv()` and `mask_env_values()` with unit tests
+- [x] **P0** Wire env vars into `run_project()`: load from store, pass via ExecuteParams
+- [x] **P0** Log masking: mask env var values in log events and execution history
+- [x] **P0** Tauri CRUD commands: `get_env_vars`, `set_env_var`, `delete_env_var`, `import_env_file`
+- [x] **P0** TypeScript invoke wrappers for env var CRUD
+- [x] **P0** React `EnvVarsPanel`: key/value editor with reveal toggle, delete, add, .env import
+- [x] **P0** Integrate EnvVarsPanel into ProjectDetail side panel (Key icon in toolbar)
+- [x] **P0** MCP tools: `berth_env_set`, `berth_env_get`, `berth_env_delete`, `berth_env_import`
+- [x] **P0** MCP: wire env vars into `handle_run` and `handle_deploy`
+- [x] **P0** CLI: `berth env set|list|remove|import` subcommand
+- [x] **P0** CLI: wire env vars into `berth run`, `berth deploy`, `berth logs`
+
 ### Deployment History
 - [x] **P1** Execution logs table in SQLite: project_id, started_at, finished_at, exit_code, output, trigger
 - [x] **P1** UI: execution history list in ProjectDetail with expandable output

@@ -14,6 +14,7 @@ use berth_core::agent_client::{RemoteExecution, RemoteSchedule};
 use berth_core::agent_transport::{ExecuteResponseLine, DeployResponseLine};
 use berth_core::executor::{self, LogLine, LogStream};
 use berth_core::runtime::Runtime;
+use berth_core::tunnel::{TunnelManager, TunnelProvider};
 use berth_core::{archive, container, setup};
 
 use crate::agent_store::{AgentStore, Deployment, Execution};
@@ -22,6 +23,8 @@ use crate::nats_publisher::{self, NatsPublisher};
 fn gethostname() -> String {
     System::host_name().unwrap_or_else(|| "unknown".into())
 }
+
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 enum ProcessKind {
     BareProcess {
@@ -33,14 +36,24 @@ enum ProcessKind {
     },
 }
 
-struct RunningChild {
+/// Tracks a managed process — oneshot or service mode.
+struct ManagedProcess {
     kind: ProcessKind,
     started_at: chrono::DateTime<chrono::Utc>,
+    /// Set to true to signal the supervisor to stop restarting.
+    cancelled: Arc<AtomicBool>,
+    /// Run mode: "oneshot" or "service".
+    run_mode: String,
+    /// Number of restarts in this session.
+    restart_count: Arc<AtomicU32>,
+    /// Current supervisor state: "running", "backoff", "stopped".
+    supervisor_state: Arc<std::sync::Mutex<String>>,
 }
 
 pub struct PersistentAgentService {
     store: Arc<Mutex<AgentStore>>,
-    processes: Arc<Mutex<HashMap<String, RunningChild>>>,
+    processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
+    tunnel_mgr: Arc<TunnelManager>,
     start_time: std::time::Instant,
     deploys_dir: PathBuf,
     podman_version: Option<String>,
@@ -69,6 +82,7 @@ impl PersistentAgentService {
         Self {
             store,
             processes: Arc::new(Mutex::new(HashMap::new())),
+            tunnel_mgr: Arc::new(TunnelManager::new()),
             start_time: std::time::Instant::now(),
             deploys_dir,
             podman_version,
@@ -106,6 +120,7 @@ impl PersistentAgentService {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             probation_status,
+            tunnel_providers: TunnelManager::available_providers(),
         }
     }
 
@@ -113,10 +128,20 @@ impl PersistentAgentService {
         let procs = self.processes.lock().await;
         let projects: Vec<ProjectStatusInfo> = procs
             .iter()
-            .map(|(id, child)| ProjectStatusInfo {
-                project_id: id.clone(),
-                status: "running".into(),
-                started_at: child.started_at.to_rfc3339(),
+            .map(|(id, managed)| {
+                let supervisor_state = managed.supervisor_state.lock()
+                    .map(|s| s.clone())
+                    .unwrap_or_else(|_| "running".into());
+                let uptime_secs = (chrono::Utc::now() - managed.started_at).num_seconds().max(0) as u64;
+                ProjectStatusInfo {
+                    project_id: id.clone(),
+                    status: "running".into(),
+                    started_at: managed.started_at.to_rfc3339(),
+                    run_mode: managed.run_mode.clone(),
+                    restart_count: managed.restart_count.load(Ordering::Relaxed),
+                    supervisor_state,
+                    uptime_secs,
+                }
             })
             .collect();
 
@@ -136,8 +161,11 @@ impl PersistentAgentService {
     pub async fn do_stop(&self, project_id: &str) -> (bool, String) {
         let mut procs = self.processes.lock().await;
 
-        if let Some(child) = procs.remove(project_id) {
-            match child.kind {
+        if let Some(managed) = procs.remove(project_id) {
+            // Signal supervisor to stop restarting
+            managed.cancelled.store(true, Ordering::SeqCst);
+
+            match managed.kind {
                 ProcessKind::BareProcess { abort_handle } => {
                     abort_handle.abort();
                 }
@@ -157,10 +185,75 @@ impl PersistentAgentService {
             }
             nats_publisher::maybe_publish_event(&self.nats, "execution_stopped", Some(project_id), None, &data).await;
 
+            // Also stop tunnel if one exists
+            let _ = self.tunnel_mgr.stop(project_id).await;
+
             (true, format!("Stopped project {project_id}"))
         } else {
             (false, format!("Project {project_id} is not running"))
         }
+    }
+
+    pub async fn do_publish(
+        &self,
+        project_id: &str,
+        port: u16,
+        provider: &str,
+        _provider_config: &str,
+    ) -> Result<(bool, String, String, String), String> {
+        let tunnel_provider = match provider {
+            "cloudflared" | "" => TunnelProvider::Cloudflared,
+            other => return Err(format!("Unknown tunnel provider: {other}. Available: cloudflared")),
+        };
+
+        let info = self
+            .tunnel_mgr
+            .start(project_id, port, &tunnel_provider)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let data = serde_json::json!({
+            "project_id": project_id,
+            "url": &info.public_url,
+            "provider": &info.provider,
+            "port": port,
+        })
+        .to_string();
+
+        nats_publisher::maybe_publish_event(
+            &self.nats,
+            "tunnel_started",
+            Some(project_id),
+            None,
+            &data,
+        )
+        .await;
+
+        Ok((
+            true,
+            info.public_url,
+            info.provider,
+            "Tunnel started".to_string(),
+        ))
+    }
+
+    pub async fn do_unpublish(&self, project_id: &str) -> Result<(bool, String), String> {
+        self.tunnel_mgr
+            .stop(project_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let data = serde_json::json!({"project_id": project_id}).to_string();
+        nats_publisher::maybe_publish_event(
+            &self.nats,
+            "tunnel_stopped",
+            Some(project_id),
+            None,
+            &data,
+        )
+        .await;
+
+        Ok((true, "Tunnel stopped".to_string()))
     }
 
     pub async fn do_execute(
@@ -173,7 +266,10 @@ impl PersistentAgentService {
         image_tag: Option<&str>,
         env_vars: HashMap<String, String>,
         container_name: Option<&str>,
+        run_mode: &str,
+        _service_port: u16,
     ) -> Result<tokio::sync::mpsc::Receiver<ExecuteResponseLine>, String> {
+        let is_service = run_mode == "service";
         let runtime = parse_runtime(runtime_str);
         let use_container = image_tag.map_or(false, |t| !t.is_empty());
         let project_id = project_id.to_string();
@@ -214,6 +310,8 @@ impl PersistentAgentService {
             let exec_id = execution_id.clone();
             let pid = project_id.clone();
             let nats_clone = nats.clone();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let run_mode_str = run_mode.to_string();
             let task = tokio::spawn(async move {
                 let mut seq: i64 = 0;
                 while let Some(line) = child_rx.recv().await {
@@ -268,18 +366,22 @@ impl PersistentAgentService {
                 let mut procs = self.processes.lock().await;
                 procs.insert(
                     project_id,
-                    RunningChild {
+                    ManagedProcess {
                         kind: ProcessKind::Container {
                             container_name: container_name_clone,
                             abort_handle: task.abort_handle(),
                         },
                         started_at: chrono::Utc::now(),
+                        cancelled,
+                        run_mode: run_mode_str,
+                        restart_count: Arc::new(AtomicU32::new(0)),
+                        supervisor_state: Arc::new(std::sync::Mutex::new("running".to_string())),
                     },
                 );
             }
         } else {
             let (actual_working_dir, actual_entrypoint) = if let Some(code_bytes) = code {
-                let tmp = std::env::temp_dir().join(format!("berth-agent-{}", Uuid::new_v4()));
+                let tmp = Self::berth_dir().join("tmp").join(format!("berth-agent-{}", Uuid::new_v4()));
                 std::fs::create_dir_all(&tmp).map_err(|e| format!("Failed to create temp dir: {e}"))?;
                 let ep = if entrypoint.is_empty() { "main.py" } else { entrypoint };
                 std::fs::write(tmp.join(ep), code_bytes)
@@ -291,7 +393,7 @@ impl PersistentAgentService {
 
             let env_ref = if env_vars.is_empty() { None } else { Some(&env_vars) };
 
-            let (mut child, mut child_rx) =
+            let (child, child_rx) =
                 executor::spawn_and_stream(runtime, &actual_entrypoint, &actual_working_dir, env_ref)
                     .await
                     .map_err(|e| format!("Failed to spawn: {e}"))?;
@@ -299,51 +401,206 @@ impl PersistentAgentService {
             let exec_id = execution_id.clone();
             let pid = project_id.clone();
             let nats_clone = nats.clone();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let cancelled_clone = cancelled.clone();
+            let restart_count = Arc::new(AtomicU32::new(0));
+            let restart_count_clone = restart_count.clone();
+            let supervisor_state = Arc::new(std::sync::Mutex::new("running".to_string()));
+            let supervisor_state_clone = supervisor_state.clone();
+            let is_service_clone = is_service;
+            let run_mode_str = run_mode.to_string();
+            let runtime_clone = runtime;
+            let entrypoint_clone = actual_entrypoint.clone();
+            let working_dir_clone = actual_working_dir.clone();
+            let env_vars_clone = env_vars.clone();
+
             let task = tokio::spawn(async move {
-                let mut seq: i64 = 0;
-                while let Some(line) = child_rx.recv().await {
-                    let stream_str = match line.stream {
-                        LogStream::Stdout => "stdout",
-                        LogStream::Stderr => "stderr",
+                let mut current_exec_id = exec_id;
+                let mut current_child = child;
+                let mut current_rx = child_rx;
+                let mut consecutive_failures: u32 = 0;
+
+                loop {
+                    // Stream logs for current child
+                    let mut seq: i64 = 0;
+                    while let Some(line) = current_rx.recv().await {
+                        let stream_str = match line.stream {
+                            LogStream::Stdout => "stdout",
+                            LogStream::Stderr => "stderr",
+                        };
+                        {
+                            let s = store.lock().await;
+                            let _ = s.append_log_line(&current_exec_id, seq, stream_str, &line.text, &line.timestamp);
+                        }
+                        nats_publisher::maybe_publish_log_line(&nats_clone, &pid, &current_exec_id, stream_str, &line.text, seq).await;
+
+                        let resp = ExecuteResponseLine {
+                            stream: stream_str.into(),
+                            text: line.text,
+                            timestamp: line.timestamp.to_rfc3339(),
+                            exit_code: 0,
+                            is_final: false,
+                        };
+                        if tx.send(resp).await.is_err() { break; }
+                        seq += 1;
+                    }
+
+                    let start_time = std::time::Instant::now();
+                    let exit_code = match current_child.wait().await {
+                        Ok(status) => status.code().unwrap_or(-1),
+                        Err(_) => -1,
                     };
+
+                    let status_str = if exit_code == 0 { "completed" } else { "failed" };
+                    let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
                     {
                         let s = store.lock().await;
-                        let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
+                        let _ = s.finish_execution(&current_exec_id, exit_code, status_str);
+                        let _ = s.insert_event("execution_completed", Some(&pid), Some(&current_exec_id), &data);
                     }
-                    nats_publisher::maybe_publish_log_line(&nats_clone, &pid, &exec_id, stream_str, &line.text, seq).await;
+                    nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&pid), Some(&current_exec_id), &data).await;
 
-                    let resp = ExecuteResponseLine {
-                        stream: stream_str.into(),
-                        text: line.text,
-                        timestamp: line.timestamp.to_rfc3339(),
+                    // Check if we should restart (service mode only)
+                    if !is_service_clone || cancelled_clone.load(Ordering::SeqCst) {
+                        // Oneshot or cancelled — send final and exit
+                        let _ = tx.send(ExecuteResponseLine {
+                            stream: String::new(),
+                            text: String::new(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            exit_code,
+                            is_final: true,
+                        }).await;
+                        break;
+                    }
+
+                    // Service mode: compute backoff and restart
+                    let ran_for = start_time.elapsed();
+                    if ran_for.as_secs() > 60 {
+                        consecutive_failures = 0;
+                    } else {
+                        consecutive_failures += 1;
+                    }
+
+                    let count = restart_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
+
+                    // Exponential backoff: 1s * 2^failures, capped at 60s
+                    let base_delay_ms = 1000u64 * 2u64.saturating_pow(consecutive_failures.min(6));
+                    let delay_ms = base_delay_ms.min(60_000);
+                    // Add ±10% jitter
+                    let jitter = (delay_ms as f64 * 0.1 * (0.5 - rand_simple())) as i64;
+                    let actual_delay_ms = (delay_ms as i64 + jitter).max(100) as u64;
+
+                    // Notify about restart
+                    let restart_msg = format!(
+                        "\n--- Service restarting (attempt {}, exit code {}, backoff {}ms) ---\n",
+                        count, exit_code, actual_delay_ms
+                    );
+                    let _ = tx.send(ExecuteResponseLine {
+                        stream: "stderr".into(),
+                        text: restart_msg,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
                         exit_code: 0,
                         is_final: false,
-                    };
-                    if tx.send(resp).await.is_err() { break; }
-                    seq += 1;
+                    }).await;
+
+                    // Publish restart event
+                    let restart_data = serde_json::json!({
+                        "restart_count": count,
+                        "exit_code": exit_code,
+                        "delay_ms": actual_delay_ms,
+                    }).to_string();
+                    nats_publisher::maybe_publish_event(&nats_clone, "service_restarting", Some(&pid), None, &restart_data).await;
+
+                    // Set state to backoff
+                    if let Ok(mut s) = supervisor_state_clone.lock() {
+                        *s = "backoff".to_string();
+                    }
+
+                    // Interruptible sleep — check cancelled every 100ms
+                    let sleep_until = std::time::Instant::now() + std::time::Duration::from_millis(actual_delay_ms);
+                    loop {
+                        if cancelled_clone.load(Ordering::SeqCst) {
+                            let _ = tx.send(ExecuteResponseLine {
+                                stream: String::new(),
+                                text: String::new(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                exit_code,
+                                is_final: true,
+                            }).await;
+                            // Break out of both loops
+                            let mut procs = processes.lock().await;
+                            procs.remove(&pid);
+                            return;
+                        }
+                        if std::time::Instant::now() >= sleep_until {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+
+                    // Set state back to running
+                    if let Ok(mut s) = supervisor_state_clone.lock() {
+                        *s = "running".to_string();
+                    }
+
+                    // Spawn new child process
+                    let env_ref = if env_vars_clone.is_empty() { None } else { Some(&env_vars_clone) };
+                    match executor::spawn_and_stream(runtime_clone, &entrypoint_clone, &working_dir_clone, env_ref).await {
+                        Ok((new_child, new_rx)) => {
+                            // Create new execution record
+                            let new_exec_id = Uuid::new_v4().to_string();
+                            {
+                                let s = store.lock().await;
+                                let _ = s.insert_execution(&Execution {
+                                    id: new_exec_id.clone(),
+                                    project_id: pid.clone(),
+                                    deployment_id: None,
+                                    started_at: chrono::Utc::now(),
+                                    finished_at: None,
+                                    exit_code: None,
+                                    trigger: "service_restart".into(),
+                                    status: "running".into(),
+                                });
+                            }
+
+                            let restart_msg = format!("--- Service restarted (attempt {}) ---\n", count);
+                            let _ = tx.send(ExecuteResponseLine {
+                                stream: "stderr".into(),
+                                text: restart_msg,
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                exit_code: 0,
+                                is_final: false,
+                            }).await;
+
+                            nats_publisher::maybe_publish_event(&nats_clone, "service_restarted", Some(&pid), None, &serde_json::json!({"restart_count": count}).to_string()).await;
+
+                            // Update the managed process's started_at
+                            {
+                                let mut procs = processes.lock().await;
+                                if let Some(managed) = procs.get_mut(&pid) {
+                                    managed.started_at = chrono::Utc::now();
+                                }
+                            }
+
+                            current_exec_id = new_exec_id;
+                            current_child = new_child;
+                            current_rx = new_rx;
+                            // Continue loop
+                        }
+                        Err(e) => {
+                            let error_msg = format!("--- Service restart failed: {} ---\n", e);
+                            let _ = tx.send(ExecuteResponseLine {
+                                stream: "stderr".into(),
+                                text: error_msg,
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                exit_code: 0,
+                                is_final: false,
+                            }).await;
+                            // Don't give up — try again after backoff
+                            continue;
+                        }
+                    }
                 }
-
-                let exit_code = match child.wait().await {
-                    Ok(status) => status.code().unwrap_or(-1),
-                    Err(_) => -1,
-                };
-
-                let status_str = if exit_code == 0 { "completed" } else { "failed" };
-                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
-                {
-                    let s = store.lock().await;
-                    let _ = s.finish_execution(&exec_id, exit_code, status_str);
-                    let _ = s.insert_event("execution_completed", Some(&pid), Some(&exec_id), &data);
-                }
-                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&pid), Some(&exec_id), &data).await;
-
-                let _ = tx.send(ExecuteResponseLine {
-                    stream: String::new(),
-                    text: String::new(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    exit_code,
-                    is_final: true,
-                }).await;
 
                 let mut procs = processes.lock().await;
                 procs.remove(&pid);
@@ -353,11 +610,15 @@ impl PersistentAgentService {
                 let mut procs = self.processes.lock().await;
                 procs.insert(
                     project_id,
-                    RunningChild {
+                    ManagedProcess {
                         kind: ProcessKind::BareProcess {
                             abort_handle: task.abort_handle(),
                         },
                         started_at: chrono::Utc::now(),
+                        cancelled,
+                        run_mode: run_mode_str,
+                        restart_count,
+                        supervisor_state,
                     },
                 );
             }
@@ -769,6 +1030,7 @@ pub struct HealthInfo {
     pub os: String,
     pub arch: String,
     pub probation_status: String,
+    pub tunnel_providers: Vec<String>,
 }
 
 pub struct StatusInfo {
@@ -783,6 +1045,10 @@ pub struct ProjectStatusInfo {
     pub project_id: String,
     pub status: String,
     pub started_at: String,
+    pub run_mode: String,
+    pub restart_count: u32,
+    pub supervisor_state: String,
+    pub uptime_secs: u64,
 }
 
 fn parse_runtime(s: &str) -> Runtime {
@@ -794,6 +1060,15 @@ fn parse_runtime(s: &str) -> Runtime {
         "shell" => Runtime::Shell,
         _ => Runtime::Unknown,
     }
+}
+
+/// Simple deterministic jitter — returns a value in [0.0, 1.0) based on current time nanos.
+fn rand_simple() -> f64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    (nanos as f64) / 1_000_000_000.0
 }
 
 #[tonic::async_trait]
@@ -1116,226 +1391,39 @@ impl AgentService for PersistentAgentService {
         request: Request<ExecuteRequest>,
     ) -> Result<Response<Self::ExecuteStream>, Status> {
         let req = request.into_inner();
-        let runtime = parse_runtime(&req.runtime);
-        let project_id = req.project_id.clone();
-        let env_vars: HashMap<String, String> = req.env_vars.clone();
-        let use_container = !req.image_tag.is_empty();
+        let code = if req.code.is_empty() { None } else { Some(req.code.as_slice()) };
+        let image_tag = if req.image_tag.is_empty() { None } else { Some(req.image_tag.as_str()) };
+        let container_name = if req.container_name.is_empty() { None } else { Some(req.container_name.as_str()) };
+        let run_mode = if req.run_mode.is_empty() { "oneshot" } else { &req.run_mode };
 
-        // Create execution record
-        let execution_id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now();
-        {
-            let store = self.store.lock().await;
-            let _ = store.insert_execution(&Execution {
-                id: execution_id.clone(),
-                project_id: project_id.clone(),
-                deployment_id: None,
-                started_at: now,
-                finished_at: None,
-                exit_code: None,
-                trigger: "manual".into(),
-                status: "running".into(),
-            });
-        }
+        let mut rx = self.do_execute(
+            &req.project_id,
+            &req.runtime,
+            &req.entrypoint,
+            &req.working_dir,
+            code,
+            image_tag,
+            req.env_vars,
+            container_name,
+            run_mode,
+            req.service_port as u16,
+        ).await.map_err(|e| Status::internal(e))?;
 
         let (tx, stream_rx) = tokio::sync::mpsc::channel(256);
-        let processes = self.processes.clone();
-        let store = self.store.clone();
-        let nats = self.nats.clone();
-
-        if use_container {
-            let container_name = if req.container_name.is_empty() {
-                format!("berth-{project_id}")
-            } else {
-                req.container_name.clone()
-            };
-
-            let (mut child, mut rx) =
-                container::run_container(&req.image_tag, &container_name, &env_vars)
-                    .await
-                    .map_err(|e| Status::internal(format!("Failed to run container: {e}")))?;
-
-            let container_name_clone = container_name.clone();
-            let exec_id = execution_id.clone();
-            let nats_clone = nats.clone();
-            let task = tokio::spawn(async move {
-                let mut seq: i64 = 0;
-                while let Some(line) = rx.recv().await {
-                    let stream_str = match line.stream {
-                        LogStream::Stdout => "stdout",
-                        LogStream::Stderr => "stderr",
-                    };
-
-                    // Persist log line
-                    {
-                        let s = store.lock().await;
-                        let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
-                    }
-                    nats_publisher::maybe_publish_log_line(&nats_clone, &project_id, &exec_id, stream_str, &line.text, seq).await;
-
-                    let resp = ExecuteResponse {
-                        stream: stream_str.into(),
-                        text: line.text,
-                        timestamp: line.timestamp.to_rfc3339(),
-                        exit_code: 0,
-                        is_final: false,
-                    };
-                    if tx.send(Ok(resp)).await.is_err() {
-                        break;
-                    }
-                    seq += 1;
-                }
-
-                let exit_code = match child.wait().await {
-                    Ok(status) => status.code().unwrap_or(-1),
-                    Err(_) => -1,
+        tokio::spawn(async move {
+            while let Some(line) = rx.recv().await {
+                let resp = ExecuteResponse {
+                    stream: line.stream,
+                    text: line.text,
+                    timestamp: line.timestamp,
+                    exit_code: line.exit_code,
+                    is_final: line.is_final,
                 };
-
-                // Finalize execution
-                let status_str = if exit_code == 0 { "completed" } else { "failed" };
-                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
-                {
-                    let s = store.lock().await;
-                    let _ = s.finish_execution(&exec_id, exit_code, status_str);
-                    let _ = s.insert_event(
-                        "execution_completed",
-                        Some(&project_id),
-                        Some(&exec_id),
-                        &data,
-                    );
+                if tx.send(Ok(resp)).await.is_err() {
+                    break;
                 }
-                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&project_id), Some(&exec_id), &data).await;
-
-                let final_resp = ExecuteResponse {
-                    stream: String::new(),
-                    text: String::new(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    exit_code,
-                    is_final: true,
-                };
-                let _ = tx.send(Ok(final_resp)).await;
-
-                let mut procs = processes.lock().await;
-                procs.remove(&project_id);
-            });
-
-            {
-                let mut procs = self.processes.lock().await;
-                procs.insert(
-                    req.project_id,
-                    RunningChild {
-                        kind: ProcessKind::Container {
-                            container_name: container_name_clone,
-                            abort_handle: task.abort_handle(),
-                        },
-                        started_at: chrono::Utc::now(),
-                    },
-                );
             }
-        } else {
-            // Bare process execution
-            let (working_dir, entrypoint) = if !req.code.is_empty() {
-                let tmp = std::env::temp_dir().join(format!("berth-agent-{}", Uuid::new_v4()));
-                std::fs::create_dir_all(&tmp)
-                    .map_err(|e| Status::internal(format!("Failed to create temp dir: {e}")))?;
-                let ep = if req.entrypoint.is_empty() {
-                    "main.py"
-                } else {
-                    &req.entrypoint
-                };
-                std::fs::write(tmp.join(ep), &req.code)
-                    .map_err(|e| Status::internal(format!("Failed to write code: {e}")))?;
-                (tmp.to_string_lossy().to_string(), ep.to_string())
-            } else {
-                (req.working_dir.clone(), req.entrypoint.clone())
-            };
-
-            let env_ref = if env_vars.is_empty() {
-                None
-            } else {
-                Some(&env_vars)
-            };
-
-            let (mut child, mut rx) =
-                executor::spawn_and_stream(runtime, &entrypoint, &working_dir, env_ref)
-                    .await
-                    .map_err(|e| Status::internal(format!("Failed to spawn: {e}")))?;
-
-            let exec_id = execution_id.clone();
-            let nats_clone = nats.clone();
-            let task = tokio::spawn(async move {
-                let mut seq: i64 = 0;
-                while let Some(line) = rx.recv().await {
-                    let stream_str = match line.stream {
-                        LogStream::Stdout => "stdout",
-                        LogStream::Stderr => "stderr",
-                    };
-
-                    // Persist log line
-                    {
-                        let s = store.lock().await;
-                        let _ = s.append_log_line(&exec_id, seq, stream_str, &line.text, &line.timestamp);
-                    }
-                    nats_publisher::maybe_publish_log_line(&nats_clone, &project_id, &exec_id, stream_str, &line.text, seq).await;
-
-                    let resp = ExecuteResponse {
-                        stream: stream_str.into(),
-                        text: line.text,
-                        timestamp: line.timestamp.to_rfc3339(),
-                        exit_code: 0,
-                        is_final: false,
-                    };
-                    if tx.send(Ok(resp)).await.is_err() {
-                        break;
-                    }
-                    seq += 1;
-                }
-
-                let exit_code = match child.wait().await {
-                    Ok(status) => status.code().unwrap_or(-1),
-                    Err(_) => -1,
-                };
-
-                let status_str = if exit_code == 0 { "completed" } else { "failed" };
-                let data = serde_json::json!({"exit_code": exit_code, "status": status_str}).to_string();
-                {
-                    let s = store.lock().await;
-                    let _ = s.finish_execution(&exec_id, exit_code, status_str);
-                    let _ = s.insert_event(
-                        "execution_completed",
-                        Some(&project_id),
-                        Some(&exec_id),
-                        &data,
-                    );
-                }
-                nats_publisher::maybe_publish_event(&nats_clone, "execution_completed", Some(&project_id), Some(&exec_id), &data).await;
-
-                let final_resp = ExecuteResponse {
-                    stream: String::new(),
-                    text: String::new(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    exit_code,
-                    is_final: true,
-                };
-                let _ = tx.send(Ok(final_resp)).await;
-
-                let mut procs = processes.lock().await;
-                procs.remove(&project_id);
-            });
-
-            {
-                let mut procs = self.processes.lock().await;
-                procs.insert(
-                    req.project_id,
-                    RunningChild {
-                        kind: ProcessKind::BareProcess {
-                            abort_handle: task.abort_handle(),
-                        },
-                        started_at: chrono::Utc::now(),
-                    },
-                );
-            }
-        }
+        });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
     }
@@ -1344,28 +1432,26 @@ impl AgentService for PersistentAgentService {
         &self,
         _request: Request<StatusRequest>,
     ) -> Result<Response<StatusResponse>, Status> {
-        let procs = self.processes.lock().await;
-        let projects: Vec<ProjectStatus> = procs
-            .iter()
-            .map(|(id, child)| ProjectStatus {
-                project_id: id.clone(),
-                status: "running".into(),
+        let info = self.do_status().await;
+        let projects: Vec<ProjectStatus> = info.projects
+            .into_iter()
+            .map(|p| ProjectStatus {
+                project_id: p.project_id,
+                status: p.status,
                 pid: 0,
-                started_at: child.started_at.to_rfc3339(),
+                started_at: p.started_at,
+                run_mode: p.run_mode,
+                restart_count: p.restart_count,
+                supervisor_state: p.supervisor_state,
+                uptime_secs: p.uptime_secs as u64,
             })
             .collect();
 
-        let mut sys = sysinfo::System::new();
-        sys.refresh_cpu_usage();
-        sys.refresh_memory();
-        let cpu_usage = sys.global_cpu_usage() as f64;
-        let memory_bytes = sys.used_memory();
-
         Ok(Response::new(StatusResponse {
-            agent_id: gethostname(),
-            status: "running".into(),
-            cpu_usage,
-            memory_bytes,
+            agent_id: info.agent_id,
+            status: info.status,
+            cpu_usage: info.cpu_usage,
+            memory_bytes: info.memory_bytes,
             projects,
         }))
     }
@@ -1386,45 +1472,8 @@ impl AgentService for PersistentAgentService {
         request: Request<StopRequest>,
     ) -> Result<Response<StopResponse>, Status> {
         let project_id = request.into_inner().project_id;
-        let mut procs = self.processes.lock().await;
-
-        if let Some(child) = procs.remove(&project_id) {
-            match child.kind {
-                ProcessKind::BareProcess { abort_handle } => {
-                    abort_handle.abort();
-                }
-                ProcessKind::Container {
-                    container_name,
-                    abort_handle,
-                } => {
-                    let _ = container::stop_container(&container_name).await;
-                    abort_handle.abort();
-                }
-            }
-
-            // Emit stop event
-            let data = serde_json::json!({"project_id": &project_id}).to_string();
-            {
-                let store = self.store.lock().await;
-                let _ = store.insert_event(
-                    "execution_stopped",
-                    Some(&project_id),
-                    None,
-                    &data,
-                );
-            }
-            nats_publisher::maybe_publish_event(&self.nats, "execution_stopped", Some(&project_id), None, &data).await;
-
-            Ok(Response::new(StopResponse {
-                success: true,
-                message: format!("Stopped project {project_id}"),
-            }))
-        } else {
-            Ok(Response::new(StopResponse {
-                success: false,
-                message: format!("Project {project_id} is not running"),
-            }))
-        }
+        let (success, message) = self.do_stop(&project_id).await;
+        Ok(Response::new(StopResponse { success, message }))
     }
 
     async fn health(
@@ -1441,7 +1490,48 @@ impl AgentService for PersistentAgentService {
             os: h.os,
             arch: h.arch,
             probation_status: h.probation_status,
+            tunnel_providers: h.tunnel_providers,
         }))
+    }
+
+    // --- Tunnel RPCs ---
+
+    async fn publish(
+        &self,
+        request: Request<PublishRequest>,
+    ) -> Result<Response<PublishResponse>, Status> {
+        let req = request.into_inner();
+        match self
+            .do_publish(&req.project_id, req.port as u16, &req.provider, &req.provider_config)
+            .await
+        {
+            Ok((success, url, provider, message)) => Ok(Response::new(PublishResponse {
+                success,
+                url,
+                message,
+                provider,
+            })),
+            Err(e) => Ok(Response::new(PublishResponse {
+                success: false,
+                url: String::new(),
+                message: e,
+                provider: String::new(),
+            })),
+        }
+    }
+
+    async fn unpublish(
+        &self,
+        request: Request<UnpublishRequest>,
+    ) -> Result<Response<UnpublishResponse>, Status> {
+        let req = request.into_inner();
+        match self.do_unpublish(&req.project_id).await {
+            Ok((success, message)) => Ok(Response::new(UnpublishResponse { success, message })),
+            Err(e) => Ok(Response::new(UnpublishResponse {
+                success: false,
+                message: e,
+            })),
+        }
     }
 
     // --- New persistent RPCs ---

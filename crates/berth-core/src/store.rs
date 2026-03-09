@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::project::{Project, ProjectStatus};
+use crate::project::{Project, ProjectStatus, RunMode};
 use crate::runtime::Runtime;
 use crate::scheduler::Schedule;
 use crate::target::{Target, TargetKind, TargetStatus};
@@ -189,12 +189,36 @@ impl ProjectStore {
             );",
         )?;
 
+        // Migration: add tunnel columns to projects
+        let has_tunnel_url = self
+            .conn
+            .prepare("SELECT tunnel_url FROM projects LIMIT 0")
+            .is_ok();
+        if !has_tunnel_url {
+            self.conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN tunnel_url TEXT;
+                 ALTER TABLE projects ADD COLUMN tunnel_provider TEXT;",
+            )?;
+        }
+
+        // Migration: add service mode columns to projects
+        let has_run_mode = self
+            .conn
+            .prepare("SELECT run_mode FROM projects LIMIT 0")
+            .is_ok();
+        if !has_run_mode {
+            self.conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'oneshot';
+                 ALTER TABLE projects ADD COLUMN service_port INTEGER;",
+            )?;
+        }
+
         Ok(())
     }
 
     pub fn list(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete, default_target FROM projects ORDER BY updated_at DESC",
+            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete, default_target, tunnel_url, tunnel_provider, run_mode, service_port FROM projects ORDER BY updated_at DESC",
         )?;
 
         let projects = stmt
@@ -221,6 +245,10 @@ impl ProjectStore {
                     run_count: row.get::<_, Option<u32>>(10)?.unwrap_or(0),
                     notify_on_complete: row.get::<_, Option<i32>>(11)?.unwrap_or(1) != 0,
                     default_target: row.get(12)?,
+                    tunnel_url: row.get(13)?,
+                    tunnel_provider: row.get(14)?,
+                    run_mode: parse_run_mode(&row.get::<_, Option<String>>(15)?.unwrap_or_else(|| "oneshot".into())),
+                    service_port: row.get::<_, Option<i32>>(16)?.map(|p| p as u16),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -252,7 +280,7 @@ impl ProjectStore {
 
     pub fn get(&self, id: Uuid) -> Result<Option<Project>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete, default_target FROM projects WHERE id = ?1",
+            "SELECT id, name, path, runtime, entrypoint, status, created_at, updated_at, last_run_at, last_exit_code, run_count, notify_on_complete, default_target, tunnel_url, tunnel_provider, run_mode, service_port FROM projects WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query_map([id.to_string()], |row| {
@@ -272,6 +300,10 @@ impl ProjectStore {
                 run_count: row.get::<_, Option<u32>>(10)?.unwrap_or(0),
                 notify_on_complete: row.get::<_, Option<i32>>(11)?.unwrap_or(1) != 0,
                 default_target: row.get(12)?,
+                tunnel_url: row.get(13)?,
+                tunnel_provider: row.get(14)?,
+                run_mode: parse_run_mode(&row.get::<_, Option<String>>(15)?.unwrap_or_else(|| "oneshot".into())),
+                service_port: row.get::<_, Option<i32>>(16)?.map(|p| p as u16),
             })
         })?;
 
@@ -335,6 +367,20 @@ impl ProjectStore {
         self.conn.execute(
             "UPDATE projects SET default_target = ?1, updated_at = ?2 WHERE id = ?3",
             (target_id, &now, id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn set_project_run_mode(&self, id: Uuid, run_mode: RunMode, service_port: Option<u16>) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET run_mode = ?1, service_port = ?2, updated_at = ?3 WHERE id = ?4",
+            (
+                format_run_mode(run_mode),
+                service_port.map(|p| p as i32),
+                &now,
+                id.to_string(),
+            ),
         )?;
         Ok(())
     }
@@ -709,6 +755,26 @@ impl ProjectStore {
         )?;
         Ok(())
     }
+
+    // --- Tunnel methods ---
+
+    pub fn set_tunnel_url(&self, project_id: Uuid, url: &str, provider: &str) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET tunnel_url = ?1, tunnel_provider = ?2, updated_at = ?3 WHERE id = ?4",
+            (url, provider, &now, project_id.to_string()),
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_tunnel_url(&self, project_id: Uuid) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE projects SET tunnel_url = NULL, tunnel_provider = NULL, updated_at = ?1 WHERE id = ?2",
+            (&now, project_id.to_string()),
+        )?;
+        Ok(())
+    }
 }
 
 fn parse_runtime(s: &str) -> Runtime {
@@ -782,5 +848,19 @@ fn format_target_status(s: TargetStatus) -> &'static str {
         TargetStatus::Online => "online",
         TargetStatus::Offline => "offline",
         TargetStatus::Unknown => "unknown",
+    }
+}
+
+fn parse_run_mode(s: &str) -> RunMode {
+    match s {
+        "service" => RunMode::Service,
+        _ => RunMode::Oneshot,
+    }
+}
+
+fn format_run_mode(m: RunMode) -> &'static str {
+    match m {
+        RunMode::Oneshot => "oneshot",
+        RunMode::Service => "service",
     }
 }

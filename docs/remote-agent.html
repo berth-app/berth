@@ -77,6 +77,11 @@
   <a href="#overview">Overview</a>
   <a href="#architecture">Architecture</a>
   <a href="#protocol">gRPC Protocol</a>
+  <a href="#nats">NATS Command Channel</a>
+  <a href="#publishing">Public URL Publishing</a>
+  <a href="#self-upgrade">Self-Upgrade</a>
+  <a href="#env-vars">Environment Variables</a>
+  <a href="#service-mode">Service Mode</a>
   <a href="#data-flow">Data Flow</a>
   <a href="#deployment">Deployment</a>
   <a href="#security">Security</a>
@@ -90,23 +95,25 @@
 <!-- ============================================================ -->
 <h2 id="overview">Overview</h2>
 
-<p>The Berth Remote Agent is a persistent Rust binary that runs on Linux servers as a systemd service. It receives code deployments from the Berth macOS app (or CLI) over gRPC, manages execution history in a local SQLite database, runs scheduled jobs independently, and supports remote self-upgrade.</p>
+<p>The Berth Remote Agent is a persistent Rust binary that runs on Linux servers as a systemd service. It receives code deployments from the Berth macOS app (or CLI) over gRPC or NATS, manages execution history in a local SQLite database, runs scheduled jobs independently, publishes services via cloudflared tunnels, and supports remote self-upgrade.</p>
 
 <div class="callout">
-  <p><strong>Key principle:</strong> Zero runtime dependencies + full persistence. The agent is a single static binary with embedded SQLite. All execution history, logs, events, and schedules survive restarts. The app polls the agent for events when connected &mdash; no direct network connectivity from agent to app required.</p>
+  <p><strong>Key principle:</strong> Zero runtime dependencies + full persistence. The agent is a single static binary with embedded SQLite. All execution history, logs, events, and schedules survive restarts. Communication flows through NATS (primary) or gRPC (fallback) &mdash; neither desktop nor agent needs to expose inbound ports.</p>
 </div>
 
 <table>
   <tr><th>Property</th><th>Value</th></tr>
   <tr><td>Binary</td><td><code>berth-agent</code></td></tr>
   <tr><td>Language</td><td>Rust (shared <code>berth-core</code> crate with app)</td></tr>
-  <tr><td>Protocol</td><td>gRPC over HTTP/2 (tonic 0.12), 14 RPCs</td></tr>
+  <tr><td>Protocol</td><td>gRPC over HTTP/2 (tonic 0.12) + NATS command channel, 16 RPCs</td></tr>
   <tr><td>Default port</td><td>50051</td></tr>
   <tr><td>Protobuf schema</td><td><code>proto/berth.proto</code></td></tr>
   <tr><td>Local database</td><td><code>~/.berth/agent.db</code> (SQLite, 5 tables)</td></tr>
   <tr><td>Deployments dir</td><td><code>~/.berth/deploys/{project_id}/v{n}/</code></td></tr>
   <tr><td>Supported platforms</td><td>Linux x86_64, Linux aarch64</td></tr>
   <tr><td>Scheduler</td><td>Built-in, tick every 30s, runs independently of app</td></tr>
+  <tr><td>Tunnel providers</td><td>cloudflared (pluggable)</td></tr>
+  <tr><td>NATS transport</td><td><code>tls://connect.ngs.global</code> (Synadia Cloud)</td></tr>
 </table>
 
 <!-- ============================================================ -->
@@ -115,41 +122,59 @@
 <h3>System Topology</h3>
 
 <div class="diagram">
-┌──────────────────────────────────────────────────────────────────────┐
-│  macOS (Berth App)                                                  │
-│                                                                      │
-│  ┌─────────────┐    ┌──────────────┐    ┌─────────────────────────┐  │
-│  │  React UI   │───▸│ Tauri Commands│───▸│  berth-core            │  │
-│  │  (WebKit)   │    │ (Rust)       │    │  ├─ AgentClient (gRPC)  │  │
-│  │             │◂───│              │◂───│  ├─ ProjectStore (SQL)  │  │
-│  │  Terminal   │    │  Events:     │    │  ├─ TLS (rcgen)         │  │
-│  │  Component  │    │  project-log │    │  └─ Credentials (KC)    │  │
-│  └─────────────┘    └──────────────┘    └────────────┬────────────┘  │
-│                                                      │               │
-└──────────────────────────────────────────────────────┼───────────────┘
-                                                       │
-                                          gRPC / HTTP/2 (port 50051)
-                                                       │
-┌──────────────────────────────────────────────────────┼───────────────┐
-│  Linux Server                                        │               │
-│                                                      ▼               │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │  berth-agent (PersistentAgentService)                       │    │
-│  │  ├─ gRPC Server (14 RPCs)                                   │    │
-│  │  │   ├─ Health/Status   → version, uptime, os, arch, CPU   │    │
-│  │  │   ├─ Deploy()        → extract tarball, install deps     │    │
-│  │  │   ├─ Execute()       → run code, persist logs + events  │    │
-│  │  │   ├─ Stop()          → kill process, emit event          │    │
-│  │  │   ├─ GetExecutions() → query execution history           │    │
-│  │  │   ├─ GetEvents()     → poll store-and-forward events    │    │
-│  │  │   ├─ *Schedule()     → agent-side cron management       │    │
-│  │  │   └─ Upgrade()       → receive binary, swap, restart    │    │
-│  │  ├─ AgentStore (SQLite ~/.berth/agent.db)                  │    │
-│  │  │   deployments | executions | logs | events | schedules   │    │
-│  │  ├─ Agent Scheduler (tick every 30s)                        │    │
-│  │  ├─ RunningProcesses (HashMap&lt;project_id, AbortHandle&gt;)     │    │
-│  │  └─ sysinfo (real CPU/memory metrics)                       │    │
-│  └──────────────────────────────────────────────────────────────┘    │
+┌──────────────────────────────────────────────────────────────────────────┐
+│  macOS (Berth App)                                                       │
+│                                                                          │
+│  ┌─────────────┐    ┌──────────────┐    ┌──────────────────────────────┐ │
+│  │  React UI   │───▸│ Tauri Commands│───▸│  berth-core                 │ │
+│  │  (WebKit)   │    │ (Rust)       │    │  ├─ AgentTransport (trait)   │ │
+│  │             │◂───│              │◂───│  │   ├─ AgentClient (gRPC)   │ │
+│  │  Terminal   │    │  Events:     │    │  │   └─ NatsAgentClient      │ │
+│  │  Component  │    │  project-log │    │  ├─ ProjectStore (SQL)       │ │
+│  │             │    │              │    │  ├─ TLS (rcgen)              │ │
+│  │  EnvVars    │    │              │    │  └─ Credentials (KC)         │ │
+│  │  Panel      │    │              │    │                              │ │
+│  └─────────────┘    └──────────────┘    └─────────────┬────────────────┘ │
+│                                                       │                  │
+└───────────────────────────────────────────────────────┼──────────────────┘
+                                                        │
+                          ┌─────────────────────────────┼──────────────┐
+                          │                             │              │
+                  gRPC / HTTP/2                  NATS (primary)        │
+                  (fallback, port 50051)         outbound TLS          │
+                          │                             │              │
+                          │              ┌──────────────┴────────────┐ │
+                          │              │  Synadia Cloud            │ │
+                          │              │  tls://connect.ngs.global │ │
+                          │              └──────────────┬────────────┘ │
+                          │                             │              │
+                          │                      NATS (outbound TLS)   │
+                          │                             │              │
+┌─────────────────────────┼─────────────────────────────┼──────────────┘
+│  Linux Server           │                             │
+│                         ▼                             ▼
+│  ┌──────────────────────────────────────────────────────────────────┐
+│  │  berth-agent (PersistentAgentService)                           │
+│  │  ├─ gRPC Server (16 RPCs)                                       │
+│  │  │   ├─ Health/Status   → version, uptime, os, arch, CPU       │
+│  │  │   ├─ Deploy()        → extract tarball, install deps         │
+│  │  │   ├─ Execute()       → run code, persist logs + events      │
+│  │  │   ├─ Stop()          → kill process, emit event              │
+│  │  │   ├─ GetExecutions() → query execution history               │
+│  │  │   ├─ GetEvents()     → poll store-and-forward events        │
+│  │  │   ├─ *Schedule()     → agent-side cron management           │
+│  │  │   ├─ Upgrade()       → receive binary, swap, restart        │
+│  │  │   ├─ Publish()       → start cloudflared tunnel             │
+│  │  │   └─ Unpublish()     → stop cloudflared tunnel              │
+│  │  ├─ NatsCommandHandler (subscribes berth.&lt;agent_id&gt;.cmd.&gt;)     │
+│  │  ├─ NatsPublisher (events, logs, heartbeat via JetStream)       │
+│  │  ├─ TunnelManager (cloudflared process lifecycle)               │
+│  │  ├─ AgentStore (SQLite ~/.berth/agent.db)                      │
+│  │  │   deployments | executions | logs | events | schedules       │
+│  │  ├─ Agent Scheduler (tick every 30s)                            │
+│  │  ├─ RunningProcesses (HashMap&lt;project_id, AbortHandle&gt;)         │
+│  │  └─ sysinfo (real CPU/memory metrics)                           │
+│  └──────────────────────────────────────────────────────────────────┘
 │                                                                      │
 │  ~/.berth/deploys/{project_id}/v{n}/  ← persistent deploy dirs     │
 │  └── main.py | requirements.txt | ...                                │
@@ -159,29 +184,36 @@
 <h3>Component Interaction</h3>
 
 <div class="diagram">
-┌──────────┐         ┌───────────┐         ┌──────────────┐
-│  React   │  invoke │   Tauri   │  gRPC   │  berth-     │
-│  UI      │────────▸│  Command  │────────▸│  agent       │
-│          │         │           │         │              │
-│  Target: │         │  Reads    │         │  Writes code │
-│  [linux] │         │  code     │         │  to /tmp/    │
-│          │         │  from     │         │  Spawns      │
-│  [Run]   │         │  disk     │         │  process     │
-│          │◂────────│◂──────────│◂────────│              │
-│ Terminal │  events │  Emits    │ stream  │  Streams     │
-│ (logs)   │         │  log evt  │         │  stdout/err  │
-└──────────┘         └───────────┘         └──────────────┘</div>
+┌──────────┐         ┌───────────┐         ┌──────────────────┐
+│  React   │  invoke │   Tauri   │  gRPC   │  berth-agent     │
+│  UI      │────────▸│  Command  │────────▸│                  │
+│          │         │           │  or     │  Writes code     │
+│  Target: │         │  Reads    │  NATS   │  to deploy dir   │
+│  [linux] │         │  code     │────────▸│  Spawns process  │
+│          │         │  from     │         │                  │
+│  [Run]   │         │  disk     │         │  TunnelManager   │
+│          │◂────────│◂──────────│◂────────│  (cloudflared)   │
+│ Terminal │  events │  Emits    │ stream  │                  │
+│ (logs)   │         │  log evt  │         │  Streams         │
+│          │         │           │         │  stdout/err      │
+│ EnvVars  │         │  Loads    │         │                  │
+│ Panel    │         │  env vars │         │  Env vars passed │
+│          │         │  from DB  │         │  at runtime      │
+└──────────┘         └───────────┘         └──────────────────┘
+
+Transport selection: target.nats_enabled → NatsAgentClient
+                     otherwise           → AgentClient (gRPC)</div>
 
 <!-- ============================================================ -->
 <h2 id="protocol">gRPC Protocol</h2>
 
-<p>Defined in <code>proto/berth.proto</code>. The agent implements a single gRPC service with 14 RPCs:</p>
+<p>Defined in <code>proto/berth.proto</code>. The agent implements a single gRPC service with 16 RPCs:</p>
 
 <h3>Service: <code>AgentService</code></h3>
 
 <table>
   <tr><th>RPC</th><th>Request</th><th>Response</th><th>Type</th><th>Description</th></tr>
-  <tr><td><code>Health</code></td><td><code>HealthRequest</code></td><td><code>HealthResponse</code></td><td>Unary</td><td>Agent version, status, uptime, os, arch</td></tr>
+  <tr><td><code>Health</code></td><td><code>HealthRequest</code></td><td><code>HealthResponse</code></td><td>Unary</td><td>Agent version, status, uptime, os, arch, tunnel providers</td></tr>
   <tr><td><code>Status</code></td><td><code>StatusRequest</code></td><td><code>StatusResponse</code></td><td>Unary</td><td>CPU, memory, running projects list</td></tr>
   <tr><td><code>Deploy</code></td><td><code>DeployRequest</code></td><td><code>DeployResponse</code></td><td>Unary</td><td>Extract tarball, install deps, persist deployment</td></tr>
   <tr><td><code>Execute</code></td><td><code>ExecuteRequest</code></td><td><code>stream ExecuteResponse</code></td><td>Server streaming</td><td>Run code, stream logs, persist to SQLite</td></tr>
@@ -195,6 +227,8 @@
   <tr><td><code>RemoveSchedule</code></td><td><code>RemoveScheduleRequest</code></td><td><code>RemoveScheduleResponse</code></td><td>Unary</td><td>Delete a schedule</td></tr>
   <tr><td><code>ListSchedules</code></td><td><code>ListSchedulesRequest</code></td><td><code>ListSchedulesResponse</code></td><td>Unary</td><td>List schedules for a project</td></tr>
   <tr><td><code>Upgrade</code></td><td><code>stream UpgradeChunk</code></td><td><code>UpgradeResponse</code></td><td>Client streaming</td><td>Upload new binary, verify, swap, restart</td></tr>
+  <tr><td><code>Publish</code></td><td><code>PublishRequest</code></td><td><code>PublishResponse</code></td><td>Unary</td><td>Start a cloudflared tunnel for a project</td></tr>
+  <tr><td><code>Unpublish</code></td><td><code>UnpublishRequest</code></td><td><code>UnpublishResponse</code></td><td>Unary</td><td>Stop the tunnel for a project</td></tr>
 </table>
 
 <h3>Message Definitions</h3>
@@ -217,11 +251,12 @@
 
 <h4>HealthResponse</h4>
 <pre><code>message HealthResponse {
-  string agent_version  = 1;  // e.g. "0.1.0"
-  string status         = 2;  // "healthy"
-  uint64 uptime_seconds = 3;  // Seconds since agent started
-  string os             = 6;  // e.g. "linux" (from std::env::consts::OS)
-  string arch           = 7;  // e.g. "x86_64" (from std::env::consts::ARCH)
+  string agent_version    = 1;  // e.g. "0.1.9"
+  string status           = 2;  // "healthy"
+  uint64 uptime_seconds   = 3;  // Seconds since agent started
+  string os               = 6;  // e.g. "linux" (from std::env::consts::OS)
+  string arch             = 7;  // e.g. "x86_64" (from std::env::consts::ARCH)
+  repeated string tunnel_providers = 9;  // e.g. ["cloudflared"] — installed tunnel binaries
 }</code></pre>
 
 <h4>StatusResponse</h4>
@@ -232,6 +267,216 @@
   uint64 memory_bytes         = 4;  // Used memory in bytes
   repeated ProjectStatus projects = 5;
 }</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="nats">NATS Command Channel</h2>
+
+<p>The primary transport for remote agent communication. Both the desktop app and the agent connect outbound to Synadia Cloud &mdash; zero inbound ports required on either side. Works behind NAT, firewalls, and across different networks.</p>
+
+<div class="callout callout-success">
+  <p><strong>Zero inbound ports:</strong> Both desktop and agent connect outbound to <code>tls://connect.ngs.global</code>. No port forwarding, no firewall rules, no direct network connectivity between desktop and agent.</p>
+</div>
+
+<h3>AgentTransport Trait</h3>
+
+<p>Defined in <code>crates/berth-core/src/agent_transport.rs</code>. A unified async trait that abstracts the transport layer:</p>
+
+<pre><code>// Both AgentClient (gRPC) and NatsAgentClient implement this trait.
+// Transport is selected per target based on the nats_enabled flag.
+//
+// If target has nats_enabled=true + nats_agent_id → NatsAgentClient
+// Otherwise → AgentClient (gRPC fallback)</code></pre>
+
+<h3>NatsCommandKind</h3>
+
+<p>The <code>NatsCommandKind</code> enum defines 15 command variants sent over NATS:</p>
+
+<table>
+  <tr><th>Variant</th><th>Description</th></tr>
+  <tr><td><code>Health</code></td><td>Agent health check</td></tr>
+  <tr><td><code>Status</code></td><td>CPU, memory, running projects</td></tr>
+  <tr><td><code>Stop</code></td><td>Kill a running project</td></tr>
+  <tr><td><code>Execute</code></td><td>Run code (streaming response)</td></tr>
+  <tr><td><code>Deploy</code></td><td>Deploy code to agent</td></tr>
+  <tr><td><code>GetExecutions</code></td><td>Query execution history</td></tr>
+  <tr><td><code>GetExecutionLogs</code></td><td>Replay stored log lines</td></tr>
+  <tr><td><code>AddSchedule</code></td><td>Create agent-side cron schedule</td></tr>
+  <tr><td><code>RemoveSchedule</code></td><td>Delete a schedule</td></tr>
+  <tr><td><code>ListSchedules</code></td><td>List schedules for a project</td></tr>
+  <tr><td><code>UpgradeDownload</code></td><td>Agent downloads binary from URL + checksum</td></tr>
+  <tr><td><code>DeployChunked</code></td><td>Chunked code deployment over NATS</td></tr>
+  <tr><td><code>Rollback</code></td><td>Rollback to previous agent binary</td></tr>
+  <tr><td><code>Publish</code></td><td>Start a cloudflared tunnel</td></tr>
+  <tr><td><code>Unpublish</code></td><td>Stop a cloudflared tunnel</td></tr>
+</table>
+
+<h3>Subject Hierarchy</h3>
+
+<pre><code>berth.&lt;agent_id&gt;.cmd.&lt;type&gt;         # Commands from desktop → agent
+berth.&lt;agent_id&gt;.resp.&lt;request_id&gt;  # Streaming responses from agent → desktop
+berth.&lt;agent_id&gt;.events             # Store-and-forward events (JetStream)
+berth.&lt;agent_id&gt;.logs               # Log streaming (JetStream)
+berth.&lt;agent_id&gt;.heartbeat          # Periodic heartbeat (JetStream)</code></pre>
+
+<h3>NatsCommandHandler (Agent Side)</h3>
+
+<p>Defined in <code>crates/berth-agent/src/nats_cmd_handler.rs</code>. Subscribes to <code>berth.&lt;agent_id&gt;.cmd.&gt;</code> and dispatches incoming commands to the corresponding <code>PersistentAgentService::do_*()</code> methods. Uses request-reply for simple RPCs and publish+subscribe for streaming operations (Execute, Deploy, Logs).</p>
+
+<h3>NatsAgentClient (Desktop Side)</h3>
+
+<p>Defined in <code>crates/berth-core/src/nats_cmd_client.rs</code>. Implements the <code>AgentTransport</code> trait over NATS. Uses request-reply for unary RPCs and publish+subscribe for streaming responses.</p>
+
+<h3>Transport Selection</h3>
+
+<p>The <code>get_agent_client()</code> function in <code>agent_transport.rs</code> returns a <code>Box&lt;dyn AgentTransport&gt;</code>. If the target has <code>nats_enabled=true</code> and a <code>nats_agent_id</code>, communication routes through NATS. Otherwise, it falls back to direct gRPC.</p>
+
+<div class="callout">
+  <p><strong>Target UI:</strong> The Add Target form includes an optional "NATS Agent ID" field. Targets with NATS enabled show a green "NATS" badge. The <code>update_target_nats</code> Tauri command toggles NATS on/off per target.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="publishing">Public URL Publishing</h2>
+
+<p>Running projects can be published to a public URL via cloudflared tunnels. The architecture is pluggable &mdash; adding a new tunnel provider (ngrok, bore, custom) requires changes to one file only (<code>tunnel.rs</code>).</p>
+
+<h3>TunnelManager</h3>
+
+<p>Defined in <code>crates/berth-core/src/tunnel.rs</code>. Manages the lifecycle of tunnel processes:</p>
+
+<ul>
+  <li><strong>TunnelProvider enum:</strong> Pluggable provider selection. Only <code>cloudflared</code> implemented initially.</li>
+  <li><strong>Spawn:</strong> Runs <code>cloudflared tunnel --url http://127.0.0.1:{port}</code>, parses the public URL from stderr (30s timeout).</li>
+  <li><strong>Stderr drain:</strong> A background task continuously drains cloudflared's stderr to prevent SIGPIPE.</li>
+  <li><strong>Lifecycle:</strong> Active tunnels are kept in memory. Stopping a project also stops its tunnel.</li>
+</ul>
+
+<div class="callout callout-warn">
+  <p><strong>Important:</strong> <code>cloudflared</code> must be installed separately on the agent machine &mdash; it is NOT bundled with the Berth agent binary. Install from GitHub releases or your package manager.</p>
+</div>
+
+<h3>Capability Detection</h3>
+
+<p>The <code>HealthResponse</code> includes a <code>tunnel_providers</code> field (repeated string) that reports which tunnel binaries are installed on the agent. The <code>available_providers()</code> function checks for installed binaries at health-check time.</p>
+
+<h3>Full Stack Integration</h3>
+
+<table>
+  <tr><th>Layer</th><th>Publish</th><th>Unpublish</th></tr>
+  <tr><td>Proto RPCs</td><td><code>Publish(PublishRequest)</code></td><td><code>Unpublish(UnpublishRequest)</code></td></tr>
+  <tr><td>AgentTransport trait</td><td><code>publish()</code></td><td><code>unpublish()</code></td></tr>
+  <tr><td>gRPC client</td><td><code>AgentClient::publish()</code></td><td><code>AgentClient::unpublish()</code></td></tr>
+  <tr><td>NATS client</td><td><code>NatsAgentClient::publish()</code></td><td><code>NatsAgentClient::unpublish()</code></td></tr>
+  <tr><td>NATS command</td><td><code>NatsCommandKind::Publish</code></td><td><code>NatsCommandKind::Unpublish</code></td></tr>
+  <tr><td>Tauri commands</td><td><code>publish_project</code></td><td><code>unpublish_project</code></td></tr>
+  <tr><td>React UI</td><td>PublishPanel (port input + button)</td><td>PublishPanel (green URL bar + Unpublish)</td></tr>
+  <tr><td>MCP tools</td><td><code>berth_publish(project_id, port, provider?)</code></td><td><code>berth_unpublish(project_id)</code></td></tr>
+  <tr><td>CLI</td><td><code>berth publish &lt;project&gt; --port 8080</code></td><td><code>berth unpublish &lt;project&gt;</code></td></tr>
+</table>
+
+<h3>SQLite Storage</h3>
+
+<p>Two columns on the <code>projects</code> table: <code>tunnel_url</code> and <code>tunnel_provider</code>. Updated via <code>set_tunnel_url()</code> and <code>clear_tunnel_url()</code> store methods.</p>
+
+<!-- ============================================================ -->
+<h2 id="self-upgrade">Self-Upgrade</h2>
+
+<p>The agent supports remote self-upgrade using a cloudflared-inspired model: download binary, verify, atomic swap, exit with code 42, systemd restarts with the new binary. Tested end-to-end (v0.1.7 → v0.1.8).</p>
+
+<h3>Upgrade Flow</h3>
+
+<div class="flow-step">
+  <div class="flow-num">1</div>
+  <div class="flow-body"><strong>Download binary</strong> &mdash; Agent downloads the new binary from GitHub releases (via NATS <code>UpgradeDownload</code> command or gRPC <code>Upgrade</code> RPC).</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">2</div>
+  <div class="flow-body"><strong>Verify checksum</strong> &mdash; SHA-256 checksum is verified against the expected value provided by the desktop.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">3</div>
+  <div class="flow-body"><strong>Atomic swap</strong> &mdash; Current binary backed up as <code>berth-agent.old</code>, new binary moved into place via atomic rename.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">4</div>
+  <div class="flow-body"><strong>Exit(42)</strong> &mdash; Agent exits with code 42. systemd sees this as a success exit (via <code>SuccessExitStatus=42</code>) and restarts with the new binary.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">5</div>
+  <div class="flow-body"><strong>Probation</strong> &mdash; 30-second window after startup. Agent performs 3 TCP self-connect checks. Pass → <code>.probation-passed</code> marker file created. Fail → exit(1) → rollback.</div>
+</div>
+
+<h3>systemd Configuration for Upgrade</h3>
+
+<pre><code>SuccessExitStatus=42                              # Prevents rate-limiting on intentional restart
+ExecStopPost=+/usr/local/lib/berth/rollback.sh    # Runs as root — restores old binary on failure</code></pre>
+
+<h3>Rollback</h3>
+
+<ul>
+  <li>If probation fails, the agent exits with code 1.</li>
+  <li>The <code>rollback.sh</code> script (runs as root via <code>+</code> prefix) restores <code>berth-agent.old</code> to <code>berth-agent</code>.</li>
+  <li>Maximum 2 rollback attempts to prevent infinite loops.</li>
+  <li>Backup binary always preserved as <code>berth-agent.old</code>.</li>
+</ul>
+
+<h3>CLI and Remote Upgrade</h3>
+
+<pre><code># CLI self-serve upgrade (on the agent machine)
+berth-agent update [--version X.Y.Z] [--yes]
+
+# Remote upgrade via NATS (desktop sends URL + checksum, agent downloads and swaps)
+NatsCommandKind::UpgradeDownload { url, checksum }</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="env-vars">Environment Variables</h2>
+
+<p>Per-project environment variables are stored on the desktop side only and passed to the agent at runtime. Values are never persisted on the remote agent.</p>
+
+<h3>Architecture</h3>
+
+<ul>
+  <li><strong>Storage:</strong> <code>project_env_vars</code> table in desktop SQLite. Methods: <code>set_env_var()</code>, <code>get_env_vars()</code>, <code>delete_env_var()</code>.</li>
+  <li><strong>Runtime delivery:</strong> Env vars loaded from store and passed via <code>ExecuteParams.env_vars</code> HashMap at execute time.</li>
+  <li><strong>Log masking:</strong> Values of 3 or more characters are replaced with <code>***</code> in all log output, using longest-first matching to prevent partial leaks. Implemented in <code>crates/berth-core/src/env.rs</code>.</li>
+  <li><strong>.env import:</strong> <code>parse_dotenv()</code> in <code>env.rs</code> handles comments, quoted values, and <code>export</code> prefix. Import merges via upsert.</li>
+  <li><strong>All values treated as secrets:</strong> No "secret" vs "non-secret" distinction. Every value is masked.</li>
+</ul>
+
+<h3>Interfaces</h3>
+
+<table>
+  <tr><th>Interface</th><th>Commands / Tools</th></tr>
+  <tr><td>UI</td><td><code>EnvVarsPanel</code> &mdash; key/value editor with eye-toggle reveal, delete button, add form, .env import textarea</td></tr>
+  <tr><td>MCP</td><td><code>berth_env_set(project_id, key, value)</code>, <code>berth_env_get(project_id)</code>, <code>berth_env_delete(project_id, key)</code>, <code>berth_env_import(project_id, content)</code></td></tr>
+  <tr><td>CLI</td><td><code>berth env set &lt;project&gt; &lt;KEY&gt; &lt;VALUE&gt;</code>, <code>berth env list &lt;project&gt;</code>, <code>berth env remove &lt;project&gt; &lt;KEY&gt;</code>, <code>berth env import &lt;project&gt; &lt;.env file&gt;</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="service-mode">Service Mode</h2>
+
+<p>Projects can run in <code>oneshot</code> mode (run once, exit) or <code>service</code> mode (keep running, auto-restart on crash).</p>
+
+<h3>Configuration</h3>
+
+<ul>
+  <li><strong><code>run_mode</code></strong> field on the Project model: <code>oneshot</code> (default) or <code>service</code>.</li>
+  <li><strong><code>service_port</code></strong> field for web services &mdash; used by tunnel publishing to know which port to expose.</li>
+</ul>
+
+<h3>Supervisor Loop</h3>
+
+<p>When <code>run_mode = service</code>, the agent's supervisor loop monitors the spawned process:</p>
+
+<ul>
+  <li><strong>Auto-restart:</strong> On unexpected exit (non-zero or signal), the process is restarted automatically.</li>
+  <li><strong>Exponential backoff:</strong> Restart delay starts at 1 second and doubles on each consecutive failure, capped at 60 seconds. Resets after a period of stable running.</li>
+  <li><strong>Uptime tracking:</strong> Total uptime and restart count are tracked per project.</li>
+  <li><strong>Graceful stop:</strong> The Stop command terminates the supervisor loop, preventing further restarts.</li>
+</ul>
 
 <!-- ============================================================ -->
 <h2 id="data-flow">Data Flow</h2>
@@ -247,70 +492,77 @@
 
 <div class="flow-step">
   <div class="flow-num">2</div>
-  <div class="flow-body"><strong>Look up target</strong> &mdash; Target's gRPC endpoint is retrieved from SQLite: <code>http://{host}:{port}</code>.</div>
+  <div class="flow-body"><strong>Look up target</strong> &mdash; Target's endpoint is retrieved from SQLite. Transport is selected based on <code>nats_enabled</code> flag.</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">3</div>
-  <div class="flow-body"><strong>Connect via gRPC</strong> &mdash; <code>AgentClient::connect(endpoint)</code> establishes an HTTP/2 channel to the remote agent.</div>
+  <div class="flow-body"><strong>Load environment variables</strong> &mdash; Env vars are loaded from the desktop <code>project_env_vars</code> table and included in <code>ExecuteParams</code>.</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">4</div>
-  <div class="flow-body"><strong>Send ExecuteRequest</strong> &mdash; The code bytes, runtime type, and entrypoint filename are sent in a single protobuf message.</div>
+  <div class="flow-body"><strong>Connect via transport</strong> &mdash; <code>get_agent_client()</code> returns the appropriate transport: <code>NatsAgentClient</code> (if NATS enabled) or <code>AgentClient</code> (gRPC fallback).</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">5</div>
-  <div class="flow-body"><strong>Agent writes to deploy dir</strong> &mdash; Code is written to <code>~/.berth/deploys/{project_id}/v{n}/</code>. A versioned directory is created per deployment, persisted in the <code>deployments</code> table.</div>
+  <div class="flow-body"><strong>Send ExecuteRequest</strong> &mdash; The code bytes, runtime type, entrypoint filename, and env vars are sent over the selected transport.</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">6</div>
-  <div class="flow-body"><strong>Agent spawns process</strong> &mdash; Creates an <code>executions</code> row, then runs the command. Every log line is persisted to <code>execution_logs</code> AND streamed over gRPC simultaneously.</div>
+  <div class="flow-body"><strong>Agent writes to deploy dir</strong> &mdash; Code is written to <code>~/.berth/deploys/{project_id}/v{n}/</code>. A versioned directory is created per deployment, persisted in the <code>deployments</code> table.</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">7</div>
-  <div class="flow-body"><strong>Stream logs back</strong> &mdash; stdout/stderr are captured line by line and sent as <code>ExecuteResponse</code> messages over the gRPC stream. Each line is also written to SQLite for later replay via <code>GetExecutionLogs</code>.</div>
+  <div class="flow-body"><strong>Agent spawns process</strong> &mdash; Creates an <code>executions</code> row, injects env vars into the process environment, then runs the command. Every log line is persisted to <code>execution_logs</code> AND streamed over the transport simultaneously. In service mode, the supervisor loop monitors for crashes.</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">8</div>
-  <div class="flow-body"><strong>Tauri emits events</strong> &mdash; Each log line is emitted as a <code>project-log</code> Tauri event. The Terminal component renders them identically to local logs.</div>
+  <div class="flow-body"><strong>Stream logs back</strong> &mdash; stdout/stderr are captured line by line and sent as <code>ExecuteResponse</code> messages. Each line is also written to SQLite for later replay via <code>GetExecutionLogs</code>. Env var values are masked before storage and transmission.</div>
 </div>
 
 <div class="flow-step">
   <div class="flow-num">9</div>
+  <div class="flow-body"><strong>Tauri emits events</strong> &mdash; Each log line is emitted as a <code>project-log</code> Tauri event. The Terminal component renders them identically to local logs.</div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">10</div>
   <div class="flow-body"><strong>Completion</strong> &mdash; When the stream ends, a <code>project-status-change</code> event is emitted (<code>idle</code> or <code>failed</code>), and the run is recorded in SQLite. On the agent side, the <code>executions</code> row is updated with exit code + finished_at, and an <code>execution_completed</code> event is inserted into the events queue.</div>
 </div>
 
 <h3>Sequence Diagram</h3>
 
 <div class="diagram">
-  Mac UI          Tauri Command       AgentClient        berth-agent (Linux)
+  Mac UI          Tauri Command       AgentTransport     berth-agent (Linux)
     │                  │                   │                     │
     │  click Run       │                   │                     │
     ├─────────────────▸│                   │                     │
     │                  │  read code        │                     │
-    │                  │  from disk        │                     │
+    │                  │  load env vars    │                     │
     │                  │                   │                     │
     │                  │  emit "running"   │                     │
     │◂─ ─ ─ ─ ─ ─ ─ ─ │                   │                     │
     │                  │                   │                     │
-    │                  │  connect()        │                     │
+    │                  │  get_client()     │                     │
     │                  ├──────────────────▸│                     │
     │                  │                   │  ExecuteRequest      │
+    │                  │                   │  (+ env vars)        │
     │                  │                   ├────────────────────▸│
-    │                  │                   │                     │ write /tmp/
-    │                  │                   │                     │ spawn python3
+    │                  │                   │  (gRPC or NATS)     │ write deploy dir
+    │                  │                   │                     │ inject env vars
+    │                  │                   │                     │ spawn process
     │                  │                   │                     │
     │                  │                   │  ExecuteResponse[0]  │
-    │                  │                   │◂────────────────────│ stdout line
+    │                  │                   │◂────────────────────│ stdout (masked)
     │                  │  emit project-log │                     │
     │◂─ ─ ─ ─ ─ ─ ─ ─ │◂──────────────────│                     │
     │  render in       │                   │  ExecuteResponse[1]  │
-    │  Terminal        │                   │◂────────────────────│ stdout line
+    │  Terminal        │                   │◂────────────────────│ stdout (masked)
     │◂─ ─ ─ ─ ─ ─ ─ ─ │◂──────────────────│                     │
     │                  │                   │                     │
     │                  │                   │  (stream ends)       │
@@ -373,6 +625,8 @@ User=berth
 ExecStart=/usr/local/bin/berth-agent --port 50051
 Restart=always
 RestartSec=5
+SuccessExitStatus=42
+ExecStopPost=+/usr/local/lib/berth/rollback.sh
 Environment=RUST_LOG=info
 
 [Install]
@@ -398,7 +652,8 @@ berth targets add my-server --host 192.168.1.222 --port 50051
 berth targets ping my-server
 
 # Via UI
-# Targets page → + Add Target → fill name/host/port → Add → Ping</code></pre>
+# Targets page → + Add Target → fill name/host/port → Add → Ping
+# Optional: enter NATS Agent ID for zero-port communication</code></pre>
 
 <h3>Agent CLI Flags</h3>
 
@@ -410,7 +665,7 @@ berth targets ping my-server
 </table>
 
 <div class="callout callout-warn">
-  <p><strong>Important:</strong> Without <code>--listen-all</code>, the agent binds to <code>127.0.0.1</code> only, rejecting remote connections. Always use <code>--listen-all</code> for remote targets.</p>
+  <p><strong>Important:</strong> Without <code>--listen-all</code>, the agent binds to <code>127.0.0.1</code> only, rejecting remote gRPC connections. Always use <code>--listen-all</code> for remote targets. When using NATS transport, the gRPC port is only needed for local health checks.</p>
 </div>
 
 <!-- ============================================================ -->
@@ -419,12 +674,12 @@ berth targets ping my-server
 <h3>Current Security Model</h3>
 
 <div class="callout callout-danger">
-  <p><strong>Warning:</strong> The current implementation uses <strong>plaintext gRPC</strong> (no TLS). This is acceptable for trusted LANs and development, but <strong>must not be used over the internet</strong> without additional protection (VPN, SSH tunnel, or enabling mTLS).</p>
+  <p><strong>Warning:</strong> The gRPC transport uses <strong>plaintext</strong> (no TLS). This is acceptable for trusted LANs and development, but <strong>must not be used over the internet</strong> without additional protection (VPN, SSH tunnel, or enabling mTLS). The NATS transport uses TLS to Synadia Cloud and is safe for use over the internet.</p>
 </div>
 
 <table>
   <tr><th>Layer</th><th>Current</th><th>Planned</th></tr>
-  <tr><td>Transport encryption</td><td><span class="badge badge-planned">Plaintext</span></td><td>mTLS (mutual TLS)</td></tr>
+  <tr><td>Transport encryption</td><td><span class="badge badge-planned">gRPC: Plaintext</span> / <span class="badge badge-done">NATS: TLS</span></td><td>mTLS for gRPC</td></tr>
   <tr><td>Authentication</td><td><span class="badge badge-planned">None</span></td><td>Client certificates</td></tr>
   <tr><td>Authorization</td><td><span class="badge badge-planned">None</span></td><td>Per-project permissions</td></tr>
   <tr><td>Code isolation</td><td>OS user separation</td><td>Container sandboxing</td></tr>
@@ -508,11 +763,12 @@ Channel::from_shared(endpoint)?
 <h3>Security Recommendations</h3>
 
 <ul>
-  <li><strong>LAN only:</strong> Without mTLS, only deploy agents on trusted networks.</li>
-  <li><strong>SSH tunnel:</strong> For internet-facing agents, use <code>ssh -L 50051:localhost:50051 user@server</code> and connect to <code>localhost:50051</code>.</li>
+  <li><strong>Use NATS transport:</strong> NATS uses TLS to Synadia Cloud, providing encrypted communication without additional setup.</li>
+  <li><strong>LAN only for gRPC:</strong> Without mTLS, only use direct gRPC on trusted networks.</li>
+  <li><strong>SSH tunnel:</strong> For internet-facing gRPC agents, use <code>ssh -L 50051:localhost:50051 user@server</code> and connect to <code>localhost:50051</code>.</li>
   <li><strong>Firewall:</strong> Restrict port 50051 to known IPs via <code>ufw</code> or security groups.</li>
   <li><strong>Agent user:</strong> The install script creates a <code>berth</code> system user with no shell — processes run without root privileges.</li>
-  <li><strong>Temp directory cleanup:</strong> Executed code lives in <code>/tmp/berth-agent-{uuid}/</code> directories. These should be periodically cleaned.</li>
+  <li><strong>Env var masking:</strong> All environment variable values are masked in logs automatically. Values are never persisted on the remote agent.</li>
 </ul>
 
 <!-- ============================================================ -->
@@ -524,11 +780,14 @@ Channel::from_shared(endpoint)?
 ├── Cargo.toml               # Deps: berth-core, tonic, clap, sysinfo, rusqlite, chrono, uuid
 ├── build.rs                 # Compiles berth.proto via tonic-build
 └── src/
-    ├── main.rs              # CLI, SQLite init, gRPC server, scheduler loop spawn
+    ├── main.rs              # CLI, SQLite init, gRPC server, NATS handler, scheduler loop spawn
     ├── service.rs           # Legacy re-export (AgentServiceImpl from berth-core)
-    ├── persistent_service.rs # PersistentAgentService (14 RPCs with SQLite persistence)
+    ├── persistent_service.rs # PersistentAgentService (16 RPCs with SQLite persistence)
     ├── agent_store.rs       # AgentStore: SQLite at ~/.berth/agent.db (5 tables)
-    └── agent_scheduler.rs   # Independent scheduler (tick every 30s, runs cron jobs)</code></pre>
+    ├── agent_scheduler.rs   # Independent scheduler (tick every 30s, runs cron jobs)
+    ├── nats_cmd_handler.rs  # NATS command subscriber and dispatcher
+    ├── nats_publisher.rs    # NATS event/log/heartbeat publisher
+    └── update.rs            # CLI `berth-agent update` self-upgrade command</code></pre>
 
 <h3>Process Management</h3>
 
@@ -541,7 +800,8 @@ Channel::from_shared(endpoint)?
 
 // On Execute: insert(project_id, child)
 // On Stop:    remove(project_id) → abort_handle.abort()
-// On exit:    remove(project_id) automatically</code></pre>
+// On exit:    remove(project_id) automatically
+// Service mode: supervisor loop re-inserts on crash (with backoff)</code></pre>
 
 <h3>Runtime Support</h3>
 
@@ -613,9 +873,9 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 ├─────────────────────────────────────────────────────────┤
 │  ● Running   0:15          python   main.py             │
 ├─────────────────────────────────────────────────────────┤
-│  Target: [● local] [● linux-server] [○ staging]         │
+│  Target: [● local] [● linux-server NATS] [○ staging]    │
 ├─────────────────────────────────────────────────────────┤
-│  [▶ Run]  [■ Stop]                                      │
+│  [▶ Run]  [■ Stop]  [🔑 Env]  [🌐 Publish]              │
 ├─────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────┐    │
 │  │ $ Hello from setiserver!                        │    │
@@ -625,13 +885,14 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 │  └─────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘
 
-● = green (online)    ○ = gray (unknown)    ● = red (offline)</div>
+● = green (online)    ○ = gray (unknown)    ● = red (offline)
+NATS = green badge on NATS-enabled targets</div>
 
 <h3>Tauri Commands</h3>
 
 <table>
   <tr><th>Command</th><th>Parameters</th><th>Action</th></tr>
-  <tr><td><code>run_project</code></td><td><code>id</code>, <code>target: Option&lt;String&gt;</code></td><td>Read code, send to agent (local UDS or remote TCP), stream logs via events</td></tr>
+  <tr><td><code>run_project</code></td><td><code>id</code>, <code>target: Option&lt;String&gt;</code></td><td>Read code, load env vars, send to agent (local UDS or remote TCP/NATS), stream logs via events</td></tr>
   <tr><td><code>stop_project</code></td><td><code>id</code>, <code>target: Option&lt;String&gt;</code></td><td>Connect to agent, call Stop RPC</td></tr>
   <tr><td><code>ping_target</code></td><td><code>id</code></td><td>Health check, update target status in DB</td></tr>
   <tr><td><code>list_targets</code></td><td>&mdash;</td><td>List all configured targets from SQLite</td></tr>
@@ -645,7 +906,7 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 
 <table>
   <tr><th>Event</th><th>Payload</th><th>Source</th></tr>
-  <tr><td><code>project-log</code></td><td><code>{ project_id, stream, text, timestamp }</code></td><td>Local: process stdout/stderr<br>Remote: gRPC stream</td></tr>
+  <tr><td><code>project-log</code></td><td><code>{ project_id, stream, text, timestamp }</code></td><td>Local: process stdout/stderr<br>Remote: gRPC/NATS stream</td></tr>
   <tr><td><code>project-status-change</code></td><td><code>{ project_id, status, exit_code }</code></td><td>Local: process exit<br>Remote: stream completion</td></tr>
 </table>
 
@@ -655,14 +916,14 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 <table>
   <tr><th>Limitation</th><th>Impact</th><th>Workaround</th></tr>
   <tr>
-    <td>No TLS in transit</td>
-    <td>Code and logs are transmitted in plaintext</td>
-    <td>Use on trusted LAN or SSH tunnel. mTLS infra built but not wired.</td>
+    <td>No TLS for gRPC transport</td>
+    <td>Code and logs are transmitted in plaintext over gRPC</td>
+    <td>Use NATS transport (TLS to Synadia Cloud) or SSH tunnel. mTLS infra built but not wired.</td>
   </tr>
   <tr>
     <td>No authentication</td>
     <td>Anyone who can reach port 50051 can execute code</td>
-    <td>Firewall rules, bind to localhost + SSH tunnel</td>
+    <td>Firewall rules, bind to localhost + SSH tunnel, or use NATS transport</td>
   </tr>
   <tr>
     <td>No execution timeout</td>
@@ -673,6 +934,11 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
     <td>No container sandboxing</td>
     <td>Code runs as the agent's OS user, no isolation</td>
     <td>Run agent as a dedicated low-privilege user</td>
+  </tr>
+  <tr>
+    <td>cloudflared optional</td>
+    <td>Public URL publishing requires cloudflared installed on agent</td>
+    <td>Install manually: <code>curl</code> from GitHub releases or package manager</td>
   </tr>
 </table>
 
@@ -692,7 +958,7 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 
 <table>
   <tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
-  <tr><td>gRPC agent server (14 RPCs)</td><td><span class="badge badge-done">Done</span></td><td>Health, Status, Deploy, Execute, Stop, StreamLogs + 8 persistent RPCs</td></tr>
+  <tr><td>gRPC agent server (16 RPCs)</td><td><span class="badge badge-done">Done</span></td><td>Health, Status, Deploy, Execute, Stop, StreamLogs + 8 persistent RPCs + Publish/Unpublish</td></tr>
   <tr><td>SQLite persistence</td><td><span class="badge badge-done">Done</span></td><td><code>~/.berth/agent.db</code> — 5 tables, survives restarts</td></tr>
   <tr><td>Execution history + logs</td><td><span class="badge badge-done">Done</span></td><td>Persistent, replayable via GetExecutions/GetExecutionLogs</td></tr>
   <tr><td>Store-and-forward events</td><td><span class="badge badge-done">Done</span></td><td>Agent queues events, app polls via GetEvents/AckEvents</td></tr>
@@ -708,12 +974,18 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
   <tr><td>Install script + systemd</td><td><span class="badge badge-done">Done</span></td><td>systemd service with auto-restart on Linux</td></tr>
   <tr><td>mDNS LAN discovery</td><td><span class="badge badge-done">Done</span></td><td><code>_berth._tcp.local.</code> via mdns-sd</td></tr>
   <tr><td>TLS cert generation</td><td><span class="badge badge-done">Done</span></td><td>CA + server/client certs via rcgen</td></tr>
+  <tr><td>NATS command channel</td><td><span class="badge badge-done">Done</span></td><td>Zero inbound ports, works behind NAT. AgentTransport trait abstracts gRPC vs NATS</td></tr>
+  <tr><td>Self-upgrade (cloudflared model)</td><td><span class="badge badge-done">Done</span></td><td>exit(42), 30s probation, auto-rollback. Tested v0.1.7 → v0.1.8</td></tr>
+  <tr><td>Public URL publishing</td><td><span class="badge badge-done">Done</span></td><td>cloudflared tunnels, pluggable TunnelProvider enum. Tested end-to-end</td></tr>
+  <tr><td>Tunnel capability detection</td><td><span class="badge badge-done">Done</span></td><td>Health response reports available tunnel providers (installed binaries)</td></tr>
+  <tr><td>Environment variables</td><td><span class="badge badge-done">Done</span></td><td>Desktop-side storage, passed at runtime, log masking (values ≥ 3 chars → ***)</td></tr>
+  <tr><td>Service mode</td><td><span class="badge badge-done">Done</span></td><td>Auto-restart with exponential backoff (1s → 60s cap), uptime tracking, restart count</td></tr>
   <tr><td>Activate mTLS</td><td><span class="badge badge-planned">Planned</span></td><td>Wire tls.rs into agent + client</td></tr>
   <tr><td>Container sandboxing</td><td><span class="badge badge-planned">Planned</span></td><td>OCI/Docker isolation per project</td></tr>
 </table>
 
 <p style="margin-top: 3rem; color: var(--muted); font-size: 0.85rem; text-align: center;">
-  Berth Remote Agent Documentation &mdash; Generated March 2026
+  Berth Remote Agent Documentation &mdash; Updated March 2026
 </p>
 
 </div>

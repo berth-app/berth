@@ -387,6 +387,13 @@ pub fn run() {
             upgrade_agent,
             rollback_agent,
             upgrade_all_agents,
+            set_project_run_mode,
+            publish_project,
+            unpublish_project,
+            get_env_vars,
+            set_env_var,
+            delete_env_var,
+            import_env_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Berth");

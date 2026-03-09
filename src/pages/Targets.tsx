@@ -81,6 +81,20 @@ function StatsPanel({ stats }: { stats: AgentStats }) {
             </span>
           </div>
         )}
+        <div className="flex justify-between">
+          <span className="text-xs text-berth-text-secondary">Tunnels</span>
+          <span className="text-xs">
+            {stats.tunnel_providers.length > 0 ? (
+              stats.tunnel_providers.map((p) => (
+                <span key={p} className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-berth-success/15 text-berth-success">
+                  {p}
+                </span>
+              ))
+            ) : (
+              <span className="text-berth-text-tertiary">None</span>
+            )}
+          </span>
+        </div>
       </div>
       {stats.running_projects.length > 0 && (
         <div className="mt-2 pt-2 border-t border-berth-border-subtle">

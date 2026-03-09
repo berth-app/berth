@@ -38,6 +38,12 @@ enum Commands {
         /// Target to run on (default: local)
         #[arg(long, default_value = "local")]
         target: String,
+        /// Run mode: "oneshot" (default) or "service" (auto-restart on crash)
+        #[arg(long, default_value = "oneshot")]
+        mode: String,
+        /// Port the service listens on (informational, for service mode)
+        #[arg(long, default_value = "0")]
+        port: u16,
     },
     /// Stop a running project
     Stop {
@@ -92,6 +98,33 @@ enum Commands {
     Schedule {
         #[command(subcommand)]
         action: ScheduleActions,
+    },
+    /// Publish a running project to a public URL
+    Publish {
+        /// Project name or UUID
+        project: String,
+        /// Local port the service listens on
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// Tunnel provider
+        #[arg(long, default_value = "cloudflared")]
+        provider: String,
+        /// Target to publish on
+        #[arg(long, default_value = "local")]
+        target: String,
+    },
+    /// Stop the public URL for a project
+    Unpublish {
+        /// Project name or UUID
+        project: String,
+        /// Target
+        #[arg(long, default_value = "local")]
+        target: String,
+    },
+    /// Manage environment variables
+    Env {
+        #[command(subcommand)]
+        action: EnvActions,
     },
 }
 
@@ -151,6 +184,38 @@ enum ScheduleActions {
     },
     /// Run one scheduler tick (execute any due schedules)
     Tick,
+}
+
+#[derive(Subcommand)]
+enum EnvActions {
+    /// Set an environment variable
+    Set {
+        /// Project name or UUID
+        project: String,
+        /// Variable name
+        key: String,
+        /// Variable value
+        value: String,
+    },
+    /// List environment variables for a project
+    List {
+        /// Project name or UUID
+        project: String,
+    },
+    /// Remove an environment variable
+    Remove {
+        /// Project name or UUID
+        project: String,
+        /// Variable name
+        key: String,
+    },
+    /// Import variables from a .env file
+    Import {
+        /// Project name or UUID
+        project: String,
+        /// Path to .env file
+        file: String,
+    },
 }
 
 fn get_store() -> anyhow::Result<ProjectStore> {
@@ -254,6 +319,8 @@ async fn main() -> anyhow::Result<()> {
             };
             let working_dir = if is_remote { "/tmp" } else { &project.path };
 
+            let env_vars = store.get_env_vars(project.id).unwrap_or_default();
+
             let client = get_agent_client(&target).await?;
             let mut stream = client
                 .execute_streaming(
@@ -263,7 +330,7 @@ async fn main() -> anyhow::Result<()> {
                     working_dir,
                     code.as_deref(),
                     None,
-                    std::collections::HashMap::new(),
+                    env_vars,
                 )
                 .await?;
 
@@ -283,7 +350,7 @@ async fn main() -> anyhow::Result<()> {
             println!("\nExit code: {}", exit_code);
         }
 
-        Commands::Run { project, target } => {
+        Commands::Run { project, target, mode, port } => {
             let store = get_store()?;
             let p = find_project(&store, &project)?;
             let entrypoint = p
@@ -301,23 +368,28 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 None
             };
-            let working_dir = if is_remote { "/tmp" } else { &p.path };
+            let working_dir = if is_remote { "/tmp".to_string() } else { p.path.clone() };
+
+            let env_vars = store.get_env_vars(p.id).unwrap_or_default();
 
             let client = get_agent_client(&target).await?;
-            let mut stream = client
-                .execute_streaming(
-                    &p.id.to_string(),
-                    &runtime_str,
-                    entrypoint,
-                    working_dir,
-                    code.as_deref(),
-                    None,
-                    std::collections::HashMap::new(),
-                )
-                .await?;
+            use berth_core::agent_transport::{ExecuteParams, AgentTransport};
+            let params = ExecuteParams {
+                project_id: p.id.to_string(),
+                runtime: runtime_str,
+                entrypoint: entrypoint.to_string(),
+                working_dir,
+                code,
+                image_tag: None,
+                env_vars,
+                run_mode: mode,
+                service_port: port,
+            };
+            let transport: &dyn AgentTransport = &client;
+            let mut rx = transport.execute_streaming(&params).await?;
 
             let mut exit_code = 0i32;
-            while let Some(msg) = stream.message().await? {
+            while let Some(msg) = rx.recv().await {
                 if msg.is_final {
                     exit_code = msg.exit_code;
                     continue;
@@ -357,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("No entrypoint"))?;
 
             let runtime_str = format!("{:?}", p.runtime).to_lowercase();
+            let env_vars = store.get_env_vars(p.id).unwrap_or_default();
 
             let client = get_agent_client(&target).await?;
             let mut stream = client
@@ -367,7 +440,7 @@ async fn main() -> anyhow::Result<()> {
                     &p.path,
                     None,
                     None,
-                    std::collections::HashMap::new(),
+                    env_vars,
                 )
                 .await?;
 
@@ -532,6 +605,73 @@ async fn main() -> anyhow::Result<()> {
                             println!("Connection failed: {}", e);
                         }
                     }
+                }
+            }
+        }
+
+        Commands::Publish { project, port, provider, target } => {
+            let store = get_store()?;
+            let p = find_project(&store, &project)?;
+            let client = get_agent_client(&target).await?;
+            let (success, url, used_provider, message) = client
+                .publish(&p.id.to_string(), port, &provider, "")
+                .await?;
+            if success {
+                let _ = store.set_tunnel_url(p.id, &url, &used_provider);
+                println!("Published: {}", url);
+                println!("Provider: {}", used_provider);
+            } else {
+                eprintln!("Failed: {}", message);
+            }
+        }
+
+        Commands::Unpublish { project, target } => {
+            let store = get_store()?;
+            let p = find_project(&store, &project)?;
+            let client = get_agent_client(&target).await?;
+            let (success, message) = client.unpublish(&p.id.to_string()).await?;
+            if success {
+                let _ = store.clear_tunnel_url(p.id);
+                println!("Unpublished");
+            } else {
+                eprintln!("Failed: {}", message);
+            }
+        }
+
+        Commands::Env { action } => {
+            let store = get_store()?;
+            match action {
+                EnvActions::Set { project, key, value } => {
+                    let p = find_project(&store, &project)?;
+                    store.set_env_var(p.id, &key, &value)?;
+                    println!("Set {}=*** on '{}'", key, p.name);
+                }
+                EnvActions::List { project } => {
+                    let p = find_project(&store, &project)?;
+                    let vars = store.get_env_vars(p.id)?;
+                    if vars.is_empty() {
+                        println!("No environment variables for '{}'", p.name);
+                    } else {
+                        for key in vars.keys() {
+                            println!("{}=***", key);
+                        }
+                    }
+                }
+                EnvActions::Remove { project, key } => {
+                    let p = find_project(&store, &project)?;
+                    store.delete_env_var(p.id, &key)?;
+                    println!("Removed {} from '{}'", key, p.name);
+                }
+                EnvActions::Import { project, file } => {
+                    let p = find_project(&store, &project)?;
+                    let content = std::fs::read_to_string(&file)
+                        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", file, e))?;
+                    let vars = berth_core::env::parse_dotenv(&content);
+                    let count = vars.len();
+                    for (key, value) in &vars {
+                        store.set_env_var(p.id, key, value)?;
+                    }
+                    println!("Imported {} variable{} into '{}'", count, if count != 1 { "s" } else { "" }, p.name);
                 }
             }
         }

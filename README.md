@@ -8,21 +8,26 @@ Berth is a Tauri-based macOS app that lets developers deploy and manage code -- 
 ## Features
 
 - **Paste & Deploy** -- Paste code, pick a runtime, hit Run. Zero config.
-- **Remote Agents** -- Deploy a single Rust binary to any Linux server. Persistent execution history, agent-side scheduling, store-and-forward events, remote self-upgrade. Communicates via NATS — no direct network connection or open ports needed.
-- **MCP Server** -- 17 tools via JSON-RPC 2.0. Claude Code can deploy, run, stop, and monitor projects programmatically.
+- **Environment Variables** -- Per-project env var storage with .env import, secret masking in logs.
+- **Service Mode** -- Keep API servers, bots, and workers running. Auto-restart on crash with exponential backoff.
+- **Docker Compose** -- Drop in a docker-compose.yml. Berth detects it, runs all services, streams logs.
+- **Public URLs** -- Click "Publish" on any running service → instant public URL. Pluggable providers: Cloudflare Quick Tunnel (free), ngrok, or custom command. Berth orchestrates, you pick the tunnel.
+- **Remote Agents** -- Deploy a single Rust binary to any Linux server. Persistent execution history, agent-side scheduling, store-and-forward events. Communicates via NATS — no direct network connection or open ports needed.
+- **Agent Self-Upgrade** -- Cloudflared-model upgrade: atomic binary swap, exit(42), systemd restart, 30s probation with automatic rollback.
+- **MCP Server** -- 19 tools via JSON-RPC 2.0. Claude Code can deploy, run, stop, publish, and monitor projects programmatically.
 - **CLI** -- Full command parity with the GUI and MCP server.
-- **Runtime Detection** -- Auto-detects Python, Node, Go, Rust, Shell. Parses requirements.txt, package.json, go.mod, Cargo.toml.
+- **Runtime Detection** -- Auto-detects Python, Node, Go, Rust, Shell, Docker Compose. Parses requirements.txt, package.json, go.mod, Cargo.toml, docker-compose.yml.
 - **Scheduling** -- Cron-like scheduling (`@every 5m`, `@hourly`, `30 9 * * *`). Agent runs jobs independently even when the app is offline.
 - **Log Streaming** -- Real-time stdout/stderr via xterm.js terminal with ANSI color support.
 
 ## Architecture
 
 ```
-mac-rundeck/
+mac-berth/
   src-tauri/         Tauri 2.0 app (Rust backend + React frontend)
   crates/
-    berth-core/     Shared Rust library (projects, runtime, executor, gRPC client, SQLite)
-    berth-agent/    Persistent execution agent (14 gRPC RPCs, SQLite, scheduler)
+    berth-core/     Shared Rust library (projects, runtime, executor, gRPC client, SQLite, tunnel)
+    berth-agent/    Persistent execution agent (16 gRPC RPCs, SQLite, scheduler)
     berth-cli/      CLI interface
     berth-mcp/      MCP server (stdio transport)
   proto/             gRPC protobuf definitions
@@ -91,6 +96,20 @@ berth targets ping my-server
 # Or use the Targets page in the GUI
 ```
 
+### Publish a Service to a Public URL
+
+```bash
+# Prerequisite: brew install cloudflared
+
+# Via CLI
+berth publish my-api --port 8080
+# Published: https://random-words.trycloudflare.com
+
+berth unpublish my-api
+
+# Or click "Publish" in the project toolbar in the GUI
+```
+
 ### MCP Integration (Claude Code)
 
 Add to your `.mcp.json`:
@@ -112,7 +131,7 @@ Then in Claude Code: "Deploy this script to my Linux server using Berth"
 The remote agent (`berth-agent`) is a persistent Rust binary with:
 
 - **SQLite store** (`~/.berth/agent.db`) -- 5 tables: deployments, executions, execution_logs, events, schedules
-- **14 gRPC RPCs** -- Deploy, Execute, Stop, Health, Status, StreamLogs, GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade
+- **16 gRPC RPCs** -- Deploy, Execute, Stop, Health, Status, StreamLogs, GetExecutions, GetExecutionLogs, GetEvents, AckEvents, AddSchedule, RemoveSchedule, ListSchedules, Upgrade, Publish, Unpublish
 - **NATS command channel** -- All RPCs available over NATS relay. Desktop sends commands to `berth.<agent_id>.cmd.<type>`, agent responds via `berth.<agent_id>.resp.<request_id>`. Zero inbound ports required.
 - **Agent-side scheduler** -- Runs cron jobs every 30s, even when the app is disconnected. Triggers macOS notifications on the desktop via NATS events.
 - **Store-and-forward events** -- Agent queues events, app polls when connected
@@ -138,9 +157,26 @@ See [docs/remote-agent.html](docs/remote-agent.html) for full technical referenc
 - [Technical Documentation](docs/index.html) -- Architecture, database schema, Tauri commands, protobuf, MCP tools
 - [Remote Agent Reference](docs/remote-agent.html) -- Agent architecture, gRPC protocol, deployment, security
 
+## Authentication & Pricing
+
+Berth uses a **progressive identity model** — no account required for local use.
+
+| Tier | Price | What you get |
+|------|-------|-------------|
+| **Anonymous** | Free | Full local execution, direct gRPC agents, full MCP, browse templates |
+| **Free** | $0 (signup) | Anonymous + settings sync (cloud backup) |
+| **Pro** | $12/mo | Free + NATS relay (10 agents), cloud targets, webhooks, 3 shared projects, template deploy |
+| **Team** | $25/user/mo | Pro + unlimited NATS agents, unlimited sharing |
+
+- **Auth:** Email magic links via Supabase (Raycast model — no passwords)
+- **Payments:** Stripe Checkout + Customer Portal
+- **MCP is free on all tiers** — AI-agent adoption is the strategic moat
+
+See [DRF-012](reasoning/drf/012-auth-model.yaml) for full auth model design.
+
 ## Status
 
-Phases 1-3 complete. Phase 4 in progress — NATS command channel, macOS notifications (manual + scheduled + remote), execution history, theme system, in-app code editor done. AWS Lambda target is next.
+Phases 1-3 complete. Phase 4 in progress — focus shifted from cloud targets to real-workload support. Done: NATS command channel, macOS notifications, execution history, theme system, in-app code editor, agent self-upgrade, **public URL publishing via cloudflared tunnels** (tested end-to-end). Next: per-project env vars, service mode, Docker Compose support.
 
 ## License
 

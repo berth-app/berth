@@ -90,6 +90,7 @@ impl AgentTransport for NatsAgentClient {
                 os,
                 arch,
                 probation_status,
+                tunnel_providers,
             } => Ok(AgentHealth {
                 version,
                 status,
@@ -99,6 +100,7 @@ impl AgentTransport for NatsAgentClient {
                 os: if os.is_empty() { None } else { Some(os) },
                 arch: if arch.is_empty() { None } else { Some(arch) },
                 probation_status,
+                tunnel_providers,
             }),
             _ => anyhow::bail!("Unexpected response type for health"),
         }
@@ -165,6 +167,8 @@ impl AgentTransport for NatsAgentClient {
                 image_tag: params.image_tag.clone(),
                 env_vars: params.env_vars.clone(),
                 container_name: None,
+                run_mode: params.run_mode.clone(),
+                service_port: params.service_port,
             },
         };
 
@@ -560,6 +564,50 @@ impl AgentTransport for NatsAgentClient {
                 Ok((success, restored_version, message))
             }
             _ => anyhow::bail!("Unexpected response type for rollback"),
+        }
+    }
+
+    async fn publish(
+        &self,
+        project_id: &str,
+        port: u16,
+        provider: &str,
+        provider_config: &str,
+    ) -> Result<(bool, String, String, String)> {
+        let resp = self
+            .request_reply(
+                "publish",
+                NatsCommandKind::Publish {
+                    project_id: project_id.to_string(),
+                    port: port as u32,
+                    provider: provider.to_string(),
+                    provider_config: provider_config.to_string(),
+                },
+            )
+            .await?;
+        match resp.body {
+            NatsResponseBody::Publish {
+                success,
+                url,
+                provider,
+                message,
+            } => Ok((success, url, provider, message)),
+            _ => anyhow::bail!("Unexpected response type for publish"),
+        }
+    }
+
+    async fn unpublish(&self, project_id: &str) -> Result<(bool, String)> {
+        let resp = self
+            .request_reply(
+                "unpublish",
+                NatsCommandKind::Unpublish {
+                    project_id: project_id.to_string(),
+                },
+            )
+            .await?;
+        match resp.body {
+            NatsResponseBody::Unpublish { success, message } => Ok((success, message)),
+            _ => anyhow::bail!("Unexpected response type for unpublish"),
         }
     }
 }

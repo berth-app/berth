@@ -78,6 +78,7 @@
   <a href="#design-tokens">Design Tokens</a>
   <a href="#protobuf">Protobuf</a>
   <a href="#mcp">MCP Server</a>
+  <a href="#publish">Publishing</a>
   <a href="#cli">CLI</a>
   <a href="#file-map">File Map</a>
   <a href="#roadmap">Roadmap</a>
@@ -478,6 +479,8 @@ impl ProjectStore {
   <tr><td><code>remove_schedule</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
   <tr><td><code>toggle_schedule</code></td><td><code>id: String, enabled: bool</code></td><td><code>()</code></td><td>No</td></tr>
   <tr><td><code>list_execution_logs</code></td><td><code>projectId, limit</code></td><td><code>Vec&lt;ExecutionLog&gt;</code></td><td>No</td></tr>
+  <tr><td><code>publish_project</code></td><td><code>id, port, provider?, target?</code></td><td><code>PublishResult</code></td><td>No</td></tr>
+  <tr><td><code>unpublish_project</code></td><td><code>id, target?</code></td><td><code>UnpublishResult</code></td><td>No</td></tr>
 </table>
 
 <h3>Managed State</h3>
@@ -685,6 +688,8 @@ service AgentService {
   <tr><td><code>berth_schedule_add</code></td><td>Add a cron-like schedule to a project</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td><code>berth_schedule_list</code></td><td>List all schedules</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td><code>berth_schedule_remove</code></td><td>Remove a schedule by UUID</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_publish</code></td><td>Publish a running project to a public URL via tunnel (cloudflared)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_unpublish</code></td><td>Stop the public URL tunnel for a project</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
 <p>Transport: stdio (primary, for Claude Code). HTTP via axum planned for Phase 3.</p>
@@ -698,6 +703,83 @@ service AgentService {
     protocol.rs   -- JSON-RPC 2.0 types, MCP types (InitializeResult, Tool, CallToolResult)
     server.rs     -- Stdio loop: read line -> parse JSON-RPC -> dispatch -> write response
     tools.rs      -- Tool definitions (list_tools) + handlers (call_tool)</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="publish">Public URL Publishing <span class="badge badge-done">Done</span></h2>
+
+<p>Berth can publish any running project to a public URL via pluggable tunnel providers. Zero Berth-side infrastructure &mdash; tunnels run on the user's machine.</p>
+
+<h3>Architecture</h3>
+<div class="diagram">
+User clicks "Publish" (port 8080)
+        |
+   Tauri command: publish_project
+        |
+   AgentTransport::publish()
+        |          |
+     [gRPC]     [NATS]
+        |          |
+   AgentService / PersistentAgentService
+        |
+   TunnelManager::start()
+        |
+   cloudflared tunnel --url http://127.0.0.1:8080
+        |
+   Parse stderr for trycloudflare.com URL
+        |
+   Return URL to UI &rarr; copy to clipboard
+</div>
+
+<h3>Key Components</h3>
+<table>
+  <tr><th>File</th><th>Role</th></tr>
+  <tr><td><code>crates/berth-core/src/tunnel.rs</code></td><td>TunnelManager, TunnelProvider enum, cloudflared spawn + URL parsing, available_providers()</td></tr>
+  <tr><td><code>crates/berth-core/src/agent_service.rs</code></td><td>Local agent publish/unpublish gRPC handlers</td></tr>
+  <tr><td><code>crates/berth-agent/src/persistent_service.rs</code></td><td>Remote agent do_publish/do_unpublish + tunnel lifecycle</td></tr>
+  <tr><td><code>crates/berth-core/src/agent_transport.rs</code></td><td>publish()/unpublish() trait methods</td></tr>
+  <tr><td><code>crates/berth-core/src/nats_relay.rs</code></td><td>Publish/Unpublish NatsCommandKind + NatsResponseBody variants</td></tr>
+  <tr><td><code>crates/berth-agent/src/nats_cmd_handler.rs</code></td><td>NATS Publish/Unpublish command dispatch</td></tr>
+  <tr><td><code>proto/berth.proto</code></td><td>Publish/Unpublish RPCs + messages, tunnel_providers in HealthResponse</td></tr>
+  <tr><td><code>src-tauri/src/commands.rs</code></td><td>publish_project/unpublish_project Tauri commands</td></tr>
+  <tr><td><code>src/pages/ProjectDetail.tsx</code></td><td>PublishPanel component (port input, publish/unpublish, URL display)</td></tr>
+  <tr><td><code>crates/berth-mcp/src/tools.rs</code></td><td>berth_publish, berth_unpublish MCP tools</td></tr>
+  <tr><td><code>crates/berth-cli/src/main.rs</code></td><td>berth publish/unpublish CLI commands</td></tr>
+</table>
+
+<h3>Provider Design (Pluggable)</h3>
+<p>Adding a new provider (e.g. ngrok) requires changes to <strong>one file only</strong>: <code>tunnel.rs</code>.</p>
+<ol>
+  <li>Add variant to <code>TunnelProvider</code> enum</li>
+  <li>Add match arm in <code>TunnelManager::start()</code></li>
+  <li>Implement <code>start_ngrok()</code> with provider-specific URL parsing</li>
+  <li>Add detection in <code>available_providers()</code></li>
+</ol>
+<p>No proto changes, no transport changes, no new Tauri commands needed.</p>
+
+<h3>Proto Messages</h3>
+<pre><code>rpc Publish(PublishRequest) returns (PublishResponse);
+rpc Unpublish(UnpublishRequest) returns (UnpublishResponse);
+
+message PublishRequest {
+  string project_id = 1;
+  uint32 port = 2;
+  string provider = 3;       // "cloudflared" (default)
+  string provider_config = 4; // reserved for future provider options
+}
+message PublishResponse {
+  bool success = 1;
+  string url = 2;            // e.g. "https://random-words.trycloudflare.com"
+  string message = 3;
+  string provider = 4;
+}
+// HealthResponse includes: repeated string tunnel_providers = 9;</code></pre>
+
+<h3>Database</h3>
+<pre><code>-- Added columns to projects table:
+ALTER TABLE projects ADD COLUMN tunnel_url TEXT;
+ALTER TABLE projects ADD COLUMN tunnel_provider TEXT;
+
+-- Methods: store.set_tunnel_url(), store.clear_tunnel_url()</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="cli">CLI <span class="badge badge-done">Done</span></h2>
@@ -719,13 +801,15 @@ berth schedule list                           # List all schedules
 berth schedule remove &lt;id&gt;                    # Remove a schedule
 berth schedule enable &lt;id&gt;                    # Enable a schedule
 berth schedule disable &lt;id&gt;                   # Disable a schedule
-berth schedule tick                           # Run one scheduler tick</code></pre>
+berth schedule tick                           # Run one scheduler tick
+berth publish &lt;project&gt; --port 8080           # Publish via cloudflared tunnel
+berth unpublish &lt;project&gt;                     # Stop the public URL tunnel</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="file-map">File Map</h2>
 
 <div class="diagram">
-mac-rundeck/
+mac-berth/
 +-- Cargo.toml                  <span class="muted">Workspace manifest</span>
 +-- Cargo.lock
 +-- package.json                <span class="muted">React frontend deps</span>
@@ -779,6 +863,10 @@ mac-rundeck/
 |   |       +-- local_agent.rs  <span class="muted">Embedded agent bootstrap + lockfile coordination</span>
 |   |       +-- tls.rs          <span class="muted">mTLS certificate generation (rcgen)</span>
 |   |       +-- credentials.rs  <span class="muted">Keychain credential storage (security-framework)</span>
+|   |       +-- tunnel.rs       <span class="muted">Pluggable tunnel manager (cloudflared, TunnelProvider trait)</span>
+|   |       +-- nats_relay.rs   <span class="muted">NATS message types (commands, responses, events)</span>
+|   |       +-- nats_cmd_client.rs <span class="muted">Desktop-side NATS command client</span>
+|   |       +-- agent_transport.rs <span class="muted">AgentTransport trait (gRPC + NATS unified)</span>
 |   |
 |   +-- berth-mcp/             <span class="badge badge-done">Done</span>
 |   |   +-- src/
@@ -786,7 +874,7 @@ mac-rundeck/
 |   |       +-- lib.rs          <span class="muted">Module exports</span>
 |   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
 |   |       +-- server.rs       <span class="muted">Stdio server loop</span>
-|   |       +-- tools.rs        <span class="muted">17 tool definitions + handlers</span>
+|   |       +-- tools.rs        <span class="muted">19 tool definitions + handlers (incl. publish/unpublish)</span>
 |   |
 |   +-- berth-agent/           <span class="badge badge-done">Done</span>
 |   |   +-- src/

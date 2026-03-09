@@ -283,6 +283,116 @@ pub fn list_tools() -> Vec<Tool> {
                 "required": []
             }),
         },
+        Tool {
+            name: "berth_publish".into(),
+            description: "Publish a running project to a public URL via tunnel (cloudflared). The project must be running and listening on a port.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    },
+                    "port": {
+                        "type": "integer",
+                        "description": "Local port the service listens on"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "Tunnel provider (default: cloudflared)",
+                        "default": "cloudflared",
+                        "enum": ["cloudflared"]
+                    }
+                },
+                "required": ["project_id", "port"]
+            }),
+        },
+        Tool {
+            name: "berth_unpublish".into(),
+            description: "Stop the public URL tunnel for a project.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    }
+                },
+                "required": ["project_id"]
+            }),
+        },
+        Tool {
+            name: "berth_env_set".into(),
+            description: "Set an environment variable for a project. Variables are passed to the process at runtime.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Variable name (e.g. API_KEY)"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Variable value"
+                    }
+                },
+                "required": ["project_id", "key", "value"]
+            }),
+        },
+        Tool {
+            name: "berth_env_get".into(),
+            description: "Get all environment variables for a project.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    }
+                },
+                "required": ["project_id"]
+            }),
+        },
+        Tool {
+            name: "berth_env_delete".into(),
+            description: "Delete an environment variable from a project.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Variable name to delete"
+                    }
+                },
+                "required": ["project_id", "key"]
+            }),
+        },
+        Tool {
+            name: "berth_env_import".into(),
+            description: "Import environment variables from .env format. Merges with existing variables.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project UUID or name"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": ".env file content (KEY=VALUE lines)"
+                    }
+                },
+                "required": ["project_id", "content"]
+            }),
+        },
     ]
 }
 
@@ -323,6 +433,12 @@ pub async fn call_tool(name: &str, args: &Value) -> CallToolResult {
         "berth_add_target" => handle_add_target(args).await,
         "berth_remove_target" => handle_remove_target(args).await,
         "berth_list_agents" => handle_list_agents().await,
+        "berth_publish" => handle_publish(args).await,
+        "berth_unpublish" => handle_unpublish(args).await,
+        "berth_env_set" => handle_env_set(args).await,
+        "berth_env_get" => handle_env_get(args).await,
+        "berth_env_delete" => handle_env_delete(args).await,
+        "berth_env_import" => handle_env_import(args).await,
         _ => CallToolResult::error(format!("Unknown tool: {name}")),
     }
 }
@@ -449,6 +565,8 @@ async fn handle_deploy(args: &Value) -> CallToolResult {
         .and_then(|v| v.as_u64())
         .unwrap_or(30);
 
+    let env_vars = store.get_env_vars(project.id).unwrap_or_default();
+
     let result = tokio::time::timeout(
         tokio::time::Duration::from_secs(timeout_secs),
         client.execute(
@@ -458,7 +576,7 @@ async fn handle_deploy(args: &Value) -> CallToolResult {
             &project.path,
             None,
             None,
-            std::collections::HashMap::new(),
+            env_vars,
         ),
     )
     .await;
@@ -521,6 +639,8 @@ async fn handle_run(args: &Value) -> CallToolResult {
         .and_then(|v| v.as_u64())
         .unwrap_or(30);
 
+    let env_vars = store.get_env_vars(project.id).unwrap_or_default();
+
     let result = tokio::time::timeout(
         tokio::time::Duration::from_secs(timeout_secs),
         client.execute(
@@ -530,7 +650,7 @@ async fn handle_run(args: &Value) -> CallToolResult {
             &project.path,
             None,
             None,
-            std::collections::HashMap::new(),
+            env_vars,
         ),
     )
     .await;
@@ -950,4 +1070,197 @@ async fn handle_list_agents() -> CallToolResult {
     }
 
     CallToolResult::text(serde_json::to_string_pretty(&agents).unwrap_or_default())
+}
+
+async fn handle_publish(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+    let port = match args.get("port").and_then(|v| v.as_u64()) {
+        Some(p) => p as u16,
+        None => return CallToolResult::error("Missing required parameter: port".into()),
+    };
+    let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("cloudflared");
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let client = match berth_core::local_agent::get_or_start_local_agent().await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to connect to agent: {e}")),
+    };
+
+    match client.publish(&project.id.to_string(), port, provider, "").await {
+        Ok((true, url, used_provider, _message)) => {
+            if let Ok(store) = get_store() {
+                let _ = store.set_tunnel_url(project.id, &url, &used_provider);
+            }
+            let result = json!({
+                "success": true,
+                "url": url,
+                "provider": used_provider,
+                "project": project.name,
+            });
+            CallToolResult::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        }
+        Ok((false, _, _, message)) => {
+            CallToolResult::error(format!("Publish failed: {message}"))
+        }
+        Err(e) => CallToolResult::error(format!("Publish failed: {e}")),
+    }
+}
+
+async fn handle_unpublish(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let client = match berth_core::local_agent::get_or_start_local_agent().await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to connect to agent: {e}")),
+    };
+
+    match client.unpublish(&project.id.to_string()).await {
+        Ok((true, _message)) => {
+            if let Ok(store) = get_store() {
+                let _ = store.clear_tunnel_url(project.id);
+            }
+            CallToolResult::text(format!("Project '{}' unpublished", project.name))
+        }
+        Ok((false, message)) => CallToolResult::error(format!("Unpublish failed: {message}")),
+        Err(e) => CallToolResult::error(format!("Unpublish failed: {e}")),
+    }
+}
+
+// --- Environment variable handlers ---
+
+async fn handle_env_set(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+    let key = match args.get("key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => return CallToolResult::error("Missing required parameter: key".into()),
+    };
+    let value = match args.get("value").and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => return CallToolResult::error("Missing required parameter: value".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    if let Err(e) = store.set_env_var(project.id, key, value) {
+        return CallToolResult::error(format!("Failed to set env var: {e}"));
+    }
+
+    CallToolResult::text(format!("Set {}=*** on '{}'", key, project.name))
+}
+
+async fn handle_env_get(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let vars = match store.get_env_vars(project.id) {
+        Ok(v) => v,
+        Err(e) => return CallToolResult::error(e.to_string()),
+    };
+
+    let result = json!({
+        "project": project.name,
+        "env_vars": vars,
+    });
+    CallToolResult::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+}
+
+async fn handle_env_delete(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+    let key = match args.get("key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => return CallToolResult::error("Missing required parameter: key".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    if let Err(e) = store.delete_env_var(project.id, key) {
+        return CallToolResult::error(format!("Failed to delete env var: {e}"));
+    }
+
+    CallToolResult::text(format!("Deleted {} from '{}'", key, project.name))
+}
+
+async fn handle_env_import(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+    let content = match args.get("content").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => return CallToolResult::error("Missing required parameter: content".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let vars = berth_core::env::parse_dotenv(content);
+    let count = vars.len();
+    for (key, value) in &vars {
+        if let Err(e) = store.set_env_var(project.id, key, value) {
+            return CallToolResult::error(format!("Failed to import: {e}"));
+        }
+    }
+
+    CallToolResult::text(format!(
+        "Imported {} variable{} into '{}'",
+        count,
+        if count != 1 { "s" } else { "" },
+        project.name
+    ))
 }

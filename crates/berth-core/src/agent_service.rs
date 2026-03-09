@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use sysinfo::System;
 use tokio::sync::Mutex;
@@ -12,6 +13,7 @@ use crate::agent_client::proto::agent_service_server::AgentService;
 use crate::agent_client::proto::*;
 use crate::executor::{self, LogStream};
 use crate::runtime::Runtime;
+use crate::tunnel::{TunnelManager, TunnelProvider};
 use crate::{archive, container, setup};
 
 fn gethostname() -> String {
@@ -28,13 +30,18 @@ enum ProcessKind {
     },
 }
 
-struct RunningChild {
+struct ManagedProcess {
     kind: ProcessKind,
     started_at: chrono::DateTime<chrono::Utc>,
+    cancelled: Arc<AtomicBool>,
+    run_mode: String,
+    restart_count: Arc<AtomicU32>,
+    supervisor_state: Arc<std::sync::Mutex<String>>,
 }
 
 pub struct AgentServiceImpl {
-    processes: Arc<Mutex<HashMap<String, RunningChild>>>,
+    processes: Arc<Mutex<HashMap<String, ManagedProcess>>>,
+    tunnel_mgr: Arc<TunnelManager>,
     start_time: std::time::Instant,
     deploys_dir: PathBuf,
     podman_version: Option<String>,
@@ -56,6 +63,7 @@ impl AgentServiceImpl {
 
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
+            tunnel_mgr: Arc::new(TunnelManager::new()),
             start_time: std::time::Instant::now(),
             deploys_dir,
             podman_version,
@@ -380,12 +388,16 @@ impl AgentService for AgentServiceImpl {
                 let mut procs = self.processes.lock().await;
                 procs.insert(
                     req.project_id,
-                    RunningChild {
+                    ManagedProcess {
                         kind: ProcessKind::Container {
                             container_name: container_name_clone,
                             abort_handle: task.abort_handle(),
                         },
                         started_at: chrono::Utc::now(),
+                        cancelled: Arc::new(AtomicBool::new(false)),
+                        run_mode: "oneshot".to_string(),
+                        restart_count: Arc::new(AtomicU32::new(0)),
+                        supervisor_state: Arc::new(std::sync::Mutex::new("running".to_string())),
                     },
                 );
             }
@@ -459,11 +471,15 @@ impl AgentService for AgentServiceImpl {
                 let mut procs = self.processes.lock().await;
                 procs.insert(
                     req.project_id,
-                    RunningChild {
+                    ManagedProcess {
                         kind: ProcessKind::BareProcess {
                             abort_handle: task.abort_handle(),
                         },
                         started_at: chrono::Utc::now(),
+                        cancelled: Arc::new(AtomicBool::new(false)),
+                        run_mode: "oneshot".to_string(),
+                        restart_count: Arc::new(AtomicU32::new(0)),
+                        supervisor_state: Arc::new(std::sync::Mutex::new("running".to_string())),
                     },
                 );
             }
@@ -479,11 +495,21 @@ impl AgentService for AgentServiceImpl {
         let procs = self.processes.lock().await;
         let projects: Vec<ProjectStatus> = procs
             .iter()
-            .map(|(id, child)| ProjectStatus {
-                project_id: id.clone(),
-                status: "running".into(),
-                pid: 0,
-                started_at: child.started_at.to_rfc3339(),
+            .map(|(id, managed)| {
+                let supervisor_state = managed.supervisor_state.lock()
+                    .map(|s| s.clone())
+                    .unwrap_or_else(|_| "running".into());
+                let uptime_secs = (chrono::Utc::now() - managed.started_at).num_seconds().max(0) as u64;
+                ProjectStatus {
+                    project_id: id.clone(),
+                    status: "running".into(),
+                    pid: 0,
+                    started_at: managed.started_at.to_rfc3339(),
+                    run_mode: managed.run_mode.clone(),
+                    restart_count: managed.restart_count.load(Ordering::Relaxed),
+                    supervisor_state,
+                    uptime_secs,
+                }
             })
             .collect();
 
@@ -520,8 +546,9 @@ impl AgentService for AgentServiceImpl {
         let project_id = request.into_inner().project_id;
         let mut procs = self.processes.lock().await;
 
-        if let Some(child) = procs.remove(&project_id) {
-            match child.kind {
+        if let Some(managed) = procs.remove(&project_id) {
+            managed.cancelled.store(true, Ordering::SeqCst);
+            match managed.kind {
                 ProcessKind::BareProcess { abort_handle } => {
                     abort_handle.abort();
                 }
@@ -558,6 +585,7 @@ impl AgentService for AgentServiceImpl {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             probation_status: String::new(),
+            tunnel_providers: TunnelManager::available_providers(),
         }))
     }
 
@@ -645,5 +673,55 @@ impl AgentService for AgentServiceImpl {
         Err(Status::unimplemented(
             "Rollback is only available on remote persistent agents",
         ))
+    }
+
+    async fn publish(
+        &self,
+        request: Request<PublishRequest>,
+    ) -> Result<Response<PublishResponse>, Status> {
+        let req = request.into_inner();
+        let provider = match req.provider.as_str() {
+            "cloudflared" | "" => TunnelProvider::Cloudflared,
+            other => {
+                return Ok(Response::new(PublishResponse {
+                    success: false,
+                    url: String::new(),
+                    message: format!("Unknown tunnel provider: {other}. Available: cloudflared"),
+                    provider: String::new(),
+                }));
+            }
+        };
+
+        match self.tunnel_mgr.start(&req.project_id, req.port as u16, &provider).await {
+            Ok(info) => Ok(Response::new(PublishResponse {
+                success: true,
+                url: info.public_url,
+                provider: info.provider,
+                message: "Tunnel started".into(),
+            })),
+            Err(e) => Ok(Response::new(PublishResponse {
+                success: false,
+                url: String::new(),
+                message: e.to_string(),
+                provider: String::new(),
+            })),
+        }
+    }
+
+    async fn unpublish(
+        &self,
+        request: Request<UnpublishRequest>,
+    ) -> Result<Response<UnpublishResponse>, Status> {
+        let req = request.into_inner();
+        match self.tunnel_mgr.stop(&req.project_id).await {
+            Ok(()) => Ok(Response::new(UnpublishResponse {
+                success: true,
+                message: "Tunnel stopped".into(),
+            })),
+            Err(e) => Ok(Response::new(UnpublishResponse {
+                success: false,
+                message: e.to_string(),
+            })),
+        }
     }
 }

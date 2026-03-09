@@ -1,0 +1,386 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0012-4000-8000-000000000001"
+  title: "Authentication Model: Magic Links + Supabase + Progressive Identity"
+  domain: "architecture"
+  intent: "Define the complete auth model for Berth — from anonymous usage through paid tiers — using magic links (Raycast model), Supabase as the backend, and Stripe for subscriptions"
+  related_decisions:
+    - id: "b1c2d3e4-0008-4000-8000-000000000001"
+      relationship: "implements"
+      description: "DRF-008 defines tier boundaries (Free/Pro/Team); this DRF defines how users authenticate and how tiers are enforced"
+    - id: "b1c2d3e4-0009-4000-8000-000000000001"
+      relationship: "depends_on"
+      description: "DRF-009 distribution strategy determines where users encounter auth (direct download, Homebrew, Setapp)"
+    - id: "b1c2d3e4-0004-4000-8000-000000000001"
+      relationship: "implements"
+      description: "DRF-004 original business model — auth is required to enforce paid tiers"
+
+context:
+  constraints:
+    - description: "Zero signup required for local use — frictionless adoption is non-negotiable"
+      source: "product"
+      negotiable: false
+    - description: "Solo founder — cannot maintain a custom auth server"
+      source: "budget"
+      negotiable: false
+    - description: "Desktop app (Tauri/macOS) — OAuth flows differ from web apps (no cookies, need deep links)"
+      source: "architecture"
+      negotiable: false
+    - description: "MCP server must remain fully free with no auth checks"
+      source: "strategy"
+      negotiable: false
+    - description: "NATS credentials must be provisioned server-side, never shipped with the app binary"
+      source: "security"
+      negotiable: false
+    - description: "Must work offline — Pro features should degrade gracefully, not crash"
+      source: "product"
+      negotiable: false
+  objectives:
+    - description: "Users can download, install, and run code locally without creating an account"
+      priority: "must_have"
+      measurable: true
+    - description: "Free signup (email magic link) unlocks settings sync across devices"
+      priority: "must_have"
+      measurable: true
+    - description: "Pro tier ($12/mo) enforced both client-side (UX) and server-side (security)"
+      priority: "must_have"
+      measurable: true
+    - description: "Auth flow feels native — no browser redirects for entering email, no passwords"
+      priority: "should_have"
+      measurable: true
+    - description: "Total implementation time under 2 weeks for one developer"
+      priority: "should_have"
+      measurable: true
+  environment:
+    organizational: "Solo founder, bootstrapped"
+    temporal: "March 2026. NATS command channel built and working. Cloud targets (Lambda, Vercel, CF Workers) planned for Phase 4. No auth infrastructure exists yet."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 85
+  phase_notes: "High confidence based on research of comparable dev tools (Railway, Warp, Linear, Tailscale, ngrok, Raycast, Tower). Raycast magic-link-only model is the simplest proven pattern. Supabase is the clear winner for a solo Rust founder."
+
+reasoning:
+  patterns_applied:
+    - comparative
+    - simplicity_first
+    - progressive_enhancement
+    - architectural_alignment
+  notes: |
+    Research of comparable developer tools revealed strong patterns:
+
+    1. EVERY major dev tool (Railway, Warp, Linear, Tailscale, ngrok, Raycast) uses GitHub OAuth.
+       However, Raycast uses magic links ONLY for their own accounts — simplest possible auth surface.
+
+    2. None of these tools visibly use Clerk, Auth0, or Firebase. They all built their own or use
+       minimal auth. For a solo founder, Supabase provides the closest thing to "built your own"
+       without actually maintaining an auth server.
+
+    3. Tower (closest analog as a paid macOS dev tool) uses license keys + per-service OAuth
+       with Keychain storage — validating our Keychain-first approach.
+
+    4. Provider comparison for solo founder with Tauri/Rust:
+       - Supabase: 50K MAU free, $0.003/MAU at scale, auth+DB+edge functions in one, REST API works with reqwest
+       - Clerk: 10K MAU free, $0.02/MAU, selling point is pre-built React widgets (useless in desktop app)
+       - Auth0: 25K MAU free, $0.07/MAU, enterprise-oriented, overkill for solo founder
+       - Firebase: No Rust SDK, Google lock-in, Firestore overkill for key-value settings
+       - DIY (Axum+JWT): Full control but massive security surface to maintain solo
+
+    Magic links at launch eliminates:
+    - Password hashing, storage, and reset flows
+    - OAuth client registration and callback handling (deferred to post-launch)
+    - Account recovery workflows
+    This reduces auth implementation to: one email input → one API call → one deep link handler.
+
+synthesis:
+  decision: |
+    IDENTITY LIFECYCLE:
+    Anonymous (download app) → Free (magic link signup) → Pro ($12/mo) → Team ($25/user/mo)
+
+    AUTH PROVIDER: Supabase
+    - GoTrue authentication (magic links + future OAuth)
+    - PostgreSQL with Row Level Security for server-side data
+    - Edge Functions for Stripe webhooks and NATS credential provisioning
+    - 50K MAU free tier, cheapest at scale ($0.003/MAU)
+    - REST API consumed via reqwest (already a project dependency)
+
+    LOGIN METHOD: Magic Links Only (Raycast Model)
+    - Launch: Email magic links only — enter email, receive link, click, logged in
+    - Post-launch: Add GitHub OAuth for faster repeat login and team identity
+    - Future: Google OAuth, Apple Sign In (if Mac App Store distribution)
+    - No passwords. Ever. No forgot-password flows. Simplest possible auth surface.
+
+    LOGIN UX: In-App Modal
+    - Auth form renders inside Tauri app as a React modal in Settings
+    - Single email input field + "Send magic link" button
+    - Magic link flow: email client → berth://auth/callback deep link → app activates
+    - No browser switch for entering email. Native feel.
+
+    TIER DEFINITIONS (per DRF-008):
+    - Anonymous: Full local execution, direct gRPC agents, full MCP, browse templates
+    - Free: Anonymous + settings sync (cloud backup), install linked to account
+    - Pro ($12/mo): Free + NATS relay (10 agents), cloud targets, webhooks, 3 shared projects, template deploy
+    - Team ($25/user/mo): Pro + unlimited NATS agents, unlimited sharing, team management
+
+    AUTH STATE STORAGE:
+    - Tokens: macOS Keychain via credentials.rs — access token (JWT, 1hr) + refresh token (30 days)
+    - Cached metadata: SQLite settings table — user_id, user_email, user_tier, tier_verified_at, tier_expires_at
+    - Tokens NEVER touch SQLite. Keychain only.
+
+    TIER ENFORCEMENT (dual layer):
+    - Client-side (Rust): UX gating — show/hide UI elements, pre-flight error messages
+    - Server-side (Supabase): Security boundary — Edge Functions validate JWT tier claims, RLS on data
+    - NATS creds are never in the app binary — provisioned per-user by server, Pro+ only
+    - MCP server has NO tier checks (fully free per DRF-008)
+
+    SETTINGS SYNC:
+    - Synced: default_target, auto_run_on_create, log_scrollback_lines, theme
+    - NOT synced (local-only): nats_url, nats_creds, github_token, install_id
+    - Conflict resolution: Last-write-wins with updated_at timestamp per key
+    - Sync triggers: on login, on app launch (if logged in), debounced on change (5-second delay)
+
+    SUBSCRIPTION MANAGEMENT: Stripe Checkout + Customer Portal
+    - Stripe Checkout for initial subscription (hosted page, no PCI scope)
+    - Stripe Customer Portal for managing/cancelling (hosted by Stripe)
+    - Supabase Edge Function handles Stripe webhooks → updates profiles.tier
+    - Offline grace: 7 days. Cached tier_expires_at in local settings. After 7 days without server
+      contact, Pro features degrade to Free with actionable message. Re-validates on reconnect.
+
+    DESKTOP AUTH FLOW (magic link + deep link):
+    1. User clicks "Sign Up" in Settings → modal with email input
+    2. App calls Supabase auth.signInWithOtp({ email }) via REST
+    3. User receives email with magic link → https://auth.berth.sh/callback?token=...
+    4. Bridge page at auth.berth.sh/callback redirects to berth://auth/callback?token=...
+    5. Tauri deep link handler (tauri-plugin-deep-link) catches the URL
+    6. App exchanges token for session, stores JWT in Keychain
+    7. Profile fetched from Supabase, tier cached locally in settings table
+
+  rationale: |
+    1. MAGIC LINKS ONLY AT LAUNCH: Raycast proves this model works for developer tools.
+       It eliminates password management, OAuth complexity, and account recovery — all
+       significant engineering surface for a solo founder. One input field, one API call,
+       one deep link handler. GitHub OAuth can be added post-launch when team identity
+       becomes important.
+
+    2. SUPABASE OVER ALTERNATIVES: Provides auth + database + edge functions in one
+       managed platform. No Rust SDK needed — REST API via reqwest. 50K MAU free covers
+       the entire Year 1 projection (5,000 users). Cheapest at scale if the app succeeds.
+       Clerk's selling point (pre-built UI widgets) is wasted in a desktop app. Auth0 is
+       enterprise-priced. Firebase has no Rust story.
+
+    3. PROGRESSIVE IDENTITY: The key insight is that anonymous → free → pro is a
+       spectrum, not a wall. Users should never feel blocked from using the app. They
+       encounter auth only when they want cloud features (settings sync, NATS relay,
+       cloud targets). This maximizes top-of-funnel while naturally converting power users.
+
+    4. DUAL ENFORCEMENT: Client-side checks for UX polish (show upgrade banners, hide
+       Pro-only UI), server-side checks for security (NATS creds never leave the server
+       without tier validation). This means a motivated user could bypass client checks,
+       but they still can't access NATS relay or cloud targets without server-provisioned
+       credentials.
+
+    5. KEYCHAIN-FIRST: Tokens in macOS Keychain via the existing security-framework
+       integration. This is the industry standard for macOS apps (Tower, 1Password,
+       Raycast all use Keychain). Never store JWTs in SQLite or on disk.
+
+  follow_ups:
+    - action: "Set up Supabase project (berth-app) with GoTrue auth and PostgreSQL"
+      owner: "founder"
+    - action: "Create profiles, user_settings, and nats_credentials tables with RLS policies"
+      owner: "founder"
+    - action: "Implement auth.rs (UserTier enum, AuthState, tier check methods) in berth-core"
+      owner: "founder"
+    - action: "Implement supabase.rs (REST client for magic links, profile, sync, checkout) in berth-core"
+      owner: "founder"
+    - action: "Extend credentials.rs with auth token Keychain helpers (store/get/clear access+refresh tokens)"
+      owner: "founder"
+    - action: "Add Tauri commands: auth_send_magic_link, auth_handle_callback, auth_logout, auth_get_state, auth_refresh"
+      owner: "founder"
+    - action: "Build AccountSection.tsx and AuthModal.tsx in Settings page"
+      owner: "founder"
+    - action: "Register berth:// deep link scheme via tauri-plugin-deep-link"
+      owner: "founder"
+    - action: "Deploy auth.berth.sh/callback bridge page (static HTML that redirects to berth:// deep link)"
+      owner: "founder"
+    - action: "Set up Stripe product ($12/mo Pro) and deploy create-checkout + stripe-webhook Edge Functions"
+      owner: "founder"
+    - action: "Deploy provision-nats Edge Function and wire tier check into get_agent_client()"
+      owner: "founder"
+    - action: "Implement 7-day offline grace period with cached tier_expires_at"
+      owner: "founder"
+    - action: "Add GitHub OAuth as second auth method (post-launch)"
+      owner: "founder"
+
+  alternatives:
+    - decision: "Email + password authentication"
+      rationale_against: "Requires password hashing, storage, validation, forgot-password flow, and rate limiting. Significant security surface for a solo founder. Magic links eliminate all of this."
+      conditions_for_reconsideration: "If users report friction with magic links (e.g., email delivery delays, corporate email filters blocking links)."
+    - decision: "GitHub OAuth only (no magic links)"
+      rationale_against: "Not all target users have GitHub accounts (trading devs, automation devs). Magic links work with any email. GitHub OAuth can be added post-launch as a convenience."
+      conditions_for_reconsideration: "If 90%+ of users have GitHub accounts based on beta data."
+    - decision: "Clerk as auth provider"
+      rationale_against: "10K MAU free (vs Supabase 50K), $0.02/MAU (vs $0.003). Main selling point is pre-built React auth widgets, which are useless in a desktop app. Separate database still needed."
+      conditions_for_reconsideration: "If Clerk ships a Rust SDK or significantly drops pricing."
+    - decision: "Firebase / Google Auth"
+      rationale_against: "No Rust SDK. Firestore is overkill for key-value settings. Google lock-in. Would need a separate solution for edge functions and database."
+      conditions_for_reconsideration: "If Google ships a first-class Rust Firebase SDK."
+    - decision: "Custom auth server (Axum + JWT + SQLite)"
+      rationale_against: "Solo founder cannot maintain a custom auth server securely. Auth is a solved problem — use a managed service."
+      conditions_for_reconsideration: "If Supabase has significant downtime or pricing changes that break the model."
+    - decision: "License keys (no user accounts)"
+      rationale_against: "License keys don't support settings sync, team management, or server-side NATS credential provisioning. They're a payment mechanism, not an identity system."
+      conditions_for_reconsideration: "If user accounts prove unnecessary and the only paid feature is a binary unlock."
+
+  server_schema:
+    tables:
+      - name: "profiles"
+        description: "User profile with tier and Stripe linkage. Created automatically on signup via Supabase trigger."
+        columns:
+          - "id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE"
+          - "email TEXT"
+          - "tier TEXT NOT NULL DEFAULT 'free' -- 'free', 'pro', 'team'"
+          - "stripe_customer_id TEXT"
+          - "tier_valid_until TIMESTAMPTZ"
+          - "max_nats_agents INTEGER NOT NULL DEFAULT 0 -- free=0, pro=10, team=-1 (unlimited)"
+          - "created_at TIMESTAMPTZ DEFAULT now()"
+          - "updated_at TIMESTAMPTZ DEFAULT now()"
+      - name: "user_settings"
+        description: "Cloud-synced settings. Key-value store with per-key timestamps for LWW conflict resolution."
+        columns:
+          - "user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE"
+          - "key TEXT NOT NULL"
+          - "value TEXT NOT NULL"
+          - "updated_at TIMESTAMPTZ DEFAULT now()"
+          - "PRIMARY KEY (user_id, key)"
+      - name: "nats_credentials"
+        description: "Per-agent NATS credentials provisioned for Pro+ users. Encrypted at rest."
+        columns:
+          - "id UUID PRIMARY KEY DEFAULT gen_random_uuid()"
+          - "user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE"
+          - "agent_id TEXT NOT NULL UNIQUE"
+          - "creds_encrypted TEXT NOT NULL"
+          - "created_at TIMESTAMPTZ DEFAULT now()"
+          - "revoked_at TIMESTAMPTZ"
+
+    edge_functions:
+      - name: "get-profile"
+        auth: "JWT"
+        purpose: "Returns user tier, NATS quota, and account metadata"
+      - name: "sync-settings"
+        auth: "JWT"
+        purpose: "Push/pull settings with last-write-wins merge using updated_at timestamps"
+      - name: "create-checkout"
+        auth: "JWT"
+        purpose: "Creates a Stripe Checkout session for Pro subscription"
+      - name: "stripe-webhook"
+        auth: "Stripe signature verification"
+        purpose: "Handles checkout.session.completed, customer.subscription.updated/deleted — updates profiles.tier"
+      - name: "provision-nats"
+        auth: "JWT (Pro+ tier check)"
+        purpose: "Issues per-agent Synadia Cloud NATS credentials, stores encrypted in nats_credentials table"
+      - name: "revoke-nats"
+        auth: "JWT"
+        purpose: "Revokes NATS credentials for a specific agent"
+
+  implementation_modules:
+    rust:
+      - path: "crates/berth-core/src/auth.rs"
+        description: "UserTier enum (Anonymous/Free/Pro/Team), AuthState struct, tier check methods (can_use_nats, can_use_cloud_targets, can_share_projects, max_nats_agents)"
+      - path: "crates/berth-core/src/supabase.rs"
+        description: "Supabase REST client using reqwest. Methods: send_magic_link, exchange_token, refresh_token, get_profile, sync_settings, create_checkout, provision_nats"
+      - path: "crates/berth-core/src/credentials.rs"
+        description: "Extend with auth token helpers: store_auth_tokens, get_access_token, get_refresh_token, clear_auth_tokens"
+    tauri_commands:
+      - "auth_send_magic_link(email) -> Result<()>"
+      - "auth_handle_callback(token) -> Result<AuthInfo>"
+      - "auth_logout() -> Result<()>"
+      - "auth_get_state() -> Result<AuthInfo>"
+      - "auth_refresh() -> Result<AuthInfo>"
+      - "sync_settings() -> Result<HashMap<String, String>>"
+      - "create_checkout_session() -> Result<String>"
+      - "get_subscription_status() -> Result<SubscriptionInfo>"
+    react_components:
+      - path: "src/components/AccountSection.tsx"
+        description: "Settings section: email input or logged-in state, tier badge, upgrade CTA, sign out"
+      - path: "src/components/AuthModal.tsx"
+        description: "Modal with email field + Send magic link button + Check your email confirmation"
+      - path: "src/components/UpgradeBanner.tsx"
+        description: "Inline banner shown when Free user attempts a Pro feature. Actionable: links to upgrade."
+      - path: "src/lib/auth.ts"
+        description: "Frontend auth state management, Tauri invoke wrappers, tier-aware UI helpers"
+    tier_gate_integration:
+      - location: "get_agent_client() in src-tauri/src/commands.rs"
+        check: "When target.nats_enabled is true, verify user_tier >= Pro before constructing NatsAgentClient"
+      - location: "add_target() in src-tauri/src/commands.rs"
+        check: "When nats_agent_id is provided, verify user_tier >= Pro"
+      - location: "start_nats_subscriber() in src-tauri/src/lib.rs"
+        check: "Skip NATS connection entirely for Anonymous/Free users"
+      - location: "berth-mcp/"
+        check: "NO tier checks. MCP is fully free on all tiers. (DRF-008 policy)"
+      - location: "berth-cli/"
+        check: "Read auth token from Keychain. Tier-gated for NATS features, free for local operations"
+
+  implementation_phases:
+    - phase: "A"
+      name: "Auth Foundation"
+      duration: "2-3 days"
+      tasks:
+        - "Set up Supabase project with GoTrue auth"
+        - "Create profiles + user_settings tables with RLS"
+        - "Implement auth.rs and supabase.rs in berth-core"
+        - "Extend credentials.rs with auth token Keychain helpers"
+        - "Add auth Tauri commands (send_magic_link, handle_callback, logout, get_state, refresh)"
+        - "Register berth:// deep link via tauri-plugin-deep-link"
+        - "Deploy auth.berth.sh/callback bridge page"
+        - "Build AccountSection.tsx + AuthModal.tsx in Settings"
+    - phase: "B"
+      name: "Settings Sync"
+      duration: "1 day"
+      tasks:
+        - "Deploy sync-settings Edge Function"
+        - "Implement sync_settings Tauri command with LWW merge"
+        - "Auto-sync on login and debounced on settings change"
+    - phase: "C"
+      name: "Stripe Integration"
+      duration: "2 days"
+      tasks:
+        - "Set up Stripe product ($12/mo Pro)"
+        - "Deploy create-checkout and stripe-webhook Edge Functions"
+        - "Implement create_checkout_session Tauri command"
+        - "Add Upgrade to Pro button in AccountSection"
+        - "Webhook handler: update profiles.tier on payment success/cancel"
+    - phase: "D"
+      name: "NATS Credential Provisioning"
+      duration: "1-2 days"
+      tasks:
+        - "Deploy provision-nats Edge Function"
+        - "Wire tier check into get_agent_client() and start_nats_subscriber()"
+        - "Auto-provision NATS creds on Pro subscription activation"
+        - "Auto-configure nats_url and nats_creds settings for Pro users"
+    - phase: "E"
+      name: "Polish"
+      duration: "1 day"
+      tasks:
+        - "7-day offline grace period (cached tier_expires_at)"
+        - "Token refresh on app launch"
+        - "UpgradeBanner.tsx for gentle upsell at Pro gates"
+        - "Tier badge in sidebar (subtle, bottom)"
+
+meta:
+  created_at: "2026-03-08T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "brainstorm_session"
+  tags:
+    - "architecture"
+    - "authentication"
+    - "supabase"
+    - "magic-links"
+    - "stripe"
+    - "tier-enforcement"
+    - "settings-sync"
+    - "keychain"
+    - "deep-links"

@@ -53,6 +53,12 @@ service AgentService {
 
   // Rollback to previous agent binary
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+  // Start a public URL tunnel for a project
+  rpc Publish(PublishRequest) returns (PublishResponse);
+
+  // Stop a public URL tunnel
+  rpc Unpublish(UnpublishRequest) returns (UnpublishResponse);
 }
 
 // Deploy source code and build container image or setup environment
@@ -85,6 +91,8 @@ message ExecuteRequest {
   string image_tag = 6;           // non-empty = podman run; empty = bare process
   map<string, string> env_vars = 7;
   string container_name = 8;      // for podman --name
+  string run_mode = 9;            // "oneshot" (default) or "service" (auto-restart on crash)
+  uint32 service_port = 10;       // informational: port the service listens on
 }
 
 message ExecuteResponse {
@@ -112,6 +120,10 @@ message ProjectStatus {
   string status = 2;
   int32 pid = 3;
   string started_at = 4;
+  string run_mode = 5;            // "oneshot" or "service"
+  uint32 restart_count = 6;
+  string supervisor_state = 7;    // "running", "backoff", "stopped"
+  uint64 uptime_secs = 8;         // seconds since last (re)start
 }
 
 message LogStreamRequest {
@@ -146,6 +158,7 @@ message HealthResponse {
   string os = 6;                  // e.g. "linux", "macos"
   string arch = 7;                // e.g. "x86_64", "aarch64"
   string probation_status = 8;    // "", "in_probation", "passed", "rolled_back"
+  repeated string tunnel_providers = 9;  // available providers: ["cloudflared", "ngrok"]
 }
 
 // --- Persistent agent messages ---
@@ -254,4 +267,29 @@ message RollbackResponse {
   bool success = 1;
   string restored_version = 2;
   string message = 3;
+}
+
+// --- Tunnel / Publish messages ---
+
+message PublishRequest {
+  string project_id = 1;
+  uint32 port = 2;
+  string provider = 3;            // "cloudflared" (default), "ngrok", "custom"
+  string provider_config = 4;     // provider-specific: ngrok auth token, custom command template
+}
+
+message PublishResponse {
+  bool success = 1;
+  string url = 2;                 // the public URL (e.g. "https://abc-xyz.trycloudflare.com")
+  string message = 3;
+  string provider = 4;            // which provider was used
+}
+
+message UnpublishRequest {
+  string project_id = 1;
+}
+
+message UnpublishResponse {
+  bool success = 1;
+  string message = 2;
 }

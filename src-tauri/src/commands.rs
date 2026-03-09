@@ -281,10 +281,17 @@ pub async fn run_project(
     let project_name = project.name.clone();
     let notify_on_complete = project.notify_on_complete;
 
+    // Load env vars from store before entering async block
+    let env_vars = store.get_env_vars(uuid).unwrap_or_default();
+
     // Spawn background task for streaming logs
     tokio::spawn(async move {
         use berth_core::agent_transport::ExecuteParams;
 
+        let run_mode = match project.run_mode {
+            berth_core::RunMode::Service => "service".to_string(),
+            berth_core::RunMode::Oneshot => "oneshot".to_string(),
+        };
         let params = ExecuteParams {
             project_id: project_id_str.clone(),
             runtime: runtime_str,
@@ -292,7 +299,9 @@ pub async fn run_project(
             working_dir,
             code,
             image_tag: None,
-            env_vars: std::collections::HashMap::new(),
+            env_vars: env_vars.clone(),
+            run_mode,
+            service_port: project.service_port.unwrap_or(0),
         };
 
         let stream_result = client.execute_streaming(&params).await;
@@ -308,9 +317,12 @@ pub async fn run_project(
                         continue;
                     }
 
+                    // Mask env var values in log output
+                    let masked_text = berth_core::env::mask_env_values(&msg.text, &env_vars);
+
                     // Collect output for execution log (cap at 64KB)
                     if collected_output.len() < 65536 {
-                        collected_output.push_str(&msg.text);
+                        collected_output.push_str(&masked_text);
                     }
 
                     let _ = app_handle.emit(
@@ -318,7 +330,7 @@ pub async fn run_project(
                         LogEvent {
                             project_id: project_id_str.clone(),
                             stream: msg.stream,
-                            text: msg.text,
+                            text: masked_text,
                             timestamp: msg.timestamp,
                         },
                     );
@@ -421,7 +433,22 @@ pub async fn stop_project(
 
         Ok(())
     } else {
-        Err("Project is not running.".into())
+        // Agent says process isn't running — reset DB status anyway so UI gets unstuck
+        let store = get_store()?;
+        store
+            .update_status(uuid, ProjectStatus::Idle)
+            .map_err(|e| e.to_string())?;
+
+        let _ = app_handle.emit(
+            "project-status-change",
+            StatusEvent {
+                project_id: id,
+                status: "idle".into(),
+                exit_code: None,
+            },
+        );
+
+        Ok(())
     }
 }
 
@@ -439,6 +466,7 @@ pub struct TargetInfo {
     pub last_seen_at: Option<String>,
     pub nats_agent_id: Option<String>,
     pub nats_enabled: bool,
+    pub tunnel_providers: Vec<String>,
 }
 
 impl From<&Target> for TargetInfo {
@@ -454,6 +482,7 @@ impl From<&Target> for TargetInfo {
             last_seen_at: t.last_seen_at.map(|ts| ts.to_rfc3339()),
             nats_agent_id: t.nats_agent_id.clone(),
             nats_enabled: t.nats_enabled,
+            tunnel_providers: vec![],
         }
     }
 }
@@ -517,6 +546,7 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
                 let mut info = TargetInfo::from(target);
                 info.status = "online".into();
                 info.agent_version = Some(health.version);
+                info.tunnel_providers = health.tunnel_providers;
                 Ok(info)
             }
             Err(e) => {
@@ -554,6 +584,7 @@ pub struct AgentStats {
     pub running_projects: Vec<AgentRunningProject>,
     pub os: Option<String>,
     pub arch: Option<String>,
+    pub tunnel_providers: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -606,6 +637,7 @@ pub async fn get_agent_stats(id: String) -> Result<AgentStats, String> {
             .collect(),
         os: health.os,
         arch: health.arch,
+        tunnel_providers: health.tunnel_providers,
     })
 }
 
@@ -736,6 +768,19 @@ pub fn set_project_notify(id: String, enabled: bool) -> Result<(), String> {
     store
         .set_project_notify(uuid, enabled)
         .map_err(|e| e.to_string())
+}
+
+// --- Project run mode ---
+
+#[tauri::command]
+pub fn set_project_run_mode(id: String, run_mode: String, service_port: Option<u16>) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let mode = match run_mode.as_str() {
+        "service" => berth_core::RunMode::Service,
+        _ => berth_core::RunMode::Oneshot,
+    };
+    store.set_project_run_mode(uuid, mode, service_port).map_err(|e| e.to_string())
 }
 
 // --- Project target assignment ---
@@ -1129,4 +1174,107 @@ pub async fn upgrade_all_agents() -> Result<Vec<UpgradeResult>, String> {
     }
 
     Ok(results)
+}
+
+// --- Tunnel / Publish commands ---
+
+#[derive(Serialize)]
+pub struct PublishResult {
+    pub success: bool,
+    pub url: String,
+    pub provider: String,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct UnpublishResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn publish_project(
+    id: String,
+    port: u16,
+    provider: Option<String>,
+    target: Option<String>,
+) -> Result<PublishResult, String> {
+    let client = get_agent_client(target.as_deref()).await?;
+    let provider = provider.as_deref().unwrap_or("cloudflared");
+
+    let (success, url, used_provider, message) = client
+        .publish(&id, port, provider, "")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if success {
+        let store = get_store()?;
+        let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+        store
+            .set_tunnel_url(uuid, &url, &used_provider)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(PublishResult {
+        success,
+        url,
+        provider: used_provider,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn unpublish_project(
+    id: String,
+    target: Option<String>,
+) -> Result<UnpublishResult, String> {
+    let client = get_agent_client(target.as_deref()).await?;
+
+    let (success, message) = client
+        .unpublish(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if success {
+        let store = get_store()?;
+        let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
+        store.clear_tunnel_url(uuid).map_err(|e| e.to_string())?;
+    }
+
+    Ok(UnpublishResult { success, message })
+}
+
+// --- Environment variable commands ---
+
+#[tauri::command]
+pub fn get_env_vars(project_id: String) -> Result<HashMap<String, String>, String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store.get_env_vars(uuid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_env_var(project_id: String, key: String, value: String) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store.set_env_var(uuid, &key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_env_var(project_id: String, key: String) -> Result<(), String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    store.delete_env_var(uuid, &key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_env_file(project_id: String, content: String) -> Result<u32, String> {
+    let store = get_store()?;
+    let uuid: Uuid = project_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let vars = berth_core::env::parse_dotenv(&content);
+    let count = vars.len() as u32;
+    for (key, value) in vars {
+        store.set_env_var(uuid, &key, &value).map_err(|e| e.to_string())?;
+    }
+    Ok(count)
 }

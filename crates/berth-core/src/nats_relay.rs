@@ -83,6 +83,10 @@ pub enum NatsCommandKind {
         image_tag: Option<String>,
         env_vars: HashMap<String, String>,
         container_name: Option<String>,
+        #[serde(default)]
+        run_mode: String,
+        #[serde(default)]
+        service_port: u16,
     },
     Deploy {
         project_id: String,
@@ -117,6 +121,15 @@ pub enum NatsCommandKind {
         checksum_sha256: String,
     },
     Rollback,
+    Publish {
+        project_id: String,
+        port: u32,
+        provider: String,
+        provider_config: String,
+    },
+    Unpublish {
+        project_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +158,8 @@ pub enum NatsResponseBody {
         arch: String,
         #[serde(default)]
         probation_status: String,
+        #[serde(default)]
+        tunnel_providers: Vec<String>,
     },
     Status {
         agent_id: String,
@@ -203,6 +218,16 @@ pub enum NatsResponseBody {
     Rollback {
         success: bool,
         restored_version: String,
+        message: String,
+    },
+    Publish {
+        success: bool,
+        url: String,
+        provider: String,
+        message: String,
+    },
+    Unpublish {
+        success: bool,
         message: String,
     },
     Empty,

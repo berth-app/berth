@@ -1,0 +1,481 @@
+# DRF-013: Service Mode (run_mode: oneshot | service)
+# Date: 2026-03-09
+# Status: Design
+# Author: Claude (Design Session)
+
+title: "Service Mode — Keep-Running with Auto-Restart"
+summary: |
+  Add a `run_mode` field to projects: `oneshot` (current behavior) or `service`
+  (auto-restart on crash with exponential backoff). Enables Berth to run API servers,
+  bots, Discord workers, and long-running processes reliably.
+
+# ─────────────────────────────────────────────
+# 1. DATA MODEL
+# ─────────────────────────────────────────────
+
+data_model:
+  project_fields:
+    run_mode:
+      type: "enum RunMode { Oneshot, Service }"
+      default: "Oneshot"
+      stored_as: "TEXT ('oneshot' | 'service') in projects table"
+      note: "Existing projects default to oneshot — zero migration friction"
+
+    service_port:
+      type: "Option<u16>"
+      default: "None"
+      stored_as: "INTEGER NULL in projects table"
+      note: "Informational — displayed in UI, used for health checks later. Not enforced."
+
+  # Restart tracking lives in the AGENT (not the desktop store).
+  # Desktop only sees status + restart_count via StatusResponse.
+  agent_runtime_state:
+    restart_count:
+      type: "u32"
+      scope: "Per-execution session (resets on manual run/stop)"
+      note: "Tracked in-memory in the supervisor loop. Also persisted in agent SQLite."
+
+    last_restart_at:
+      type: "Option<DateTime<Utc>>"
+      scope: "Per-execution session"
+
+    consecutive_failures:
+      type: "u32"
+      note: "Drives backoff calculation. Resets after successful run > 60s."
+
+  sqlite_migration:
+    projects_table:
+      add_columns:
+        - "run_mode TEXT NOT NULL DEFAULT 'oneshot'"
+        - "service_port INTEGER"
+    agent_executions_table:
+      add_columns:
+        - "restart_count INTEGER NOT NULL DEFAULT 0"
+        - "is_service_restart INTEGER NOT NULL DEFAULT 0"
+      note: "Each restart creates a NEW execution row with is_service_restart=1"
+
+# ─────────────────────────────────────────────
+# 2. RESTART POLICY
+# ─────────────────────────────────────────────
+
+restart_policy:
+  strategy: "Exponential backoff with jitter, capped"
+
+  parameters:
+    initial_delay_ms: 1000      # 1 second
+    max_delay_ms: 60000         # 60 seconds (cap)
+    backoff_factor: 2           # Double each time
+    jitter_fraction: 0.1        # ±10% randomization to prevent thundering herd
+    max_restarts: null          # No limit by default — service mode means "keep running"
+    success_threshold_secs: 60  # If process runs > 60s, reset failure count to 0
+
+  formula: |
+    delay = min(initial_delay * (backoff_factor ^ consecutive_failures), max_delay)
+    delay += random(-jitter_fraction * delay, +jitter_fraction * delay)
+
+  examples:
+    - { failures: 0, delay: "~1.0s" }
+    - { failures: 1, delay: "~2.0s" }
+    - { failures: 2, delay: "~4.0s" }
+    - { failures: 3, delay: "~8.0s" }
+    - { failures: 4, delay: "~16.0s" }
+    - { failures: 5, delay: "~32.0s" }
+    - { failures: 6, delay: "~60.0s (capped)" }
+
+  rapid_crash_detection:
+    description: |
+      If a process exits within 5 seconds of start, it's a "rapid crash."
+      After 5 consecutive rapid crashes, emit a warning notification but
+      KEEP restarting (capped at 60s backoff). Never give up — that's what
+      stop is for.
+    rapid_crash_threshold_secs: 5
+
+# ─────────────────────────────────────────────
+# 3. SUPERVISOR ARCHITECTURE
+# ─────────────────────────────────────────────
+
+supervisor:
+  location: "PersistentAgentService (berth-agent/src/persistent_service.rs)"
+
+  design: |
+    The supervisor is NOT a separate task/struct. It's a loop wrapping the
+    existing do_execute() logic inside the log-streaming background task.
+
+    Current flow (oneshot):
+      spawn process → stream logs → process exits → cleanup → done
+
+    New flow (service):
+      spawn process → stream logs → process exits →
+        if stopped_by_user: cleanup → done
+        else: compute backoff → sleep → re-spawn → stream logs → ...
+
+    This keeps the change minimal — we wrap the existing spawn+stream in
+    a loop, guarded by a cancellation token for clean shutdown.
+
+  key_struct:
+    name: "ServiceSupervisor"
+    location: "New file: berth-agent/src/supervisor.rs"
+    fields:
+      - "project_id: String"
+      - "run_mode: RunMode"
+      - "cancel_token: CancellationToken"  # from tokio_util
+      - "restart_count: AtomicU32"
+      - "consecutive_failures: AtomicU32"
+      - "last_restart_at: Mutex<Option<DateTime<Utc>>>"
+      - "state: AtomicU8  # enum: Running, Backoff, Stopped"
+
+  lifecycle:
+    start: |
+      1. PersistentAgentService::do_execute() checks run_mode from request
+      2. If Service: creates ServiceSupervisor + CancellationToken
+      3. Stores (supervisor, cancel_token) in processes map alongside RunningChild
+      4. Supervisor loop runs in the background tokio task (replaces single-run task)
+
+    restart_loop: |
+      loop {
+        let child = spawn_process(runtime, entrypoint, env_vars, working_dir);
+        let start_time = Instant::now();
+
+        // Stream logs (existing logic)
+        stream_logs_until_exit(&child, &tx, &store, &nats).await;
+
+        let exit_code = child.wait().await;
+        let ran_for = start_time.elapsed();
+
+        // Record this execution
+        store.finish_execution(exec_id, exit_code, status);
+        publish_event("execution_completed", exit_code);
+
+        // Check if we should restart
+        if cancel_token.is_cancelled() {
+          break;  // User called stop — exit cleanly
+        }
+
+        if ran_for > Duration::from_secs(60) {
+          consecutive_failures = 0;  // Healthy run — reset backoff
+        } else {
+          consecutive_failures += 1;
+        }
+
+        restart_count += 1;
+        last_restart_at = Utc::now();
+
+        let delay = compute_backoff(consecutive_failures);
+        state = Backoff;
+
+        // Publish restart event
+        publish_event("service_restarting", delay_ms, restart_count);
+
+        // Interruptible sleep — if stop is called during backoff, exit immediately
+        tokio::select! {
+          _ = tokio::time::sleep(delay) => {},
+          _ = cancel_token.cancelled() => break,
+        }
+
+        state = Running;
+
+        // Create new execution record for the restart
+        exec_id = store.create_execution(project_id, "running", is_service_restart=true);
+        publish_event("service_restarted", restart_count);
+      }
+
+    stop: |
+      1. do_stop() cancels the CancellationToken (NOT abort_handle)
+      2. Sends SIGTERM to current child process
+      3. Waits up to 10s for graceful shutdown
+      4. If still alive: SIGKILL
+      5. Supervisor loop sees cancel_token.is_cancelled() → breaks
+      6. Cleanup: remove from processes map, publish "execution_stopped"
+
+      Key: CancellationToken is cooperative — the supervisor checks it between
+      restarts. The child process still gets SIGTERM/SIGKILL for immediate stop.
+
+  processes_map_change:
+    current: "HashMap<String, RunningChild>"
+    new: |
+      HashMap<String, ManagedProcess>
+
+      struct ManagedProcess {
+        child: RunningChild,            // current child process
+        supervisor: Option<ServiceSupervisor>,  // None for oneshot
+        cancel_token: CancellationToken,        // always present (oneshot uses it for abort too)
+      }
+    note: "RunningChild tracks the CURRENT process. Supervisor tracks restart state."
+
+# ─────────────────────────────────────────────
+# 4. GRACEFUL SHUTDOWN
+# ─────────────────────────────────────────────
+
+graceful_shutdown:
+  sequence:
+    - "1. cancel_token.cancel() — signals supervisor to stop restarting"
+    - "2. Send SIGTERM to child process (nix::sys::signal::kill)"
+    - "3. Wait up to 10s (configurable via BERTH_STOP_TIMEOUT env var)"
+    - "4. If still alive: SIGKILL"
+    - "5. Collect exit status"
+    - "6. Update execution record (status: 'stopped')"
+    - "7. Remove from processes map"
+
+  current_stop_issue: |
+    Current do_stop() uses abort_handle.abort() which kills the tokio task
+    abruptly (no SIGTERM, no graceful shutdown). For service mode, we need
+    to replace this with CancellationToken + explicit SIGTERM/SIGKILL.
+
+    This is also a bug fix for oneshot mode — aborting a tokio task doesn't
+    guarantee the child process is killed (it can become orphaned).
+
+  fix: |
+    Store the child PID in RunningChild. On stop:
+    - Cancel the token (stops supervisor loop + log streaming)
+    - SIGTERM the PID
+    - Wait with timeout
+    - SIGKILL if needed
+    This applies to BOTH oneshot and service modes.
+
+# ─────────────────────────────────────────────
+# 5. PROTO CHANGES
+# ─────────────────────────────────────────────
+
+proto_changes:
+  execute_request:
+    add_fields:
+      - "string run_mode = 9;  // 'oneshot' or 'service'"
+      - "uint32 service_port = 10;  // informational, for status display"
+
+  status_response:
+    add_fields:
+      - "string run_mode = 8;     // current run mode"
+      - "uint32 restart_count = 9; // restarts in current session"
+      - "string supervisor_state = 10; // 'running' | 'backoff' | 'stopped'"
+      - "uint64 uptime_secs = 11;  // seconds since last (re)start"
+
+  new_events:
+    - name: "service_restarting"
+      payload: "{ delay_ms: u64, restart_count: u32, exit_code: i32 }"
+    - name: "service_restarted"
+      payload: "{ restart_count: u32 }"
+    - name: "service_rapid_crash"
+      payload: "{ restart_count: u32, consecutive_failures: u32 }"
+
+# ─────────────────────────────────────────────
+# 6. UI CHANGES
+# ─────────────────────────────────────────────
+
+ui_changes:
+  project_detail:
+    run_mode_selector:
+      location: "ProjectDetail toolbar or settings panel"
+      design: |
+        Toggle switch or segmented control: [One-shot] [Service]
+        When "Service" is selected, show optional port input field.
+        Saves immediately to store (no "Apply" button needed).
+
+    status_badge:
+      when_service_running: "Green badge: 'Running' with uptime (e.g., '2h 14m')"
+      when_service_backoff: "Yellow badge: 'Restarting in 8s...' with countdown"
+      when_service_crashed: "Shows restart count: '↻ 3 restarts'"
+
+    restart_indicator:
+      location: "Below status badge in ProjectDetail header"
+      design: "Small text: '↻ 12 restarts · last 2m ago' (only shown when restart_count > 0)"
+
+  project_list:
+    service_badge: "Small 'SVC' badge next to project name for service-mode projects"
+    uptime_column: "Show uptime instead of 'last run' for running services"
+
+  notifications:
+    on_restart: "Optional per-project: 'Project X restarted (attempt 3, exit code 1)'"
+    on_rapid_crash: "Always: 'Project X crashing rapidly (5 failures in 25s)'"
+
+  settings:
+    note: "No global restart policy settings. Per-project only. Backoff params are hardcoded sensible defaults — no UI to change them. Power users can set via CLI/MCP."
+
+# ─────────────────────────────────────────────
+# 7. CLI CHANGES
+# ─────────────────────────────────────────────
+
+cli_changes:
+  run_command:
+    new_flags:
+      - "--mode oneshot|service   # Override project's default run_mode"
+      - "--port 8080              # Set service port (service mode only)"
+    example: "berth run my-api --mode service --port 8080"
+
+  project_update:
+    new_flags:
+      - "--run-mode oneshot|service"
+      - "--service-port 8080"
+    example: "berth update my-api --run-mode service --service-port 8080"
+
+  status_output:
+    service_mode_additions: |
+      Status: Running (service mode)
+      Uptime: 2h 14m 32s
+      Restarts: 3
+      Last restart: 2m ago (exit code 1)
+
+# ─────────────────────────────────────────────
+# 8. MCP CHANGES
+# ─────────────────────────────────────────────
+
+mcp_changes:
+  berth_run:
+    new_params:
+      - "run_mode: optional string ('oneshot' | 'service')"
+      - "service_port: optional number"
+
+  berth_project_status:
+    response_additions:
+      - "run_mode, restart_count, supervisor_state, uptime_secs"
+
+  no_new_tools: |
+    No new MCP tools needed. run_mode is a property of the project or
+    a parameter on berth_run. Status already returns project info.
+    Keeping the tool count stable.
+
+# ─────────────────────────────────────────────
+# 9. AGENT TRANSPORT TRAIT
+# ─────────────────────────────────────────────
+
+agent_transport:
+  change: |
+    execute_streaming() already accepts ExecuteRequest which will get run_mode field.
+    No trait signature changes needed. The agent decides whether to supervise
+    based on run_mode in the request. Transparent to transport layer.
+
+  nats_handler: |
+    NatsCommandHandler passes run_mode through to do_execute() unchanged.
+    Supervisor loop runs agent-side — NATS streaming works the same
+    (each restart creates new log lines on the same response subject).
+
+# ─────────────────────────────────────────────
+# 10. IMPLEMENTATION PLAN
+# ─────────────────────────────────────────────
+
+implementation_plan:
+  order:
+    - step: "1. Data model"
+      files:
+        - "crates/berth-core/src/project.rs — add RunMode enum + fields"
+        - "crates/berth-core/src/store.rs — migration + CRUD for run_mode/service_port"
+        - "proto/berth.proto — add fields to ExecuteRequest + StatusResponse"
+      size: "Small"
+
+    - step: "2. Supervisor"
+      files:
+        - "crates/berth-agent/src/supervisor.rs — NEW: ServiceSupervisor struct + restart loop"
+        - "crates/berth-agent/src/persistent_service.rs — refactor do_execute() to use supervisor, refactor do_stop() for graceful shutdown, update processes map to ManagedProcess"
+      size: "Medium — this is the core change"
+
+    - step: "3. NATS passthrough"
+      files:
+        - "crates/berth-agent/src/nats_cmd_handler.rs — pass run_mode from request"
+        - "crates/berth-core/src/nats_cmd_client.rs — include run_mode in execute payload"
+      size: "Small"
+
+    - step: "4. Desktop wiring"
+      files:
+        - "src-tauri/src/commands.rs — pass run_mode to execute_streaming, handle new status fields"
+        - "crates/berth-core/src/agent_client.rs — include run_mode in ExecuteRequest"
+      size: "Small"
+
+    - step: "5. CLI"
+      files:
+        - "crates/berth-cli/src/main.rs — --mode and --port flags on run, update status display"
+      size: "Small"
+
+    - step: "6. MCP"
+      files:
+        - "crates/berth-mcp/src/tools.rs — add run_mode/service_port params to berth_run"
+      size: "Small"
+
+    - step: "7. UI"
+      files:
+        - "src/pages/ProjectDetail.tsx — run mode selector, restart indicator, uptime display"
+        - "src/lib/invoke.ts — update invoke types"
+      size: "Medium"
+
+    - step: "8. Notifications"
+      files:
+        - "src-tauri/src/commands.rs — notification on rapid crash"
+      size: "Small"
+
+  estimated_files_changed: 12
+  estimated_new_files: 1  # supervisor.rs only
+
+# ─────────────────────────────────────────────
+# 11. DESIGN DECISIONS
+# ─────────────────────────────────────────────
+
+decisions:
+  - question: "Where does the supervisor loop run?"
+    answer: "Agent-side (PersistentAgentService)"
+    rationale: |
+      The agent owns the process. If the desktop disconnects, the service
+      should keep restarting. Desktop is a viewer, not a controller of
+      the restart loop.
+
+  - question: "Separate struct or inline in do_execute?"
+    answer: "Separate ServiceSupervisor struct in supervisor.rs"
+    rationale: |
+      Keeps do_execute() clean. Supervisor owns backoff state, restart count,
+      and cancellation. do_execute() creates it and hands off.
+
+  - question: "New execution per restart or update existing?"
+    answer: "New execution row per restart"
+    rationale: |
+      Each restart is a distinct run with its own logs, exit code, and duration.
+      Execution history should show each attempt. is_service_restart flag
+      distinguishes manual runs from auto-restarts.
+
+  - question: "Should we support configurable backoff params?"
+    answer: "Hardcoded defaults, no UI. CLI/MCP can override later."
+    rationale: |
+      YAGNI. The defaults (1s→60s exponential) cover 99% of cases.
+      Adding config UI is premature complexity. Power users who need
+      custom backoff are rare enough to wait for a future release.
+
+  - question: "Should service mode auto-start on agent boot?"
+    answer: "Not in this iteration"
+    rationale: |
+      Requires persisting 'desired state' in agent SQLite. Phase 5 feature.
+      For now, the desktop (or MCP/CLI) must explicitly start services.
+      The agent scheduler already handles cron jobs independently.
+
+  - question: "What about log streaming across restarts?"
+    answer: |
+      Each restart creates a new execution + new log stream. The xterm.js
+      terminal continues to receive lines — the user sees a separator
+      line like '--- Service restarted (attempt 3, exit code 1) ---'
+      inserted between restart boundaries.
+
+  - question: "Stop during backoff?"
+    answer: |
+      CancellationToken is checked in tokio::select! during the backoff sleep.
+      Stop during backoff is instant — no need to wait for the timer.
+
+# ─────────────────────────────────────────────
+# 12. RISKS & MITIGATIONS
+# ─────────────────────────────────────────────
+
+risks:
+  - risk: "Orphaned child processes on agent crash"
+    severity: "Medium"
+    mitigation: |
+      Use process groups (setsid) so child processes are in their own group.
+      On agent restart, check for orphaned processes via PID file or /proc scan.
+      Not in scope for this iteration — documented as tech debt.
+
+  - risk: "Infinite restart loop consuming resources"
+    severity: "Low"
+    mitigation: |
+      60s backoff cap means at worst 1 restart/minute. CPU impact is negligible.
+      Rapid crash notification alerts the user. They can stop anytime.
+
+  - risk: "Log storage growth from long-running services"
+    severity: "Medium"
+    mitigation: |
+      Existing behavior: all logs stored in SQLite execution_logs table.
+      For services running days/weeks, this grows unbounded.
+      Future: add log rotation (keep last N lines or last N MB per execution).
+      Not in scope for this iteration — document as Phase 5 tech debt.

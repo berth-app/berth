@@ -84,6 +84,7 @@ async fn handle_command(
                     os: info.os,
                     arch: info.arch,
                     probation_status: info.probation_status,
+                    tunnel_providers: info.tunnel_providers,
                 },
             };
             send_reply(&client, &reply_to, &resp).await;
@@ -134,6 +135,8 @@ async fn handle_command(
             image_tag,
             env_vars,
             container_name,
+            run_mode,
+            service_port,
         } => {
             let code_bytes = code.and_then(|c| {
                 base64::engine::general_purpose::STANDARD.decode(c).ok()
@@ -149,6 +152,8 @@ async fn handle_command(
                     image_tag.as_deref(),
                     env_vars,
                     container_name.as_deref(),
+                    &run_mode,
+                    service_port,
                 )
                 .await
             {
@@ -684,6 +689,61 @@ async fn handle_command(
                     let resp = NatsResponse {
                         request_id,
                         status: NatsResponseStatus::Error(e.to_string()),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                }
+            }
+        }
+
+        NatsCommandKind::Publish {
+            project_id,
+            port,
+            provider,
+            provider_config,
+        } => {
+            match service
+                .do_publish(&project_id, port as u16, &provider, &provider_config)
+                .await
+            {
+                Ok((success, url, provider, message)) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Ok,
+                        body: NatsResponseBody::Publish {
+                            success,
+                            url,
+                            provider,
+                            message,
+                        },
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                }
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(e),
+                        body: NatsResponseBody::Empty,
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                }
+            }
+        }
+
+        NatsCommandKind::Unpublish { project_id } => {
+            match service.do_unpublish(&project_id).await {
+                Ok((success, message)) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Ok,
+                        body: NatsResponseBody::Unpublish { success, message },
+                    };
+                    send_reply(&client, &reply_to, &resp).await;
+                }
+                Err(e) => {
+                    let resp = NatsResponse {
+                        request_id,
+                        status: NatsResponseStatus::Error(e),
                         body: NatsResponseBody::Empty,
                     };
                     send_reply(&client, &reply_to, &resp).await;

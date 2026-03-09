@@ -14,6 +14,8 @@ pub struct ExecuteParams {
     pub code: Option<Vec<u8>>,
     pub image_tag: Option<String>,
     pub env_vars: HashMap<String, String>,
+    pub run_mode: String,
+    pub service_port: u16,
 }
 
 pub struct DeployParams {
@@ -117,4 +119,16 @@ pub trait AgentTransport: Send + Sync {
     async fn list_schedules(&self, project_id: &str) -> Result<Vec<RemoteSchedule>>;
     async fn upgrade(&self, version: &str, download_url: &str, github_token: Option<&str>, checksum: &str) -> Result<(bool, String, String)>;
     async fn rollback(&self) -> Result<(bool, String, String)>;
+
+    /// Start a public URL tunnel for a project. Returns (success, url, provider, message).
+    async fn publish(
+        &self,
+        project_id: &str,
+        port: u16,
+        provider: &str,
+        provider_config: &str,
+    ) -> Result<(bool, String, String, String)>;
+
+    /// Stop a public URL tunnel for a project. Returns (success, message).
+    async fn unpublish(&self, project_id: &str) -> Result<(bool, String)>;
 }
