@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Berth Agent Installer
 # Usage:
-#   Install:    curl -sSL https://get.berth.dev | bash
-#   Uninstall:  curl -sSL https://get.berth.dev | bash -s -- --uninstall
+#   Install:    curl -sSL https://agent.getberth.dev/install.sh | sudo bash
+#   Uninstall:  curl -sSL https://agent.getberth.dev/install.sh | sudo bash -s -- --uninstall
 
 BINARY_NAME="berth-agent"
 SERVICE_NAME="berth-agent"
@@ -13,7 +13,7 @@ AGENT_USER="berth"
 AGENT_HOME=""      # resolved after user creation
 BERTH_DIR=""      # resolved after user creation
 INSTALL_PATH=""    # resolved after user creation
-BASE_URL="https://get.berth.dev/releases/latest"
+BASE_URL="https://github.com/berth-app/berth-agent/releases/latest/download"
 ROLLBACK_SCRIPT_DIR="/usr/local/lib/berth"
 ROLLBACK_SCRIPT_PATH="${ROLLBACK_SCRIPT_DIR}/rollback.sh"
 
@@ -184,7 +184,7 @@ install_rollback_script() {
   if [ -f "${local_script}" ]; then
     install -m 755 "${local_script}" "${ROLLBACK_SCRIPT_PATH}"
   else
-    local url="${BASE_URL}/berth-agent-rollback.sh"
+    local url="https://agent.getberth.dev/rollback.sh"
     if command -v curl &>/dev/null; then
       curl -fsSL -o "${ROLLBACK_SCRIPT_PATH}" "${url}"
     elif command -v wget &>/dev/null; then
@@ -295,12 +295,31 @@ main() {
 
   echo ""
   ok "Berth agent is running."
-  info "Configure NATS relay for remote control:"
-  echo "    sudo nano ${BERTH_DIR}/agent.env"
-  echo ""
-  info "Or add this target in Berth with your server's IP:"
-  echo "    berth targets add my-server --host <SERVER_IP> --port 50051"
-  echo ""
+
+  # Wait briefly and extract pairing code from journal
+  sleep 3
+  local pairing_code
+  pairing_code=$(journalctl -u "${SERVICE_NAME}" --no-pager -n 50 2>/dev/null | grep -oP '(?<=\[PAIRING\] Code: )[A-Z0-9]{6}' | tail -1 || true)
+
+  if [ -n "${pairing_code}" ]; then
+    echo ""
+    printf "\033[1;33m┌────────────────────────────────────────┐\033[0m\n"
+    printf "\033[1;33m│  Pairing code:  \033[1;37m%-6s\033[1;33m                  │\033[0m\n" "${pairing_code}"
+    printf "\033[1;33m│  Valid for 15 minutes                  │\033[0m\n"
+    printf "\033[1;33m│                                        │\033[0m\n"
+    printf "\033[1;33m│  Enter in Berth → Targets → Pair Agent │\033[0m\n"
+    printf "\033[1;33m└────────────────────────────────────────┘\033[0m\n"
+    echo ""
+  else
+    info "Configure NATS relay for remote control:"
+    echo "    sudo nano ${BERTH_DIR}/agent.env"
+    echo ""
+    info "Once NATS is configured, restart the agent to get a pairing code:"
+    echo "    sudo systemctl restart ${SERVICE_NAME}"
+    echo "    journalctl -u ${SERVICE_NAME} -f   # look for [PAIRING] Code: XXXXXX"
+    echo ""
+  fi
+
   info "Useful commands:"
   echo "    systemctl status ${SERVICE_NAME}    # check status"
   echo "    journalctl -u ${SERVICE_NAME} -f    # follow logs"

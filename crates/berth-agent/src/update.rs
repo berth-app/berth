@@ -3,8 +3,7 @@ use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 
-// TODO: update when GitHub repo is renamed to berth
-const GITHUB_REPO: &str = "carlosinfantes/runway";
+const GITHUB_REPO: &str = "berth-app/berth-agent";
 
 fn berth_dir() -> PathBuf {
     dirs_next::home_dir()
