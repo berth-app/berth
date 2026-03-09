@@ -13,7 +13,8 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Berth",
+        "title": "",
+        "titleBarStyle": "Overlay",
         "width": 1000,
         "height": 700,
         "minWidth": 700,

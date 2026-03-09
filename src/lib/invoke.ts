@@ -434,3 +434,61 @@ export async function authLogout(): Promise<AuthInfo> {
   return tauriInvoke<AuthInfo>("auth_logout");
 }
 
+// --- Template Store ---
+
+export interface TemplateEnvHint {
+  key: string;
+  description: string;
+  required: boolean;
+  default: string | null;
+}
+
+export interface TemplateItem {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  runtime: string;
+  entrypoint: string;
+  version: string;
+  author: string;
+  pro_only: boolean;
+  featured: boolean;
+  env_vars: TemplateEnvHint[];
+  tags: string[];
+  install_count: number;
+}
+
+export interface TemplateCategory {
+  id: string;
+  name: string;
+  icon: string;
+}
+
+export interface StoreListResponse {
+  categories: TemplateCategory[];
+  templates: TemplateItem[];
+}
+
+export async function listStoreTemplates(
+  category?: string,
+  forceRefresh?: boolean
+): Promise<StoreListResponse> {
+  return tauriInvoke<StoreListResponse>("store_list_templates", {
+    category: category ?? null,
+    forceRefresh: forceRefresh ?? false,
+  });
+}
+
+export async function searchStoreTemplates(
+  query: string
+): Promise<StoreListResponse> {
+  return tauriInvoke<StoreListResponse>("store_search_templates", { query });
+}
+
+export async function installStoreTemplate(
+  templateId: string
+): Promise<Project> {
+  return tauriInvoke<Project>("store_install_template", { templateId });
+}
+

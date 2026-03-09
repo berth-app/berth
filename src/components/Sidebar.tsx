@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
-import { LayoutGrid, Server, Settings, Plus, Rocket } from "lucide-react";
+import { LayoutGrid, Server, Settings, Plus, Anchor, Package } from "lucide-react";
 import { listProjects, type Project } from "../lib/invoke";
 import { listen } from "@tauri-apps/api/event";
 import type { StatusEvent } from "../lib/invoke";
 
-type View = "list" | "detail" | "paste" | "targets" | "settings";
+type View = "list" | "detail" | "paste" | "targets" | "settings" | "store";
 
 interface Props {
   view: View;
@@ -67,7 +67,7 @@ export default function Sidebar({
   return (
     <aside className="sidebar">
       <div data-tauri-drag-region className="sidebar-brand">
-        <Rocket size={16} strokeWidth={1.75} className="text-berth-accent" />
+        <Anchor size={18} strokeWidth={1.75} className="text-berth-accent" />
         <span>Berth</span>
       </div>
 
@@ -79,6 +79,14 @@ export default function Sidebar({
         >
           <LayoutGrid size={16} strokeWidth={1.75} />
           Projects
+        </button>
+        <button
+          className="sidebar-nav-item"
+          data-active={view === "store"}
+          onClick={() => setView("store")}
+        >
+          <Package size={16} strokeWidth={1.75} />
+          Store
         </button>
         <button
           className="sidebar-nav-item"

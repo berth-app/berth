@@ -224,6 +224,17 @@ impl ProjectStore {
             )?;
         }
 
+        // Template store installs tracking
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS template_installs (
+                template_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                installed_at TEXT NOT NULL,
+                template_version TEXT NOT NULL,
+                PRIMARY KEY (template_id, project_id)
+            );",
+        )?;
+
         Ok(())
     }
 
@@ -779,6 +790,39 @@ impl ProjectStore {
             (url, provider, &now, project_id.to_string()),
         )?;
         Ok(())
+    }
+
+    // --- Template store methods ---
+
+    pub fn record_template_install(
+        &self,
+        template_id: &str,
+        project_id: Uuid,
+        version: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO template_installs (template_id, project_id, installed_at, template_version)
+             VALUES (?1, ?2, ?3, ?4)",
+            (
+                template_id,
+                project_id.to_string(),
+                chrono::Utc::now().to_rfc3339(),
+                version,
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_template_install_counts(&self) -> Result<HashMap<String, u32>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT template_id, COUNT(*) FROM template_installs GROUP BY template_id",
+        )?;
+        let map = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(map)
     }
 
     pub fn clear_tunnel_url(&self, project_id: Uuid) -> Result<()> {

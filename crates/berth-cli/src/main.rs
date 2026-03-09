@@ -126,6 +126,31 @@ enum Commands {
         #[command(subcommand)]
         action: EnvActions,
     },
+    /// Browse and install templates from the Berth Template Store
+    Store {
+        #[command(subcommand)]
+        action: StoreActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum StoreActions {
+    /// List available templates
+    List {
+        /// Filter by category (scrapers, api-servers, bots, ai-ml)
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Search templates by keyword
+    Search {
+        /// Search query
+        query: String,
+    },
+    /// Install a template from the store
+    Install {
+        /// Template ID (e.g. hn-scraper, fastapi-starter)
+        template_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -742,6 +767,89 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                     }
+                }
+            }
+        },
+
+        Commands::Store { action } => {
+            match action {
+                StoreActions::List { category } => {
+                    let catalog = berth_core::template_store::get_catalog(false).await
+                        .map_err(|e| anyhow::anyhow!("Failed to load store: {e}"))?;
+
+                    let templates: Vec<&berth_core::template_store::TemplateMeta> = match &category {
+                        Some(cat) => berth_core::template_store::filter_by_category(&catalog, cat),
+                        None => catalog.templates.iter().collect(),
+                    };
+
+                    if templates.is_empty() {
+                        println!("No templates found.");
+                        return Ok(());
+                    }
+                    println!(
+                        "{:<20}  {:<30}  {:<8}  {:<12}  {}",
+                        "ID", "NAME", "RUNTIME", "CATEGORY", "PRO"
+                    );
+                    for t in &templates {
+                        println!(
+                            "{:<20}  {:<30}  {:<8}  {:<12}  {}",
+                            t.id,
+                            t.name,
+                            t.runtime,
+                            t.category,
+                            if t.pro_only { "yes" } else { "" },
+                        );
+                    }
+                }
+                StoreActions::Search { query } => {
+                    let catalog = berth_core::template_store::get_catalog(false).await
+                        .map_err(|e| anyhow::anyhow!("Failed to load store: {e}"))?;
+
+                    let templates = berth_core::template_store::search_templates(&catalog, &query);
+
+                    if templates.is_empty() {
+                        println!("No templates matching '{}'", query);
+                        return Ok(());
+                    }
+                    println!(
+                        "{:<20}  {:<30}  {:<8}  {}",
+                        "ID", "NAME", "RUNTIME", "DESCRIPTION"
+                    );
+                    for t in &templates {
+                        let desc = if t.description.len() > 40 {
+                            format!("{}...", &t.description[..37])
+                        } else {
+                            t.description.clone()
+                        };
+                        println!(
+                            "{:<20}  {:<30}  {:<8}  {}",
+                            t.id, t.name, t.runtime, desc,
+                        );
+                    }
+                }
+                StoreActions::Install { template_id } => {
+                    let catalog = berth_core::template_store::get_catalog(false).await
+                        .map_err(|e| anyhow::anyhow!("Failed to load store: {e}"))?;
+
+                    let template = catalog
+                        .templates
+                        .iter()
+                        .find(|t| t.id == template_id)
+                        .ok_or_else(|| anyhow::anyhow!("Template '{}' not found in store", template_id))?;
+
+                    println!("Installing '{}' ...", template.name);
+                    let store = get_store()?;
+                    // CLI skips Pro check (same as MCP)
+                    let project = berth_core::template_store::install_template(&store, template, None).await
+                        .map_err(|e| anyhow::anyhow!("Install failed: {e}"))?;
+
+                    println!(
+                        "Installed '{}' (runtime: {}, entry: {})\nProject ID: {}",
+                        project.name,
+                        template.runtime,
+                        project.entrypoint.unwrap_or("none".into()),
+                        project.id,
+                    );
                 }
             }
         },

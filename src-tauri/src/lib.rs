@@ -498,6 +498,9 @@ pub fn run() {
             auth_handle_callback,
             auth_refresh,
             auth_logout,
+            store_list_templates,
+            store_search_templates,
+            store_install_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Berth");

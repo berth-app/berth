@@ -32,6 +32,10 @@ impl UserTier {
         matches!(self, Self::Team)
     }
 
+    pub fn can_install_pro_templates(&self) -> bool {
+        matches!(self, Self::EarlyAdopter | Self::Pro | Self::Team)
+    }
+
     pub fn max_nats_agents(&self) -> Option<u32> {
         match self {
             Self::Anonymous => Some(0),

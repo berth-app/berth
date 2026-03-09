@@ -1,0 +1,279 @@
+drf_version: "0.1.0"
+
+decision:
+  id: "b1c2d3e4-0014-4000-8000-000000000001"
+  title: "License Model: Transport-Gated Tiers with Soft Nudge UX"
+  domain: "architecture"
+  intent: "Define the concrete license enforcement model — data structures, enforcement points, UI patterns, and offline behavior — that implements the tier boundaries from DRF-008 and the auth flow from DRF-012"
+  related_decisions:
+    - id: "b1c2d3e4-0008-4000-8000-000000000001"
+      relationship: "implements"
+      description: "DRF-008 defines tier boundaries (Free/Pro/Team) and transport-gated freemium model"
+    - id: "b1c2d3e4-0012-4000-8000-000000000001"
+      relationship: "implements"
+      description: "DRF-012 defines auth flow (magic links, Supabase, Keychain tokens) and tier enforcement strategy"
+    - id: "b1c2d3e4-0013-4000-8000-000000000001"
+      relationship: "extends"
+      description: "DRF-013 service mode — service mode is free, publishing a service URL is Pro"
+
+context:
+  constraints:
+    - description: "Transport-based gating only — no count limits on projects or targets (user decision)"
+      source: "product"
+      negotiable: false
+    - description: "MCP server must remain fully free on all tiers (DRF-008 policy)"
+      source: "strategy"
+      negotiable: false
+    - description: "Design only for now — implementation deferred to Phase 5 with Supabase auth"
+      source: "timeline"
+      negotiable: true
+    - description: "Only 3 hard enforcement points to minimize complexity"
+      source: "architecture"
+      negotiable: true
+    - description: "Offline grace period required — Pro features must work without network for 7 days"
+      source: "product"
+      negotiable: false
+  objectives:
+    - description: "Zero friction for local-only users — no signup, no limits, no nags"
+      priority: "must_have"
+      measurable: true
+    - description: "Clear upgrade moment when users need NATS relay or public URLs"
+      priority: "must_have"
+      measurable: true
+    - description: "Minimal enforcement surface — 3 hard gates, soft nudges elsewhere"
+      priority: "should_have"
+      measurable: true
+    - description: "Graceful offline degradation with 7-day grace period"
+      priority: "must_have"
+      measurable: true
+  environment:
+    organizational: "Solo founder, bootstrapped"
+    temporal: "March 2026. DRF-008 and DRF-012 approved. No auth/tier code exists yet. Phase 5 implementation."
+
+cognitive_state:
+  phase: "decision"
+  confidence: 90
+  phase_notes: "High confidence — builds directly on two approved DRFs. User explicitly confirmed transport-only gating with no count limits. Minimal enforcement surface (3 points) reduces implementation risk."
+
+reasoning:
+  patterns_applied:
+    - architectural_alignment
+    - simplicity_first
+    - progressive_enhancement
+  notes: |
+    Key design principle: the license model has exactly 3 hard enforcement points in the Rust backend.
+    Everything else is a soft UI nudge. This keeps the codebase simple and the enforcement auditable.
+
+    The 3 gates are all transport/network features that genuinely cost money to provide:
+    1. NATS relay (Synadia Cloud cost)
+    2. Public URL publishing (cloudflared tunnels)
+    3. Enabling NATS on a target (prerequisite for #1)
+
+    Local execution, direct gRPC, MCP, CLI — all remain completely free with zero checks.
+
+synthesis:
+  decision: |
+    TIER DEFINITIONS (no count limits):
+
+    | Capability             | Anonymous | Free | Pro ($12/mo) | Team ($25/user/mo) |
+    |------------------------|-----------|------|--------------|---------------------|
+    | Local execution        | Unlimited | Unlimited | Unlimited | Unlimited      |
+    | Direct gRPC agents     | Unlimited | Unlimited | Unlimited | Unlimited      |
+    | MCP server (all tools) | Full      | Full      | Full      | Full           |
+    | Settings sync          | —         | Yes       | Yes        | Yes            |
+    | NATS relay             | —         | —         | 10 agents  | Unlimited      |
+    | Public URL publishing  | —         | —         | Yes        | Yes            |
+    | Cloud targets          | —         | —         | Yes        | Yes            |
+    | Webhooks               | —         | —         | Yes        | Yes            |
+    | Template deploy        | —         | —         | Yes        | Yes            |
+    | Shared projects        | —         | —         | 3          | Unlimited      |
+    | Team management        | —         | —         | —          | Yes            |
+
+    RUST DATA MODEL (crates/berth-core/src/auth.rs):
+
+    UserTier enum: Anonymous, Free, Pro, Team
+    - Capability methods: can_use_nats(), can_publish(), can_use_cloud_targets(),
+      can_use_webhooks(), can_deploy_templates(), can_sync_settings(), can_manage_team()
+    - Quota methods: max_nats_agents() -> Option<u32>, max_shared_projects() -> Option<u32>
+
+    AuthState struct: tier, email, user_id, subscription_expires_at, last_validated_at, offline_grace_until
+    - effective_tier() method: returns tier accounting for offline grace expiry
+    - When grace expires (7 days offline), degrades Pro/Team to Free
+
+    HARD ENFORCEMENT (3 points only, all in src-tauri/src/commands.rs):
+    1. get_nats_client() — checks can_use_nats() before NATS connect
+    2. publish_project — checks can_publish() before tunnel creation
+    3. update_target_nats (enable) — checks can_use_nats() before enabling NATS on target
+
+    Helper: require_tier(state, check_fn, feature_name) -> Result<(), String>
+    Error format: "Upgrade to Pro to use {feature}. berth.sh/pricing"
+
+    SOFT NUDGE UX (React, inform but never block):
+    - UpgradePrompt.tsx: reusable inline glass-card component with feature name + upgrade CTA
+    - Targets.tsx: nudge below NATS Agent ID field when tier < Pro
+    - ProjectDetail.tsx: "Pro" badge on Publish button, upgrade toast on click
+    - Settings.tsx: AccountSection at top — tier display, sign-in/upgrade CTA
+
+    Frontend auth module (src/lib/auth.ts):
+    - UserTier type mirroring Rust enum
+    - Capability check functions for UI gating
+    - getAuthState() invoke wrapper
+
+    LICENSE STATE MANAGEMENT:
+    - Cached as JSON in SQLite settings table under key "auth_state"
+    - Auth tokens in macOS Keychain (auth:access_token, auth:refresh_token)
+    - NATS creds in Keychain (auth:nats_creds) — provisioned server-side for Pro+ only
+    - Tauri managed state: AppAuthState(Mutex<AuthState>)
+    - Background validation every 24h against Supabase
+
+    OFFLINE GRACE PERIOD:
+    - Pro/Team: 7 days from last_validated_at
+    - effective_tier() degrades to Free when grace expires
+    - Local execution + direct gRPC never degrade
+    - Re-validates and resets grace on reconnect
+
+    NATS CREDENTIAL INTEGRATION:
+    - Free: no creds provisioned, tier check blocks before connect
+    - Pro/Team: Supabase Edge Function provisions per-agent creds at login
+    - Downgrade: server revokes, client tier check prevents use of stale creds
+
+    WHAT REMAINS FREE FOREVER:
+    - All local execution
+    - Direct gRPC remote agents (unlimited)
+    - All project CRUD, env vars, scheduling, execution history
+    - All 23 MCP tools (DRF-008 policy)
+    - All CLI commands for local operations
+
+  rationale: |
+    1. MINIMAL ENFORCEMENT SURFACE: Only 3 hard gates in the entire codebase. Every gate
+       maps to a feature that costs real money to provide (NATS relay, tunnels). This makes
+       the business model honest — you pay for what costs us money.
+
+    2. NO COUNT LIMITS: User explicitly chose this. Power users with static-IP servers get
+       unlimited free usage. This maximizes adoption and word-of-mouth. The bet is that
+       convenience features (NATS, publish) convert better than artificial limits.
+
+    3. SOFT NUDGES OVER HARD BLOCKS: UI shows upgrade prompts but never prevents exploration.
+       Users discover Pro features naturally. Hard blocks only happen at the transport layer
+       where server-side enforcement is needed anyway.
+
+    4. OFFLINE RESILIENCE: 7-day grace period means Pro users aren't punished for traveling
+       or working in low-connectivity environments. Local features always work regardless.
+
+    5. MCP STAYS FREE: AI agent adoption is the strategic moat. Gating MCP would limit the
+       ecosystem that makes Berth uniquely valuable.
+
+  follow_ups:
+    - action: "Implement auth.rs in berth-core with UserTier enum, AuthState, capability methods"
+      owner: "founder"
+      phase: "5"
+    - action: "Add AppAuthState to Tauri managed state and get_auth_state/refresh_auth_state commands"
+      owner: "founder"
+      phase: "5"
+    - action: "Wire 3 hard gates into commands.rs (get_nats_client, publish_project, update_target_nats)"
+      owner: "founder"
+      phase: "5"
+    - action: "Build UpgradePrompt.tsx and AccountSection in Settings.tsx"
+      owner: "founder"
+      phase: "5"
+    - action: "Create src/lib/auth.ts with frontend tier types and capability checks"
+      owner: "founder"
+      phase: "5"
+    - action: "Add soft nudges to Targets.tsx and ProjectDetail.tsx"
+      owner: "founder"
+      phase: "5"
+    - action: "Integrate with Supabase auth flow from DRF-012"
+      owner: "founder"
+      phase: "5"
+
+  alternatives:
+    - decision: "Hybrid model: transport gates + count limits (3 projects, 1 target for free)"
+      rationale_against: "User explicitly rejected count limits. Transport-only gating is simpler and aligns revenue with infrastructure cost. Count limits feel arbitrary."
+      conditions_for_reconsideration: "If free-tier abuse becomes significant or conversion rate is too low after 6 months."
+    - decision: "Hard-block all Pro features in UI (no soft nudges)"
+      rationale_against: "Hard blocks prevent discovery. Users should see what Pro offers before deciding. Soft nudges with clear upgrade paths convert better than hidden features."
+      conditions_for_reconsideration: "If soft nudges lead to user confusion about what's free vs paid."
+    - decision: "Gate at MCP level too"
+      rationale_against: "DRF-008 policy: MCP must remain free on all tiers. AI agent adoption is the strategic moat."
+      conditions_for_reconsideration: "Never. MCP must remain free."
+
+  implementation_modules:
+    rust:
+      - path: "crates/berth-core/src/auth.rs"
+        description: "NEW — UserTier enum (Anonymous/Free/Pro/Team), AuthState struct with effective_tier() method, capability methods (can_use_nats, can_publish, etc.), quota methods (max_nats_agents, max_shared_projects)"
+      - path: "crates/berth-core/src/lib.rs"
+        description: "Add pub mod auth"
+      - path: "crates/berth-core/src/credentials.rs"
+        description: "Add Keychain keys: auth:access_token, auth:refresh_token, auth:nats_creds"
+      - path: "crates/berth-core/src/store.rs"
+        description: "Seed auth_state key in settings table"
+    tauri:
+      - path: "src-tauri/src/lib.rs"
+        description: "Add AppAuthState(Mutex<AuthState>) to Tauri managed state"
+      - path: "src-tauri/src/commands.rs"
+        description: "Add require_tier() helper. Wire 3 hard gates: get_nats_client(), publish_project, update_target_nats"
+    tauri_commands:
+      - "get_auth_state() -> AuthState"
+      - "refresh_auth_state() -> Result<AuthState, String>"
+    react:
+      - path: "src/lib/auth.ts"
+        description: "NEW — UserTier type, capability check functions, getAuthState() invoke wrapper"
+      - path: "src/components/UpgradePrompt.tsx"
+        description: "NEW — Reusable inline upgrade nudge component (glass-card style)"
+      - path: "src/pages/Settings.tsx"
+        description: "Add AccountSection at top: tier badge, email, sign-in/upgrade CTA"
+      - path: "src/pages/Targets.tsx"
+        description: "Soft NATS upgrade nudge below Agent ID field"
+      - path: "src/pages/ProjectDetail.tsx"
+        description: "Pro badge on Publish button, upgrade toast on click"
+
+  implementation_phases:
+    - phase: "A"
+      name: "Core Data Model"
+      duration: "1 day"
+      tasks:
+        - "Create auth.rs with UserTier, AuthState, capability methods"
+        - "Add pub mod auth to berth-core/src/lib.rs"
+        - "Seed auth_state setting key in store.rs"
+        - "Unit tests for capability methods and effective_tier()"
+    - phase: "B"
+      name: "Tauri Integration"
+      duration: "1 day"
+      tasks:
+        - "Add AppAuthState to Tauri managed state"
+        - "Add get_auth_state and refresh_auth_state commands"
+        - "Wire 3 hard gates with require_tier() helper"
+        - "Add auth token Keychain keys to credentials.rs"
+    - phase: "C"
+      name: "Frontend UX"
+      duration: "1-2 days"
+      tasks:
+        - "Create src/lib/auth.ts with tier types and capability checks"
+        - "Build UpgradePrompt.tsx component"
+        - "Add AccountSection to Settings.tsx"
+        - "Add soft nudges to Targets.tsx and ProjectDetail.tsx"
+    - phase: "D"
+      name: "Supabase + Stripe"
+      duration: "3-4 days"
+      tasks:
+        - "Wire Supabase profile lookup into refresh_auth_state"
+        - "Deploy provision-nats Edge Function"
+        - "Set up Stripe product and webhook handling"
+        - "Implement 7-day offline grace period"
+        - "Background tier validation every 24h"
+
+meta:
+  created_at: "2026-03-09T00:00:00Z"
+  status: "approved"
+  actors:
+    - name: "founder"
+      role: "author"
+  source: "design_session"
+  tags:
+    - "architecture"
+    - "licensing"
+    - "tiers"
+    - "freemium"
+    - "transport-gating"
+    - "enforcement"
+    - "upgrade-ux"

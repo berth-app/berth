@@ -5,12 +5,13 @@ import ProjectDetail from "./pages/ProjectDetail";
 import PasteAndDeploy from "./pages/PasteAndDeploy";
 import Targets from "./pages/Targets";
 import Settings from "./pages/Settings";
+import TemplateStore from "./pages/TemplateStore";
 import { ToastProvider } from "./components/Toast";
 import Sidebar from "./components/Sidebar";
 import { getSettings } from "./lib/invoke";
 import { setTheme, initThemeListener } from "./lib/theme";
 
-type View = "list" | "detail" | "paste" | "targets" | "settings";
+type View = "list" | "detail" | "paste" | "targets" | "settings" | "store";
 
 export default function App() {
   const [view, setView] = useState<View>("list");
@@ -79,6 +80,14 @@ export default function App() {
             />
           )}
           {view === "targets" && <Targets />}
+          {view === "store" && (
+            <TemplateStore
+              onInstalled={(id) => {
+                setSelectedProjectId(id);
+                setView("detail");
+              }}
+            />
+          )}
           {view === "settings" && <Settings />}
         </main>
       </div>
