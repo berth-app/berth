@@ -7,6 +7,7 @@ use futures::StreamExt;
 
 use berth_proto::transport::{AgentHealth, AgentStatus, AgentTransport, DeployParams, DeployResponseLine, ExecuteParams, ExecuteResponseLine, RemoteExecution, RemoteSchedule, RunningProject};
 use berth_proto::executor::{LogLine, LogStream};
+use berth_proto::message_auth;
 use berth_proto::nats_relay::*;
 
 /// NATS-based command client for communicating with remote agents through NATS relay.
@@ -15,20 +16,45 @@ pub struct NatsAgentClient {
     client: async_nats::Client,
     agent_id: String,
     owner_id: String,
+    /// Shared secret for HMAC signing (established during pairing).
+    shared_secret: Option<Vec<u8>>,
 }
 
 impl NatsAgentClient {
     pub fn new(client: async_nats::Client, agent_id: String, owner_id: String) -> Self {
-        Self { client, agent_id, owner_id }
+        Self { client, agent_id, owner_id, shared_secret: None }
+    }
+
+    /// Create a client with HMAC message signing enabled.
+    pub fn with_secret(mut self, secret: Vec<u8>) -> Self {
+        self.shared_secret = Some(secret);
+        self
+    }
+
+    /// Sign a NatsCommand in-place if a shared secret is configured.
+    fn sign_command(&self, command: &mut NatsCommand) {
+        if let Some(secret) = &self.shared_secret {
+            let cmd_payload = serde_json::to_vec(&command.cmd).unwrap_or_default();
+            let nonce = uuid::Uuid::new_v4().to_string();
+            let timestamp = message_auth::current_timestamp();
+            let signature = message_auth::sign_command(&cmd_payload, &nonce, timestamp, secret);
+            command.nonce = nonce;
+            command.timestamp = timestamp;
+            command.signature = signature;
+        }
     }
 
     async fn request_reply(&self, cmd_type: &str, cmd: NatsCommandKind) -> Result<NatsResponse> {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let command = NatsCommand {
+        let mut command = NatsCommand {
             request_id,
-            reply_to: String::new(), // async-nats request() manages this
+            reply_to: String::new(),
             cmd,
+            signature: String::new(),
+            nonce: String::new(),
+            timestamp: 0,
         };
+        self.sign_command(&mut command);
 
         let payload = serde_json::to_vec(&command).context("Failed to serialize NATS command")?;
         let subject = cmd_subject(&self.owner_id, &self.agent_id, cmd_type);
@@ -53,8 +79,9 @@ impl NatsAgentClient {
     async fn streaming_command(
         &self,
         cmd_type: &str,
-        command: NatsCommand,
+        mut command: NatsCommand,
     ) -> Result<async_nats::Subscriber> {
+        self.sign_command(&mut command);
         let resp_subj = resp_subject(&self.owner_id, &self.agent_id, &command.request_id);
 
         // Subscribe BEFORE publishing
@@ -170,6 +197,9 @@ impl AgentTransport for NatsAgentClient {
                 run_mode: params.run_mode.clone(),
                 service_port: params.service_port,
             },
+            signature: String::new(),
+            nonce: String::new(),
+            timestamp: 0,
         };
 
         let mut sub = self.streaming_command("execute", command).await?;
@@ -233,6 +263,9 @@ impl AgentTransport for NatsAgentClient {
                     setup_commands: params.setup_commands.clone(),
                     archive_base64: archive_b64,
                 },
+                signature: String::new(),
+                nonce: String::new(),
+                timestamp: 0,
             }
         } else {
             // Large archive: chunked transfer
@@ -257,6 +290,9 @@ impl AgentTransport for NatsAgentClient {
                     chunk_count,
                     checksum_sha256: checksum,
                 },
+                signature: String::new(),
+                nonce: String::new(),
+                timestamp: 0,
             }
         };
 
@@ -279,8 +315,10 @@ impl AgentTransport for NatsAgentClient {
             let ready_resp: NatsResponse = serde_json::from_slice(&msg.payload)
                 .context("Failed to deserialize deploy ready response")?;
 
-            let upload_subject = match &ready_resp.body {
-                NatsResponseBody::DeployReady { upload_subject } => upload_subject.clone(),
+            let (upload_subject, upload_token) = match &ready_resp.body {
+                NatsResponseBody::DeployReady { upload_subject, upload_token } => {
+                    (upload_subject.clone(), upload_token.clone())
+                }
                 _ => anyhow::bail!("Unexpected response to DeployChunked"),
             };
 
@@ -289,12 +327,13 @@ impl AgentTransport for NatsAgentClient {
             let mut sub = self.client.subscribe(resp_subj).await
                 .context("Failed to subscribe to deploy response")?;
 
-            // Send chunks
+            // Send chunks with upload_token for authorization
             let chunk_size = 768 * 1024;
             for (i, chunk) in params.source_archive.chunks(chunk_size).enumerate() {
                 let chunk_payload = serde_json::json!({
                     "seq": i,
                     "data": base64::engine::general_purpose::STANDARD.encode(chunk),
+                    "token": upload_token,
                 });
                 let chunk_bytes = serde_json::to_vec(&chunk_payload)?;
                 self.client.publish(upload_subject.clone(), chunk_bytes.into()).await
@@ -305,7 +344,7 @@ impl AgentTransport for NatsAgentClient {
             self.client.flush().await.context("Failed to flush NATS")?;
 
             // Send done marker
-            let done_payload = serde_json::json!({"seq": -1, "done": true});
+            let done_payload = serde_json::json!({"seq": -1, "done": true, "token": upload_token});
             let done_bytes = serde_json::to_vec(&done_payload)?;
             self.client.publish(upload_subject, done_bytes.into()).await
                 .context("Failed to publish deploy done marker")?;
@@ -410,6 +449,9 @@ impl AgentTransport for NatsAgentClient {
                 execution_id: execution_id.to_string(),
                 since_seq,
             },
+            signature: String::new(),
+            nonce: String::new(),
+            timestamp: 0,
         };
 
         let mut sub = self.streaming_command("logs", command).await?;
@@ -513,7 +555,7 @@ impl AgentTransport for NatsAgentClient {
 
     async fn upgrade(&self, version: &str, download_url: &str, github_token: Option<&str>, checksum: &str) -> Result<(bool, String, String)> {
         let request_id = uuid::Uuid::new_v4().to_string();
-        let command = NatsCommand {
+        let mut command = NatsCommand {
             request_id: request_id.clone(),
             reply_to: resp_subject(&self.owner_id, &self.agent_id, &request_id),
             cmd: NatsCommandKind::UpgradeDownload {
@@ -522,7 +564,11 @@ impl AgentTransport for NatsAgentClient {
                 github_token: github_token.map(|t| t.to_string()),
                 checksum_sha256: checksum.to_string(),
             },
+            signature: String::new(),
+            nonce: String::new(),
+            timestamp: 0,
         };
+        self.sign_command(&mut command);
 
         // Subscribe before publishing so we don't miss the response
         let resp_subj = resp_subject(&self.owner_id, &self.agent_id, &request_id);

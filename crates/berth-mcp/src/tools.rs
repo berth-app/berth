@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use berth_core::project::Project;
+use berth_core::path_safety;
 use berth_core::runtime;
 use berth_core::agent_client::AgentClient;
 use berth_core::agent_transport::AgentTransport;
@@ -393,6 +394,49 @@ pub fn list_tools() -> Vec<Tool> {
                 "required": ["project_id", "content"]
             }),
         },
+        // Template Store
+        Tool {
+            name: "berth_store_list".into(),
+            description: "List available templates from the Berth Template Store. Optionally filter by category (scrapers, api-servers, bots, ai-ml).".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Filter by category: scrapers, api-servers, bots, ai-ml"
+                    }
+                },
+                "required": []
+            }),
+        },
+        Tool {
+            name: "berth_store_search".into(),
+            description: "Search the Berth Template Store by keyword.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    }
+                },
+                "required": ["query"]
+            }),
+        },
+        Tool {
+            name: "berth_store_install".into(),
+            description: "Install a template from the Berth Template Store, creating a new project ready to run.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "template_id": {
+                        "type": "string",
+                        "description": "Template ID (e.g. hn-scraper, fastapi-starter)"
+                    }
+                },
+                "required": ["template_id"]
+            }),
+        },
     ]
 }
 
@@ -439,6 +483,9 @@ pub async fn call_tool(name: &str, args: &Value) -> CallToolResult {
         "berth_env_get" => handle_env_get(args).await,
         "berth_env_delete" => handle_env_delete(args).await,
         "berth_env_import" => handle_env_import(args).await,
+        "berth_store_list" => handle_store_list(args).await,
+        "berth_store_search" => handle_store_search(args).await,
+        "berth_store_install" => handle_store_install(args).await,
         _ => CallToolResult::error(format!("Unknown tool: {name}")),
     }
 }
@@ -727,20 +774,31 @@ async fn handle_import_code(args: &Value) -> CallToolResult {
         None => return CallToolResult::error("Missing required parameter: name".into()),
     };
 
+    // Sanitize project name to prevent directory traversal
+    let name = match path_safety::sanitize_project_name(name) {
+        Ok(n) => n,
+        Err(e) => return CallToolResult::error(format!("Invalid project name: {e}")),
+    };
+
     let path = if let Some(code) = args.get("code").and_then(|v| v.as_str()) {
         let filename = args
             .get("filename")
             .and_then(|v| v.as_str())
             .unwrap_or("main.py");
+        // Sanitize filename
+        let filename = match path_safety::sanitize_filename(filename) {
+            Ok(f) => f,
+            Err(e) => return CallToolResult::error(format!("Invalid filename: {e}")),
+        };
         let base = dirs_next::data_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
             .join("com.berth.app")
             .join("projects")
-            .join(name);
+            .join(&name);
         if let Err(e) = std::fs::create_dir_all(&base) {
             return CallToolResult::error(format!("Failed to create directory: {e}"));
         }
-        if let Err(e) = std::fs::write(base.join(filename), code) {
+        if let Err(e) = std::fs::write(base.join(&filename), code) {
             return CallToolResult::error(format!("Failed to write code: {e}"));
         }
         base.to_string_lossy().to_string()
@@ -756,7 +814,7 @@ async fn handle_import_code(args: &Value) -> CallToolResult {
     };
 
     let info = runtime::detect_runtime(Path::new(&path));
-    let mut project = Project::new(name.to_string(), path, info.runtime);
+    let mut project = Project::new(name.clone(), path, info.runtime);
     project.entrypoint = info.entrypoint.clone();
 
     if let Err(e) = store.insert(&project) {
@@ -776,6 +834,18 @@ async fn handle_detect_runtime(args: &Value) -> CallToolResult {
         Some(p) => p,
         None => return CallToolResult::error("Missing required parameter: path".into()),
     };
+
+    // Restrict to paths under user's home directory
+    if let Some(home) = dirs_next::home_dir() {
+        let target = Path::new(path);
+        if let (Ok(canonical_home), Ok(canonical_target)) = (home.canonicalize(), target.canonicalize()) {
+            if !canonical_target.starts_with(&canonical_home) {
+                return CallToolResult::error(
+                    "Path must be within the user's home directory".into(),
+                );
+            }
+        }
+    }
 
     let info = runtime::detect_runtime(Path::new(path));
     let result = json!({
@@ -1263,4 +1333,110 @@ async fn handle_env_import(args: &Value) -> CallToolResult {
         if count != 1 { "s" } else { "" },
         project.name
     ))
+}
+
+// --- Template Store handlers ---
+
+async fn handle_store_list(args: &Value) -> CallToolResult {
+    let category = args.get("category").and_then(|v| v.as_str());
+
+    let catalog = match berth_core::template_store::get_catalog(false).await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to load store: {e}")),
+    };
+
+    let templates: Vec<&berth_core::template_store::TemplateMeta> = match category {
+        Some(cat) => berth_core::template_store::filter_by_category(&catalog, cat),
+        None => catalog.templates.iter().collect(),
+    };
+
+    let list: Vec<Value> = templates
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "name": t.name,
+                "description": t.description,
+                "category": t.category,
+                "runtime": t.runtime,
+                "pro_only": t.pro_only,
+                "featured": t.featured,
+                "version": t.version,
+                "tags": t.tags,
+            })
+        })
+        .collect();
+
+    CallToolResult::text(serde_json::to_string_pretty(&json!({
+        "categories": catalog.categories.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
+        "templates": list,
+    })).unwrap_or_default())
+}
+
+async fn handle_store_search(args: &Value) -> CallToolResult {
+    let query = match args.get("query").and_then(|v| v.as_str()) {
+        Some(q) => q,
+        None => return CallToolResult::error("Missing required parameter: query".into()),
+    };
+
+    let catalog = match berth_core::template_store::get_catalog(false).await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to load store: {e}")),
+    };
+
+    let templates = berth_core::template_store::search_templates(&catalog, query);
+
+    let list: Vec<Value> = templates
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "name": t.name,
+                "description": t.description,
+                "category": t.category,
+                "runtime": t.runtime,
+                "pro_only": t.pro_only,
+                "version": t.version,
+            })
+        })
+        .collect();
+
+    CallToolResult::text(serde_json::to_string_pretty(&list).unwrap_or_default())
+}
+
+async fn handle_store_install(args: &Value) -> CallToolResult {
+    let template_id = match args.get("template_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: template_id".into()),
+    };
+
+    let catalog = match berth_core::template_store::get_catalog(false).await {
+        Ok(c) => c,
+        Err(e) => return CallToolResult::error(format!("Failed to load store: {e}")),
+    };
+
+    let template = match catalog.templates.iter().find(|t| t.id == template_id) {
+        Some(t) => t,
+        None => return CallToolResult::error(format!("Template '{template_id}' not found in store")),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    // MCP skips Pro tier check (pass None)
+    match berth_core::template_store::install_template(&store, template, None).await {
+        Ok(project) => {
+            let result = json!({
+                "project_id": project.id.to_string(),
+                "name": project.name,
+                "path": project.path,
+                "runtime": format!("{:?}", project.runtime).to_lowercase(),
+                "entrypoint": project.entrypoint,
+            });
+            CallToolResult::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        }
+        Err(e) => CallToolResult::error(format!("Failed to install template: {e}")),
+    }
 }

@@ -1,5 +1,6 @@
 use berth_core::agent_transport::AgentTransport;
 use berth_core::nats_cmd_client::NatsAgentClient;
+use berth_core::path_safety;
 use tauri::Emitter;
 use berth_core::project::{Project, ProjectStatus};
 use berth_core::runtime::{self, RuntimeInfo};
@@ -64,15 +65,24 @@ async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransp
             if agent_id.is_empty() {
                 return Err("Remote targets require a NATS Agent ID. Add one in target settings.".into());
             }
-            let owner_id = target.owner_id.clone().unwrap_or_else(|| {
-                // Fallback to install_id for targets created before pairing
-                let s = get_store().ok();
-                s.and_then(|s| s.get_all_settings().ok())
-                    .and_then(|settings| settings.get("install_id").cloned())
-                    .unwrap_or_default()
-            });
+            let owner_id = target.owner_id.clone().ok_or_else(|| {
+                "Target has no owner_id — re-pair this agent in target settings".to_string()
+            })?;
             let nats_client = get_nats_client().await?;
-            Ok(Box::new(NatsAgentClient::new(nats_client, agent_id, owner_id)))
+            let mut client = NatsAgentClient::new(nats_client, agent_id, owner_id);
+
+            // Load shared secret from Keychain for HMAC signing
+            #[cfg(target_os = "macos")]
+            {
+                let key = format!("agent-secret:{}", uuid);
+                if let Ok(Some(hex_secret)) = berth_core::credentials::get_credential(&key) {
+                    if let Ok(secret_bytes) = hex::decode(&hex_secret) {
+                        client = client.with_secret(secret_bytes);
+                    }
+                }
+            }
+
+            Ok(Box::new(client))
         }
     }
 }
@@ -144,6 +154,9 @@ pub fn create_project(name: String, path: String) -> Result<Project, String> {
 
 #[tauri::command]
 pub fn save_paste_code(name: String, code: String) -> Result<String, String> {
+    // Validate project name to prevent directory traversal
+    let name = path_safety::sanitize_project_name(&name)?;
+
     // Normalize smart/curly quotes to straight quotes (macOS auto-substitution)
     let code = code
         .replace('\u{201C}', "\"") // left double curly quote
@@ -524,14 +537,14 @@ pub struct PairingResult {
 #[tauri::command]
 pub async fn pair_agent(code: String) -> Result<PairingResult, String> {
     use berth_core::nats_relay::{
-        pairing_advertise_subject, pairing_ack_subject, pairing_claim_subject,
-        PairingAdvertisement, PairingAck, PairingClaim,
+        compute_challenge_response, pairing_advertise_subject, pairing_ack_subject,
+        pairing_claim_subject, PairingAdvertisement, PairingAck, PairingClaim,
     };
     use futures::StreamExt;
 
     let code = code.trim().to_uppercase();
-    if code.len() != 6 {
-        return Err("Pairing code must be 6 characters".into());
+    if code.len() != 8 {
+        return Err("Pairing code must be 8 characters".into());
     }
 
     let nats_client = get_nats_client().await?;
@@ -573,9 +586,17 @@ pub async fn pair_agent(code: String) -> Result<PairingResult, String> {
     .await
     .map_err(|_| "No agent found with that code. Check the code and try again.")?;
 
-    // Send claim
+    // Compute challenge-response to prove we know the pairing code
+    let challenge_response = if !advertisement.challenge.is_empty() {
+        compute_challenge_response(&advertisement.challenge, &code)
+    } else {
+        String::new()
+    };
+
+    // Send claim with challenge-response
     let claim = PairingClaim {
         owner_id: owner_id.clone(),
+        challenge_response,
     };
     let claim_subject = pairing_claim_subject(&code);
     let payload = serde_json::to_vec(&claim).map_err(|e| e.to_string())?;
@@ -586,7 +607,7 @@ pub async fn pair_agent(code: String) -> Result<PairingResult, String> {
     nats_client.flush().await.map_err(|e| e.to_string())?;
 
     // Wait for ack
-    let _ack: PairingAck = tokio::time::timeout(
+    let ack: PairingAck = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         async {
             while let Some(msg) = ack_sub.next().await {
@@ -600,6 +621,10 @@ pub async fn pair_agent(code: String) -> Result<PairingResult, String> {
     .await
     .map_err(|_| "Agent did not acknowledge pairing. Try again.")?;
 
+    if !ack.success {
+        return Err(format!("Pairing rejected: {}", ack.message));
+    }
+
     // Create target
     let mut target = Target::new_remote(
         advertisement.hostname.clone(),
@@ -611,6 +636,15 @@ pub async fn pair_agent(code: String) -> Result<PairingResult, String> {
     target.owner_id = Some(owner_id.clone());
     target.agent_version = Some(advertisement.version.clone());
     store.insert_target(&target).map_err(|e| e.to_string())?;
+
+    // Store shared secret in Keychain for HMAC signing
+    #[cfg(target_os = "macos")]
+    if !ack.shared_secret.is_empty() {
+        let key = format!("agent-secret:{}", target.id);
+        if let Err(e) = berth_core::credentials::store_credential(&key, &ack.shared_secret) {
+            tracing::warn!("Failed to store agent shared secret in Keychain: {e}");
+        }
+    }
 
     Ok(PairingResult {
         success: true,
@@ -918,7 +952,12 @@ pub fn read_project_file(id: String) -> Result<String, String> {
         .as_deref()
         .ok_or("Project has no entrypoint")?;
 
-    let file_path = Path::new(&project.path).join(entrypoint);
+    // Validate entrypoint doesn't escape project directory
+    path_safety::sanitize_entrypoint(entrypoint)?;
+    let project_path = Path::new(&project.path);
+    let file_path = project_path.join(entrypoint);
+    let file_path = path_safety::validate_path_within(project_path, &file_path)?;
+
     std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read {}: {e}", file_path.display()))
 }
@@ -937,7 +976,12 @@ pub fn write_project_file(id: String, content: String) -> Result<(), String> {
         .as_deref()
         .ok_or("Project has no entrypoint")?;
 
-    let file_path = Path::new(&project.path).join(entrypoint);
+    // Validate entrypoint doesn't escape project directory
+    path_safety::sanitize_entrypoint(entrypoint)?;
+    let project_path = Path::new(&project.path);
+    let file_path = project_path.join(entrypoint);
+    let file_path = path_safety::validate_path_within(project_path, &file_path)?;
+
     std::fs::write(&file_path, content)
         .map_err(|e| format!("Failed to write {}: {e}", file_path.display()))
 }
@@ -965,12 +1009,16 @@ pub fn import_file(file_path: String) -> Result<Project, String> {
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("Invalid filename")?;
+    // Sanitize filename to prevent path traversal
+    let filename = path_safety::sanitize_filename(filename)?;
 
     let project_name = src
         .file_stem()
         .and_then(|n| n.to_str())
         .unwrap_or("imported")
         .to_string();
+    // Sanitize project name to prevent directory traversal
+    let project_name = path_safety::sanitize_project_name(&project_name)?;
 
     let base = dirs_next::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
@@ -979,7 +1027,7 @@ pub fn import_file(file_path: String) -> Result<Project, String> {
         .join(&project_name);
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 
-    let dest = base.join(filename);
+    let dest = base.join(&filename);
     std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy file: {e}"))?;
 
     let info = runtime::detect_runtime(&base);
@@ -993,7 +1041,56 @@ pub fn import_file(file_path: String) -> Result<Project, String> {
 
 // --- Agent upgrade commands ---
 
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const AGENT_GITHUB_REPO: &str = "berth-app/berth-agent";
+
+/// Fetch the latest agent version from GitHub Releases (cached 5 min).
+async fn get_latest_agent_version() -> Result<String, String> {
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
+    static CACHE: OnceLock<std::sync::Mutex<(String, Instant)>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        std::sync::Mutex::new((String::new(), Instant::now() - Duration::from_secs(600)))
+    });
+
+    {
+        let guard = cache.lock().unwrap();
+        if guard.1.elapsed() < Duration::from_secs(300) && !guard.0.is_empty() {
+            return Ok(guard.0.clone());
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("berth-app")
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let url = format!("https://api.github.com/repos/{AGENT_GITHUB_REPO}/releases/latest");
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to check latest agent version: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned {}", resp.status()));
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub response: {e}"))?;
+
+    let tag = json["tag_name"]
+        .as_str()
+        .ok_or_else(|| "No tag_name in release".to_string())?;
+
+    let version = tag.trim_start_matches('v').to_string();
+
+    *cache.lock().unwrap() = (version.clone(), Instant::now());
+    Ok(version)
+}
 
 #[derive(Clone, Serialize)]
 pub struct UpgradeCheck {
@@ -1020,7 +1117,7 @@ pub struct RollbackResult {
 }
 
 #[tauri::command]
-pub fn check_agent_upgrade(id: String) -> Result<UpgradeCheck, String> {
+pub async fn check_agent_upgrade(id: String) -> Result<UpgradeCheck, String> {
     let store = get_store()?;
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
 
@@ -1031,9 +1128,9 @@ pub fn check_agent_upgrade(id: String) -> Result<UpgradeCheck, String> {
         .ok_or_else(|| format!("Target {} not found", id))?;
 
     let current_version = target.agent_version.clone().unwrap_or_default();
-    let latest_version = APP_VERSION.to_string();
+    let latest_version = get_latest_agent_version().await.unwrap_or_default();
 
-    let available = if current_version.is_empty() {
+    let available = if current_version.is_empty() || latest_version.is_empty() {
         false
     } else {
         match (
@@ -1083,10 +1180,9 @@ async fn get_agent_download_info(version: &str, arch: &str) -> Result<(String, S
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
     // Resolve the download URL the agent will use
-    // TODO: update GitHub URLs when repo is renamed to berth
     let (download_url, is_private) = if let Some(token) = &github_token {
         let api_url = format!(
-            "https://api.github.com/repos/carlosinfantes/runway/releases/tags/v{version}"
+            "https://api.github.com/repos/{AGENT_GITHUB_REPO}/releases/tags/v{version}"
         );
         let release: serde_json::Value = client
             .get(&api_url)
@@ -1111,7 +1207,7 @@ async fn get_agent_download_info(version: &str, arch: &str) -> Result<(String, S
         (asset_url, true)
     } else {
         let url = format!(
-            "https://github.com/carlosinfantes/runway/releases/download/v{version}/{binary_name}"
+            "https://github.com/{AGENT_GITHUB_REPO}/releases/download/v{version}/{binary_name}"
         );
         (url, false)
     };
@@ -1193,11 +1289,14 @@ pub async fn upgrade_agent(id: String) -> Result<UpgradeResult, String> {
 
     let arch = health.arch.as_deref().unwrap_or("x86_64");
 
+    // Resolve latest agent version from GitHub
+    let latest_version = get_latest_agent_version().await?;
+
     // Resolve download URL and checksum from GitHub
-    let (download_url, checksum, github_token) = get_agent_download_info(APP_VERSION, arch).await?;
+    let (download_url, checksum, github_token) = get_agent_download_info(&latest_version, arch).await?;
 
     // Send upgrade command — agent downloads directly
-    match client.upgrade(APP_VERSION, &download_url, github_token.as_deref(), &checksum).await {
+    match client.upgrade(&latest_version, &download_url, github_token.as_deref(), &checksum).await {
         Ok((success, new_version, message)) => {
             if success {
                 let _ = store.update_target_status(
@@ -1254,8 +1353,9 @@ pub async fn upgrade_all_agents() -> Result<Vec<UpgradeResult>, String> {
     let store = get_store()?;
     let targets = store.list_targets().map_err(|e| e.to_string())?;
 
-    let latest = semver::Version::parse(APP_VERSION)
-        .map_err(|e| format!("Invalid app version: {e}"))?;
+    let latest_str = get_latest_agent_version().await?;
+    let latest = semver::Version::parse(&latest_str)
+        .map_err(|e| format!("Invalid latest agent version: {e}"))?;
 
     let mut results = Vec::new();
 
@@ -1571,4 +1671,151 @@ pub async fn auth_logout() -> Result<AuthInfo, String> {
     save_auth_state(&state)?;
 
     Ok(AuthInfo::from(&state))
+}
+
+// --- Template Store ---
+
+#[derive(Serialize)]
+pub struct StoreListResponse {
+    pub categories: Vec<berth_core::template_store::TemplateCategory>,
+    pub templates: Vec<StoreTemplateItem>,
+}
+
+#[derive(Serialize)]
+pub struct StoreTemplateItem {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub runtime: String,
+    pub entrypoint: String,
+    pub version: String,
+    pub author: String,
+    pub pro_only: bool,
+    pub featured: bool,
+    pub env_vars: Vec<berth_core::template_store::TemplateEnvHint>,
+    pub tags: Vec<String>,
+    pub install_count: u32,
+}
+
+impl StoreTemplateItem {
+    fn from_meta(
+        meta: &berth_core::template_store::TemplateMeta,
+        install_counts: &std::collections::HashMap<String, u32>,
+    ) -> Self {
+        Self {
+            id: meta.id.clone(),
+            name: meta.name.clone(),
+            description: meta.description.clone(),
+            category: meta.category.clone(),
+            runtime: meta.runtime.clone(),
+            entrypoint: meta.entrypoint.clone(),
+            version: meta.version.clone(),
+            author: meta.author.clone(),
+            pro_only: meta.pro_only,
+            featured: meta.featured,
+            env_vars: meta.env_vars.clone(),
+            tags: meta.tags.clone(),
+            install_count: install_counts.get(&meta.id).copied().unwrap_or(0),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn store_list_templates(
+    category: Option<String>,
+    force_refresh: bool,
+) -> Result<StoreListResponse, String> {
+    let catalog = berth_core::template_store::get_catalog(force_refresh)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let store = get_store()?;
+    let install_counts = store
+        .get_template_install_counts()
+        .map_err(|e| e.to_string())?;
+
+    let templates: Vec<StoreTemplateItem> = match &category {
+        Some(cat) => berth_core::template_store::filter_by_category(&catalog, cat)
+            .into_iter()
+            .map(|t| StoreTemplateItem::from_meta(t, &install_counts))
+            .collect(),
+        None => catalog
+            .templates
+            .iter()
+            .map(|t| StoreTemplateItem::from_meta(t, &install_counts))
+            .collect(),
+    };
+
+    Ok(StoreListResponse {
+        categories: catalog.categories,
+        templates,
+    })
+}
+
+#[tauri::command]
+pub async fn store_search_templates(
+    query: String,
+) -> Result<StoreListResponse, String> {
+    let catalog = berth_core::template_store::get_catalog(false)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let store = get_store()?;
+    let install_counts = store
+        .get_template_install_counts()
+        .map_err(|e| e.to_string())?;
+
+    let templates: Vec<StoreTemplateItem> =
+        berth_core::template_store::search_templates(&catalog, &query)
+            .into_iter()
+            .map(|t| StoreTemplateItem::from_meta(t, &install_counts))
+            .collect();
+
+    Ok(StoreListResponse {
+        categories: catalog.categories,
+        templates,
+    })
+}
+
+#[tauri::command]
+pub async fn store_install_template(
+    template_id: String,
+) -> Result<berth_core::project::Project, String> {
+    let catalog = berth_core::template_store::get_catalog(false)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let template = catalog
+        .templates
+        .iter()
+        .find(|t| t.id == template_id)
+        .ok_or_else(|| format!("Template '{}' not found in store", template_id))?
+        .clone();
+
+    // Get current auth tier for Pro gating (sync, before async)
+    let tier = match get_store()
+        .ok()
+        .and_then(|s| s.get_all_settings().ok())
+        .and_then(|settings| settings.get("auth_state").cloned())
+        .and_then(|json| serde_json::from_str::<berth_core::auth::AuthState>(&json).ok())
+    {
+        Some(state) => state.effective_tier(),
+        None => berth_core::auth::UserTier::Anonymous,
+    };
+
+    // Pro gate check before downloading
+    if template.pro_only && !tier.can_install_pro_templates() {
+        return Err("This template requires Berth Pro. Upgrade at berth.sh/pro.".into());
+    }
+
+    // Async download phase (no store needed)
+    let project_dir = berth_core::template_store::download_template_files(&template)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Sync store phase (no .await after this)
+    let store = get_store()?;
+    berth_core::template_store::finalize_template_install(&store, &template, &project_dir)
+        .map_err(|e| e.to_string())
 }

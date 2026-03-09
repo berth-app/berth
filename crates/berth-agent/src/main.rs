@@ -155,12 +155,27 @@ async fn main() -> anyhow::Result<()> {
 
     let store = Arc::new(Mutex::new(store));
 
-    // Resolve agent_id
-    let agent_id = cli
-        .nats_agent_id
-        .clone()
-        .or_else(|| sysinfo::System::host_name())
-        .unwrap_or_else(|| "unknown-agent".to_string());
+    // Resolve agent_id: CLI/env → SQLite config → generate and persist
+    let agent_id = if let Some(id) = cli.nats_agent_id.clone() {
+        id
+    } else {
+        let s = store.lock().await;
+        match s.get_config("agent_id").ok().flatten() {
+            Some(id) => id,
+            None => {
+                // First start: generate a randomized agent_id to prevent prediction
+                let hostname = sysinfo::System::host_name()
+                    .unwrap_or_else(|| "agent".to_string());
+                let suffix = &uuid::Uuid::new_v4().to_string()[..8];
+                let new_id = format!("{hostname}-{suffix}");
+                if let Err(e) = s.set_config("agent_id", &new_id) {
+                    tracing::warn!("Failed to persist agent_id: {e}");
+                }
+                tracing::info!("Generated agent_id: {new_id}");
+                new_id
+            }
+        }
+    };
 
     // Resolve owner_id: CLI/env → SQLite config → pairing mode
     let owner_id: Option<String> = if let Some(oid) = cli.owner_id.clone() {
@@ -270,12 +285,24 @@ async fn main() -> anyhow::Result<()> {
             s.get_config("owner_id").ok().flatten()
         }).unwrap_or_default();
 
-        let handler = nats_cmd_handler::NatsCommandHandler::new(
+        // Load shared secret for HMAC verification (established during pairing)
+        let shared_secret: Option<Vec<u8>> = {
+            let s = store.blocking_lock();
+            s.get_config("shared_secret")
+                .ok()
+                .flatten()
+                .and_then(|hex_str| hex::decode(&hex_str).ok())
+        };
+
+        let mut handler = nats_cmd_handler::NatsCommandHandler::new(
             publisher.client().clone(),
             agent_id.clone(),
             handler_owner_id,
             service.clone(),
         );
+        if let Some(secret) = shared_secret {
+            handler = handler.with_secret(secret);
+        }
         tokio::spawn(handler.run());
     }
 

@@ -13,4 +13,5 @@ pub mod transport;
 pub mod runtime;
 pub mod executor;
 pub mod env;
+pub mod message_auth;
 pub mod schedule;

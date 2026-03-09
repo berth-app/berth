@@ -139,13 +139,37 @@ pub fn save_ca(cert_pem: &str, key_pem: &str) -> Result<()> {
 }
 
 /// Load the CA certificate and key PEM strings from disk.
+///
+/// On Unix, verifies the key file has restricted permissions (0o600)
+/// and fixes them if they have drifted.
 pub fn load_ca() -> Result<(String, String)> {
     let dir = get_certs_dir();
 
     let cert_pem = fs::read_to_string(dir.join("ca.crt"))
         .context("CA certificate not found — run ensure_ca() first")?;
-    let key_pem = fs::read_to_string(dir.join("ca.key"))
+
+    let key_path = dir.join("ca.key");
+    let key_pem = fs::read_to_string(&key_path)
         .context("CA key not found — run ensure_ca() first")?;
+
+    // Verify and fix key file permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = fs::metadata(&key_path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode != 0o600 {
+                tracing::warn!(
+                    "CA key file has insecure permissions ({:o}), fixing to 600",
+                    mode
+                );
+                let _ = fs::set_permissions(
+                    &key_path,
+                    fs::Permissions::from_mode(0o600),
+                );
+            }
+        }
+    }
 
     Ok((cert_pem, key_pem))
 }

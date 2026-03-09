@@ -5,6 +5,7 @@ use futures::StreamExt;
 
 use berth_proto::nats_relay::*;
 use berth_proto::executor::LogStream;
+use berth_proto::message_auth::{self, NonceTracker};
 
 use crate::persistent_service::PersistentAgentService;
 
@@ -13,6 +14,9 @@ pub struct NatsCommandHandler {
     agent_id: String,
     owner_id: String,
     service: Arc<PersistentAgentService>,
+    /// Shared secret for HMAC verification (established during pairing).
+    shared_secret: Option<Vec<u8>>,
+    nonce_tracker: Arc<NonceTracker>,
 }
 
 impl NatsCommandHandler {
@@ -27,7 +31,55 @@ impl NatsCommandHandler {
             agent_id,
             owner_id,
             service,
+            shared_secret: None,
+            nonce_tracker: Arc::new(NonceTracker::new()),
         }
+    }
+
+    /// Set the shared secret for HMAC command verification.
+    pub fn with_secret(mut self, secret: Vec<u8>) -> Self {
+        self.shared_secret = Some(secret);
+        self
+    }
+
+    /// Verify a command's HMAC signature, timestamp, and nonce.
+    /// Returns `true` if the command is authentic.
+    fn verify_command(&self, cmd: &NatsCommand) -> bool {
+        let Some(secret) = &self.shared_secret else {
+            // No secret configured — accept all commands (pre-pairing compatibility)
+            return true;
+        };
+
+        // Require signature when secret is configured
+        if cmd.signature.is_empty() {
+            tracing::warn!("Rejecting unsigned NATS command (request_id={})", cmd.request_id);
+            return false;
+        }
+
+        // Check timestamp freshness
+        if !message_auth::is_timestamp_valid(cmd.timestamp) {
+            tracing::warn!(
+                "Rejecting expired NATS command (request_id={}, age={}s)",
+                cmd.request_id,
+                message_auth::current_timestamp() - cmd.timestamp
+            );
+            return false;
+        }
+
+        // Check nonce replay
+        if !self.nonce_tracker.check_and_record(&cmd.nonce) {
+            tracing::warn!("Rejecting replayed NATS command (request_id={}, nonce={})", cmd.request_id, cmd.nonce);
+            return false;
+        }
+
+        // Verify HMAC signature
+        let cmd_payload = serde_json::to_vec(&cmd.cmd).unwrap_or_default();
+        if !message_auth::verify_signature(&cmd_payload, &cmd.nonce, cmd.timestamp, &cmd.signature, secret) {
+            tracing::warn!("Rejecting NATS command with invalid signature (request_id={})", cmd.request_id);
+            return false;
+        }
+
+        true
     }
 
     pub async fn run(self) {
@@ -41,6 +93,11 @@ impl NatsCommandHandler {
         };
 
         tracing::info!("NATS command handler listening on {subject}");
+        if self.shared_secret.is_some() {
+            tracing::info!("HMAC command verification enabled");
+        } else {
+            tracing::warn!("HMAC command verification disabled — no shared secret configured. Pair this agent to enable security.");
+        }
 
         while let Some(msg) = sub.next().await {
             let cmd: NatsCommand = match serde_json::from_slice(&msg.payload) {
@@ -50,6 +107,11 @@ impl NatsCommandHandler {
                     continue;
                 }
             };
+
+            // Verify HMAC signature before processing
+            if !self.verify_command(&cmd) {
+                continue;
+            }
 
             let client = self.client.clone();
             let service = self.service.clone();
@@ -529,6 +591,9 @@ async fn handle_command(
             // Create upload subject for receiving archive chunks
             let upload_subject = berth_proto::nats_relay::upload_subject(&owner_id, &agent_id, &request_id);
 
+            // Generate a random upload token to authorize chunk uploads
+            let upload_token = uuid::Uuid::new_v4().to_string();
+
             let mut chunk_sub = match client.subscribe(upload_subject.clone()).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -542,17 +607,18 @@ async fn handle_command(
                 }
             };
 
-            // Reply with DeployReady
+            // Reply with DeployReady including the upload token
             let ready_resp = NatsResponse {
                 request_id: request_id.clone(),
                 status: NatsResponseStatus::Ok,
                 body: NatsResponseBody::DeployReady {
                     upload_subject: upload_subject.clone(),
+                    upload_token: upload_token.clone(),
                 },
             };
             send_reply(&client, &reply_to, &ready_resp).await;
 
-            // Collect chunks
+            // Collect chunks — verify upload_token on each
             let mut archive = Vec::with_capacity(total_size as usize);
             let mut received_chunks = 0u32;
             let chunk_timeout = tokio::time::Duration::from_secs(120);
@@ -567,6 +633,13 @@ async fn handle_command(
                                 continue;
                             }
                         };
+
+                        // Verify upload token
+                        let token = chunk_msg.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                        if token != upload_token {
+                            tracing::warn!("Rejecting deploy chunk with invalid upload token");
+                            continue;
+                        }
 
                         if chunk_msg.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
                             break;

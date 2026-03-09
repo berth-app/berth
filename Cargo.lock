@@ -439,7 +439,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "berth-agent"
-version = "0.2.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -451,6 +451,9 @@ dependencies = [
  "dirs-next",
  "flate2",
  "futures",
+ "hex",
+ "hmac",
+ "rand 0.8.5",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -477,6 +480,7 @@ dependencies = [
  "chrono",
  "dirs-next",
  "futures",
+ "hex",
  "reqwest 0.12.28",
  "semver",
  "serde",
@@ -521,6 +525,8 @@ dependencies = [
  "dirs-next",
  "flate2",
  "futures",
+ "hex",
+ "hmac",
  "hostname",
  "hyper-util",
  "libc",
@@ -571,10 +577,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "hex",
+ "hmac",
  "prost",
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tonic",
  "tonic-build",
@@ -1195,6 +1204,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -2106,6 +2116,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "hostname"

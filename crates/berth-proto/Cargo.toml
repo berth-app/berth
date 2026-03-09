@@ -15,6 +15,9 @@ prost = { workspace = true }
 chrono = { workspace = true }
 async-trait = "0.1"
 rand = "0.8"
+hmac = "0.12"
+hex = "0.4"
+sha2.workspace = true
 
 [build-dependencies]
 tonic-build = { workspace = true }

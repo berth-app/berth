@@ -41,7 +41,15 @@ security-framework = "3"
 
 [features]
 default = []
-nats = ["async-nats", "futures", "base64", "sha2"]
+nats = ["async-nats", "futures", "base64", "sha2", "hmac", "hex"]
+
+[dependencies.hmac]
+version = "0.12"
+optional = true
+
+[dependencies.hex]
+version = "0.4"
+optional = true
 
 [build-dependencies]
 tonic-build = { workspace = true }

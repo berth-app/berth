@@ -67,6 +67,15 @@ pub struct NatsCommand {
     pub request_id: String,
     pub reply_to: String,
     pub cmd: NatsCommandKind,
+    /// HMAC-SHA256 signature over the serialized `cmd` field.
+    #[serde(default)]
+    pub signature: String,
+    /// Unique nonce to prevent replay attacks.
+    #[serde(default)]
+    pub nonce: String,
+    /// Unix timestamp (seconds) — commands older than 60s are rejected.
+    #[serde(default)]
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,6 +219,9 @@ pub enum NatsResponseBody {
     },
     DeployReady {
         upload_subject: String,
+        /// Token required on each upload chunk to prove authorization.
+        #[serde(default)]
+        upload_token: String,
     },
     UpgradeResult {
         success: bool,
@@ -279,8 +291,8 @@ pub fn upload_subject(owner_id: &str, agent_id: &str, request_id: &str) -> Strin
 // --- Pairing Protocol Types ---
 
 const PAIRING_CODE_CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-pub const PAIRING_CODE_LENGTH: usize = 6;
-pub const PAIRING_EXPIRY_SECS: u64 = 900; // 15 minutes
+pub const PAIRING_CODE_LENGTH: usize = 8;
+pub const PAIRING_EXPIRY_SECS: u64 = 300; // 5 minutes
 
 pub fn generate_pairing_code() -> String {
     use rand::Rng;
@@ -311,11 +323,17 @@ pub struct PairingAdvertisement {
     pub arch: String,
     pub version: String,
     pub timestamp: DateTime<Utc>,
+    /// Random challenge — claimer must HMAC-sign this with the pairing code to prove knowledge.
+    #[serde(default)]
+    pub challenge: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairingClaim {
     pub owner_id: String,
+    /// HMAC-SHA256(challenge, code) — proves the claimer knows the pairing code.
+    #[serde(default)]
+    pub challenge_response: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -324,6 +342,20 @@ pub struct PairingAck {
     pub agent_id: String,
     pub owner_id: String,
     pub message: String,
+    /// Hex-encoded 256-bit shared secret for HMAC command signing.
+    #[serde(default)]
+    pub shared_secret: String,
+}
+
+/// Compute the challenge response: HMAC-SHA256(challenge, code_as_key).
+pub fn compute_challenge_response(challenge: &str, code: &str) -> String {
+    crate::message_auth::sign_command(challenge.as_bytes(), code, 0, code.as_bytes())
+}
+
+/// Verify a challenge response.
+pub fn verify_challenge_response(challenge: &str, response: &str, code: &str) -> bool {
+    let expected = compute_challenge_response(challenge, code);
+    crate::message_auth::constant_time_eq_public(expected.as_bytes(), response.as_bytes())
 }
 
 #[cfg(test)]
@@ -365,21 +397,32 @@ mod tests {
 
     #[test]
     fn test_pairing_subjects() {
-        assert_eq!(pairing_advertise_subject("K7M4XN"), "berth.pairing.advertise.K7M4XN");
-        assert_eq!(pairing_claim_subject("K7M4XN"), "berth.pairing.claim.K7M4XN");
-        assert_eq!(pairing_ack_subject("K7M4XN"), "berth.pairing.ack.K7M4XN");
+        assert_eq!(pairing_advertise_subject("K7M4XNAB"), "berth.pairing.advertise.K7M4XNAB");
+        assert_eq!(pairing_claim_subject("K7M4XNAB"), "berth.pairing.claim.K7M4XNAB");
+        assert_eq!(pairing_ack_subject("K7M4XNAB"), "berth.pairing.ack.K7M4XNAB");
     }
 
     #[test]
     fn test_generate_pairing_code() {
         let code = generate_pairing_code();
         assert_eq!(code.len(), PAIRING_CODE_LENGTH);
+        assert_eq!(code.len(), 8);
         for c in code.chars() {
             assert!(PAIRING_CODE_CHARSET.contains(&(c as u8)), "invalid char: {c}");
         }
-        // Two codes should be different (probabilistic but 32^6 = ~1B)
+        // Two codes should be different (probabilistic but 32^8 = ~1.1T)
         let code2 = generate_pairing_code();
         assert_ne!(code, code2);
+    }
+
+    #[test]
+    fn test_challenge_response() {
+        let challenge = "random-challenge-string";
+        let code = "K7M4XNAB";
+        let response = compute_challenge_response(challenge, code);
+        assert!(verify_challenge_response(challenge, &response, code));
+        assert!(!verify_challenge_response(challenge, "wrong-response", code));
+        assert!(!verify_challenge_response(challenge, &response, "WRONGCOD"));
     }
 
     #[test]
