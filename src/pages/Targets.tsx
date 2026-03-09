@@ -135,6 +135,7 @@ export default function Targets() {
   const [upgradeChecks, setUpgradeChecks] = useState<Record<string, UpgradeCheck>>({});
   const [upgradingId, setUpgradingId] = useState<string | null>(null);
   const [upgradingAll, setUpgradingAll] = useState(false);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [showPair, setShowPair] = useState(false);
   const [pairCode, setPairCode] = useState("");
   const [pairing, setPairing] = useState(false);
@@ -203,6 +204,11 @@ export default function Targets() {
   };
 
   const handleRemove = async (target: TargetInfo) => {
+    if (confirmRemoveId !== target.id) {
+      setConfirmRemoveId(target.id);
+      return;
+    }
+    setConfirmRemoveId(null);
     try {
       await removeTarget(target.id);
       toast(`Target '${target.name}' removed`, "success");
@@ -324,7 +330,7 @@ export default function Targets() {
   };
 
   const handlePair = async () => {
-    if (pairCode.trim().length !== 6) return;
+    if (pairCode.trim().length !== 8) return;
     setPairing(true);
     setPairResult(null);
     setPairStatus("discovering");
@@ -421,21 +427,21 @@ export default function Targets() {
           ) : (
             <div className="space-y-3">
               <p className="text-xs text-berth-text-secondary">
-                Enter the 6-character pairing code shown on your agent.
+                Enter the 8-character pairing code shown on your agent.
               </p>
               <input
                 type="text"
                 value={pairCode}
-                onChange={(e) => setPairCode(e.target.value.toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, "").slice(0, 6))}
-                placeholder="K7M4XN"
-                maxLength={6}
+                onChange={(e) => setPairCode(e.target.value.toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, "").slice(0, 8))}
+                placeholder="K7M4XN2B"
+                maxLength={8}
                 className="input text-center text-lg font-mono tracking-[0.3em] uppercase"
                 autoFocus
                 onKeyDown={(e) => { if (e.key === "Enter") handlePair(); }}
               />
               <button
                 onClick={handlePair}
-                disabled={pairCode.trim().length !== 6 || pairing}
+                disabled={pairCode.trim().length !== 8 || pairing}
                 className="btn btn-primary w-full"
               >
                 {pairing ? (
@@ -670,12 +676,29 @@ export default function Targets() {
                       <Wifi size={14} />
                       {pinging === t.id ? "..." : "Ping"}
                     </button>
-                    <button
-                      onClick={() => handleRemove(t)}
-                      className="btn btn-ghost btn-icon hover:!text-berth-error"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {confirmRemoveId === t.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleRemove(t)}
+                          className="btn btn-ghost btn-sm !text-berth-error text-[11px]"
+                        >
+                          Remove?
+                        </button>
+                        <button
+                          onClick={() => setConfirmRemoveId(null)}
+                          className="btn btn-ghost btn-sm text-[11px]"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleRemove(t)}
+                        className="btn btn-ghost btn-icon hover:!text-berth-error"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
                 {expandedId === t.id &&
