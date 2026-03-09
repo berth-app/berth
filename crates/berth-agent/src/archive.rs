@@ -45,10 +45,50 @@ pub fn create(project_path: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Extract a gzipped tarball to a destination directory.
+///
+/// Validates each entry's path to prevent directory traversal attacks
+/// (e.g., entries containing `../` or absolute paths).
 pub fn extract(archive_bytes: &[u8], dest: &Path) -> anyhow::Result<()> {
     let decoder = GzDecoder::new(archive_bytes);
     let mut archive = tar::Archive::new(decoder);
-    archive.unpack(dest)?;
+
+    // Validate every entry path before extraction
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+
+        // Reject absolute paths
+        if path.is_absolute() {
+            anyhow::bail!("Archive contains absolute path: {}", path.display());
+        }
+
+        // Reject path traversal components
+        for component in path.components() {
+            if let std::path::Component::ParentDir = component {
+                anyhow::bail!(
+                    "Archive contains path traversal: {}",
+                    path.display()
+                );
+            }
+        }
+
+        // Reject symlinks pointing outside dest
+        if entry.header().entry_type().is_symlink() || entry.header().entry_type().is_hard_link() {
+            if let Ok(link_target) = entry.link_name() {
+                if let Some(target) = link_target {
+                    if target.is_absolute() || target.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                        anyhow::bail!(
+                            "Archive contains suspicious link: {} -> {}",
+                            path.display(),
+                            target.display()
+                        );
+                    }
+                }
+            }
+        }
+
+        entry.unpack_in(dest)?;
+    }
     Ok(())
 }
 
@@ -161,5 +201,42 @@ mod tests {
         extract(&archive, dest.path()).unwrap();
 
         assert!(dest.path().join(".env").exists());
+    }
+
+    #[test]
+    fn test_rejects_path_traversal_in_archive() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        // Craft a malicious tarball by using append_data with a traversal path
+        let buf = Vec::new();
+        let encoder = GzEncoder::new(buf, Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+
+        let data = b"malicious content";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        // Write path bytes directly to bypass set_path validation
+        {
+            let path_bytes = b"../../etc/malicious";
+            let raw = header.as_mut_bytes();
+            raw[..path_bytes.len()].copy_from_slice(path_bytes);
+        }
+        header.set_cksum();
+        builder.append(&header, &data[..]).unwrap();
+
+        let encoder = builder.into_inner().unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let dest = tempfile::tempdir().unwrap();
+        let result = extract(&compressed, dest.path());
+        assert!(result.is_err(), "Should reject archives with path traversal entries");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("path traversal") || err_msg.contains(".."),
+            "Error should mention path traversal, got: {err_msg}"
+        );
     }
 }

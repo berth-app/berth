@@ -46,8 +46,12 @@ impl NatsCommandHandler {
     /// Returns `true` if the command is authentic.
     fn verify_command(&self, cmd: &NatsCommand) -> bool {
         let Some(secret) = &self.shared_secret else {
-            // No secret configured — accept all commands (pre-pairing compatibility)
-            return true;
+            // No secret configured — reject all commands until agent is paired
+            tracing::warn!(
+                "Rejecting NATS command (request_id={}): agent not paired, no shared secret",
+                cmd.request_id
+            );
+            return false;
         };
 
         // Require signature when secret is configured

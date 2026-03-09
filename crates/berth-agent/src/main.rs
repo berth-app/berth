@@ -280,14 +280,16 @@ async fn main() -> anyhow::Result<()> {
     // Start NATS command handler if configured
     if let Some(ref publisher) = nats_publisher {
         // owner_id is guaranteed to exist here (pairing blocks until set)
-        let handler_owner_id = cli.owner_id.clone().or_else(|| {
-            let s = store.blocking_lock();
-            s.get_config("owner_id").ok().flatten()
-        }).unwrap_or_default();
+        let handler_owner_id = if let Some(oid) = cli.owner_id.clone() {
+            oid
+        } else {
+            let s = store.lock().await;
+            s.get_config("owner_id").ok().flatten().unwrap_or_default()
+        };
 
         // Load shared secret for HMAC verification (established during pairing)
         let shared_secret: Option<Vec<u8>> = {
-            let s = store.blocking_lock();
+            let s = store.lock().await;
             s.get_config("shared_secret")
                 .ok()
                 .flatten()

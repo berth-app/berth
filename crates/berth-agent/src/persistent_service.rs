@@ -90,10 +90,17 @@ impl PersistentAgentService {
         }
     }
 
-    fn deploy_dir(&self, project_id: &str, version: u32) -> PathBuf {
-        self.deploys_dir
+    fn deploy_dir(&self, project_id: &str, version: u32) -> Result<PathBuf, String> {
+        // Validate project_id against path traversal
+        if project_id.contains("..") || project_id.contains('/') || project_id.contains('\\')
+            || project_id.contains('\0')
+        {
+            return Err(format!("Invalid project_id: contains illegal characters"));
+        }
+        let path = self.deploys_dir
             .join(project_id)
-            .join(format!("v{version}"))
+            .join(format!("v{version}"));
+        Ok(path)
     }
 
     // --- Core logic methods (shared between gRPC and NATS handlers) ---
@@ -269,6 +276,25 @@ impl PersistentAgentService {
         run_mode: &str,
         _service_port: u16,
     ) -> Result<tokio::sync::mpsc::Receiver<ExecuteResponseLine>, String> {
+        // Validate inputs against path traversal
+        if entrypoint.contains("..") || entrypoint.starts_with('/') || entrypoint.contains('\0') {
+            return Err("Invalid entrypoint: must be a relative path without '..'".into());
+        }
+        if working_dir.contains('\0') {
+            return Err("Invalid working_dir: contains null bytes".into());
+        }
+        // Verify working_dir is within deploys or tmp directory
+        if !working_dir.is_empty() && code.is_none() {
+            let wd = std::path::Path::new(working_dir);
+            if wd.is_absolute() {
+                let deploys = &self.deploys_dir;
+                let berth_tmp = Self::berth_dir().join("tmp");
+                if !wd.starts_with(deploys) && !wd.starts_with(&berth_tmp) {
+                    return Err("Invalid working_dir: must be within agent deploy directory".into());
+                }
+            }
+        }
+
         let is_service = run_mode == "service";
         let runtime = parse_runtime(runtime_str);
         let use_container = image_tag.map_or(false, |t| !t.is_empty());
@@ -637,7 +663,7 @@ impl PersistentAgentService {
         version: u32,
         setup_commands: Vec<String>,
     ) -> Result<tokio::sync::mpsc::Receiver<DeployResponseLine>, String> {
-        let deploy_dir = self.deploy_dir(project_id, version);
+        let deploy_dir = self.deploy_dir(project_id, version)?;
         std::fs::create_dir_all(&deploy_dir)
             .map_err(|e| format!("Failed to create deploy dir: {e}"))?;
         archive::extract(source_archive, &deploy_dir)
@@ -1084,7 +1110,8 @@ impl AgentService for PersistentAgentService {
         let project_id = req.project_id.clone();
         let runtime = req.runtime.clone();
         let entrypoint = req.entrypoint.clone();
-        let deploy_dir = self.deploy_dir(&project_id, version);
+        let deploy_dir = self.deploy_dir(&project_id, version)
+            .map_err(|e| tonic::Status::invalid_argument(e))?;
         let use_container = self.podman_version.is_some() && !req.containerfile.is_empty();
 
         let (tx, rx) = tokio::sync::mpsc::channel(256);
