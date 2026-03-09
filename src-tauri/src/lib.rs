@@ -5,13 +5,26 @@ use tauri::image::Image;
 use tauri::tray::TrayIconBuilder;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 
 use berth_core::nats_relay::NatsConfig;
 use berth_core::nats_subscriber::NatsSubscriber;
 
+/// Send a macOS notification via osascript.
+/// Works in both dev and release mode without bundle ID restrictions.
+pub(crate) fn notify_macos(title: &str, body: &str) {
+    let title = title.replace('\\', "\\\\").replace('"', "\\\"");
+    let body = body.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(r#"display notification "{body}" with title "{title}""#);
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output();
+    });
+}
+
 /// Send a macOS notification for a completed run if the project has notify_on_complete enabled.
-fn notify_if_enabled(app: &tauri::AppHandle, project_id: &str, exit_code: Option<i32>) {
+fn notify_if_enabled(project_id: &str, exit_code: Option<i32>) {
     if let Ok(store) = commands::get_store() {
         if let Ok(projects) = store.list() {
             if let Some(project) = projects.iter().find(|p| p.id.to_string() == project_id) {
@@ -21,7 +34,7 @@ fn notify_if_enabled(app: &tauri::AppHandle, project_id: &str, exit_code: Option
                     } else {
                         ("Berth — Run Failed", format!("{} failed (exit code {:?})", project.name, exit_code))
                     };
-                    let _ = app.notification().builder().title(title).body(&body).show();
+                    notify_macos(title, &body);
                 }
             }
         }
@@ -119,7 +132,7 @@ fn start_scheduler(app_handle: tauri::AppHandle) {
                             }),
                         );
 
-                        notify_if_enabled(&app_handle, &project_id.to_string(), exit_code);
+                        notify_if_enabled(&project_id.to_string(), exit_code);
                     }
 
                     if !results.is_empty() {
@@ -243,7 +256,7 @@ fn start_nats_subscriber(app_handle: tauri::AppHandle) {
                                         exit_code,
                                     },
                                 );
-                                notify_if_enabled(&evt_app, &project_id, exit_code);
+                                notify_if_enabled(&project_id, exit_code);
                             }
                             "schedule_triggered" => {
                                 let data: serde_json::Value = serde_json::from_str(&event.data).unwrap_or_default();
@@ -265,7 +278,52 @@ fn start_nats_subscriber(app_handle: tauri::AppHandle) {
                                     "via": "nats",
                                 }));
 
-                                notify_if_enabled(&evt_app, &project_id, exit_code);
+                                notify_if_enabled(&project_id, exit_code);
+                            }
+                            "service_restarting" => {
+                                let data: serde_json::Value = serde_json::from_str(&event.data).unwrap_or_default();
+                                let exit_code = data.get("exit_code").and_then(|v| v.as_i64()).map(|v| v as i32);
+                                let restart_count = data.get("restart_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let delay_ms = data.get("delay_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                                let project_id = event.project_id.unwrap_or_default();
+
+                                let _ = evt_app.emit(
+                                    "project-status-change",
+                                    commands::StatusEvent {
+                                        project_id: project_id.clone(),
+                                        status: "restarting".into(),
+                                        exit_code,
+                                    },
+                                );
+
+                                // Notify on crash (service died unexpectedly)
+                                if let Ok(store) = commands::get_store() {
+                                    if let Ok(projects) = store.list() {
+                                        if let Some(project) = projects.iter().find(|p| p.id.to_string() == project_id) {
+                                            if project.notify_on_complete {
+                                                let body = format!(
+                                                    "{} crashed (exit {}). Restarting #{} in {:.1}s",
+                                                    project.name,
+                                                    exit_code.map(|c| c.to_string()).unwrap_or("?".into()),
+                                                    restart_count,
+                                                    delay_ms as f64 / 1000.0
+                                                );
+                                                notify_macos("Berth — Service Restarting", &body);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "service_restarted" => {
+                                let project_id = event.project_id.unwrap_or_default();
+                                let _ = evt_app.emit(
+                                    "project-status-change",
+                                    commands::StatusEvent {
+                                        project_id: project_id.clone(),
+                                        status: "running".into(),
+                                        exit_code: None,
+                                    },
+                                );
                             }
                             _ => {}
                         }

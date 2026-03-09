@@ -53,6 +53,7 @@ interface Props {
 const STATUS_COLORS: Record<string, string> = {
   idle: "bg-berth-text-tertiary",
   running: "bg-berth-success",
+  restarting: "bg-yellow-400",
   stopped: "bg-berth-text-tertiary",
   failed: "bg-berth-error",
 };
@@ -919,7 +920,7 @@ export default function ProjectDetail({ projectId, onBack }: Props) {
           <div
             className={`w-2 h-2 rounded-full ${
               STATUS_COLORS[status] ?? STATUS_COLORS.idle
-            } ${isRunning ? "animate-pulse-soft" : ""}`}
+            } ${isRunning || status === "restarting" ? "animate-pulse-soft" : ""}`}
           />
           <span className="text-xs text-berth-text-secondary capitalize">
             {status}

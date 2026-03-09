@@ -2,7 +2,6 @@ use berth_core::agent_client::AgentClient;
 use berth_core::agent_transport::AgentTransport;
 use berth_core::nats_cmd_client::NatsAgentClient;
 use tauri::Emitter;
-use tauri_plugin_notification::NotificationExt;
 use berth_core::project::{Project, ProjectStatus};
 use berth_core::runtime::{self, RuntimeInfo};
 use berth_core::scheduler::Schedule;
@@ -357,7 +356,7 @@ pub async fn run_project(
                     } else {
                         ("Berth — Run Failed".to_string(), format!("{project_name} exited with code {exit_code}"))
                     };
-                    let _ = app_handle.notification().builder().title(&title).body(&body).show();
+                    super::notify_macos(&title, &body);
                 }
             }
             Err(e) => {
@@ -388,11 +387,7 @@ pub async fn run_project(
                 );
 
                 if notify_on_complete {
-                    let _ = app_handle.notification()
-                        .builder()
-                        .title("Berth — Run Failed")
-                        .body(&format!("{project_name}: {error_msg}"))
-                        .show();
+                    super::notify_macos("Berth — Run Failed", &format!("{project_name}: {error_msg}"));
                 }
             }
         }

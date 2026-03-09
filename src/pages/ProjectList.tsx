@@ -9,6 +9,7 @@ import {
   Download,
   Plus,
   Search,
+  RefreshCw,
 } from "lucide-react";
 import {
   listProjects,
@@ -34,6 +35,7 @@ interface Props {
 const STATUS_COLORS: Record<string, string> = {
   idle: "bg-berth-text-tertiary",
   running: "bg-berth-success",
+  restarting: "bg-yellow-400",
   stopped: "bg-berth-text-tertiary",
   failed: "bg-berth-error",
 };
@@ -41,6 +43,7 @@ const STATUS_COLORS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   idle: "Idle",
   running: "Running",
+  restarting: "Restarting",
   stopped: "Stopped",
   failed: "Failed",
 };
@@ -478,6 +481,12 @@ export default function ProjectList({ onSelect, onNewProject }: Props) {
                         </span>
                       );
                     })()}
+                    {project.run_mode === "service" && (
+                      <span className="badge badge-neutral text-[10px]">
+                        <RefreshCw size={9} className="mr-1" />
+                        service
+                      </span>
+                    )}
                     {project.run_count > 0 && (
                       <span className="text-[10px] text-berth-text-tertiary">
                         {project.run_count} run
