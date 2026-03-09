@@ -13,13 +13,15 @@ Phases 1-3 complete. Phase 4 (real workloads + polish) in progress. Strategic pi
 
 **Working end-to-end:** Project CRUD, runtime detection, agent-based Run/Stop with log streaming (local via UDS, remote via NATS), Paste & Deploy, xterm.js terminal, menu bar tray, cron scheduling.
 **MCP server:** 23 tools (stdio transport), Claude Code verified end-to-end. Includes publish/unpublish and env var management.
-**CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets, publish, unpublish, env.
+**CLI:** Full command set — list, deploy, run, stop, status, logs, import, detect, delete, health, schedule, targets, publish, unpublish, env, store (list/search/install).
 **Remote agents:** Persistent agent with SQLite store (`~/.berth/agent.db`), 16 gRPC RPCs (incl. Publish/Unpublish) + NATS command channel, agent-side scheduler, store-and-forward events, remote upgrade capability. Deployed and tested on 192.168.1.222.
-**NATS command channel:** All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. `AgentTransport` trait abstracts gRPC vs NATS — transport selected per target based on `nats_enabled` flag.
-**Agent self-upgrade:** Cloudflared-model upgrade tested end-to-end (v0.1.7 → v0.1.8). Agent downloads binary from GitHub, atomic swap, exit(42), systemd restarts with new binary. Rollback on failed probation.
-**Phase 4 progress:** macOS notifications on run complete/fail (manual + scheduled, local + remote, per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector, **public URL publishing via cloudflared tunnels** (tested end-to-end March 9, 2026), **per-project environment variables** (store + UI + MCP + CLI + .env import + log masking, March 9, 2026).
+**NATS command channel:** All remote agent communication routed through NATS (Synadia Cloud). Neither desktop nor agent needs to expose ports. `AgentTransport` trait abstracts gRPC vs NATS — transport selected per target based on `nats_enabled` flag. All commands HMAC-signed with shared secret established during pairing.
+**Agent distribution:** CI cross-compiles for x86_64 and aarch64 Linux via GitHub Actions (`release-agent.yml`). Tag `agent-v*` triggers build → publishes binaries + SHA256 checksums to `berth-app/berth-agent` GitHub releases. Install via `curl -sSL https://agent.getberth.dev/install.sh | sudo bash`. Agent self-upgrades by downloading binary from GitHub releases.
+**Agent self-upgrade:** Cloudflared-model upgrade tested end-to-end (v0.3.1 → v0.4.0). Agent downloads binary from GitHub, verifies SHA256, atomic swap, exit(42), systemd restarts with new binary. Rollback on failed probation.
+**Security hardening (v0.4.0):** HMAC-SHA256 command signing with nonce replay prevention + 60s timestamp window, path traversal prevention (project names, entrypoints, filenames, tar archives, deploy dirs), 8-char pairing codes with challenge-response + rate limiting, shared secret establishment during pairing (agent SQLite + desktop Keychain), pre-pairing command rejection, randomized agent_id, CA key permission verification.
+**Phase 4 progress:** macOS notifications on run complete/fail (manual + scheduled, local + remote, per-project toggle), in-app code editor (view/edit entrypoint with Cmd+S), target selector in Paste & Deploy, auto-run on create wired up, execution history, theme system with 3-way selector, **public URL publishing via cloudflared tunnels** (tested end-to-end March 9, 2026), **per-project environment variables** (store + UI + MCP + CLI + .env import + log masking, March 9, 2026), **template store** (CLI list/search/install, TemplateStore UI page, template tracking).
 **Auth model designed (DRF-012):** Supabase auth (magic links, Raycast model), Stripe subscriptions, progressive identity (Anonymous → Free → Pro → Team). No code yet — design document only.
-**Built but not wired:** mTLS certificate infrastructure (tls.rs), Keychain credential storage (credentials.rs).
+**Built and wired:** mTLS certificate infrastructure (tls.rs) with CA key permission verification, Keychain credential storage (credentials.rs) used for agent shared secrets.
 
 ### Persistent Remote Agent (March 7, 2026)
 The remote agent (`berth-agent`) was redesigned from a stateless gRPC server to a production-grade persistent service:
@@ -30,13 +32,13 @@ The remote agent (`berth-agent`) was redesigned from a stateless gRPC server to 
 - **Remote upgrade**: Client-streaming Upgrade RPC — receive binary, verify, swap, restart via systemd
 - **Dependency install**: Deploy RPC runs `pip install`, `npm install`, `go mod download` during deployment
 - **AgentClient** (`agent_client.rs`): 8 new client methods + types (RemoteExecution, RemoteEvent, RemoteSchedule)
-- **Deployment**: Built natively on remote server, runs as systemd service with auto-restart
+- **Deployment**: Cross-compiled via CI (GitHub Actions + `cross`), distributed as prebuilt binaries via GitHub releases (`berth-app/berth-agent`). Runs as systemd service with auto-restart
 
 ### NATS Command Channel (March 7, 2026)
 Remote agent communication fully routed through NATS — no direct network connection needed between desktop and agent:
 - **AgentTransport trait** (`agent_transport.rs`): Unified async trait with health/status/stop/execute_streaming/deploy_streaming + schedule ops. Both `AgentClient` (gRPC) and `NatsAgentClient` (NATS) implement it.
 - **NatsAgentClient** (`nats_cmd_client.rs`): Desktop-side NATS command client. Uses request-reply for simple RPCs, publish+subscribe for streaming (Execute, Deploy, Logs).
-- **NatsCommandHandler** (`nats_cmd_handler.rs`): Agent-side NATS command subscriber. Listens on `berth.<agent_id>.cmd.>`, dispatches to `PersistentAgentService::do_*()` methods.
+- **NatsCommandHandler** (`nats_cmd_handler.rs`): Agent-side NATS command subscriber. Listens on `berth.<owner_id>.<agent_id>.cmd.>`, verifies HMAC signature before dispatching to `PersistentAgentService::do_*()` methods.
 - **Transport selection**: `get_agent_client()` returns `Box<dyn AgentTransport>`. If target has `nats_enabled=true` + `nats_agent_id`, routes through NATS; otherwise falls back to gRPC.
 - **Subject hierarchy**: `berth.<agent_id>.cmd.<type>` for commands, `berth.<agent_id>.resp.<request_id>` for streaming responses, plus existing event/log/heartbeat subjects via JetStream.
 - **Target UI**: Add Target form includes optional "NATS Agent ID" field. Green "NATS" badge on enabled targets. `update_target_nats` Tauri command for toggling.
@@ -54,12 +56,49 @@ Auth model designed but not yet implemented. Key decisions:
 - **Desktop flow:** Email input in Settings modal → Supabase magic link → `auth.berth.sh/callback` bridge page → `berth://auth/callback` deep link → Tauri handles token exchange.
 - **Implementation:** Phase 5 — `auth.rs`, `supabase.rs` in berth-core, `AccountSection.tsx` + `AuthModal.tsx` in React, Supabase Edge Functions for profile/sync/checkout/nats-provisioning.
 
+### Security Hardening (March 9, 2026) — v0.4.0
+Full security audit and remediation of remote agent communication. Three phases implemented:
+
+**P0 — HMAC Message Signing + Path Traversal:**
+- **HMAC-SHA256 command signing** (`message_auth.rs`): All NATS commands carry signature, nonce, timestamp. Agent verifies before dispatching. Desktop signs on send. 60s timestamp freshness window, bounded nonce tracker (10K entries) prevents replay.
+- **Path safety** (`path_safety.rs`): `sanitize_project_name()`, `sanitize_entrypoint()`, `sanitize_filename()`, `validate_path_within()`. Applied in Tauri commands, MCP tools, agent deploy/execute paths. Rejects `../`, absolute paths, null bytes, control chars.
+- **Tar archive validation**: Every entry validated on extraction — rejects `../` components, absolute paths, suspicious symlinks/hardlinks.
+- **Upload token auth**: Per-upload random UUID token generated on deploy start, required on every chunk.
+- **Deploy path validation**: `deploy_dir()` rejects project_ids with `../` or path separators. `do_execute()` validates entrypoint is relative and working_dir is within deploys/tmp.
+
+**P1 — Pairing Hardening:**
+- **8-char codes** (32^8 ≈ 1.1T combinations, was 6-char/32^6 ≈ 1B). 5-minute expiry (was 15 min).
+- **Challenge-response**: Agent generates random UUID challenge in advertisement. Desktop computes `HMAC-SHA256(challenge, pairing_code)` and sends in claim. Agent verifies.
+- **Rate limiting**: 5 failed claims → 5min cooldown. 3 expired codes without success → requires agent restart.
+- **Shared secret establishment**: Agent generates 256-bit random secret on successful pairing. Stored in agent SQLite (`agent_config` table) and sent in `PairingAck`. Desktop stores in macOS Keychain as `agent-secret:{target_id}`.
+- **Pre-pairing command rejection**: Agent rejects ALL NATS commands when no shared secret is configured (was accepting all).
+- **File permissions**: `agent.env` set to 0o600 on Unix after writing `BERTH_OWNER_ID`.
+
+**P2 — Identity Hardening:**
+- **Randomized agent_id**: First start generates `{hostname}-{uuid8}`, persisted in SQLite. CLI `--nats-agent-id` still overrides.
+- **Removed owner_id fallback**: `get_agent_client()` no longer falls back to `install_id`. Targets without `owner_id` must re-pair.
+- **CA key permission check**: `load_ca()` verifies key file has 0o600 permissions, auto-fixes with warning if drifted.
+
+**Pending security items** (documented in `.claude/projects/.../memory/security.md`):
+- Executor `expect()` → `ok_or()` (medium)
+- NATS command rate limiting post-pairing (medium)
+- Nonce tracker persistence to SQLite (medium)
+- NATS ACLs, per-agent credentials, binary signature verification (needs infrastructure)
+
+### Agent Distribution (March 9, 2026) — CI Cross-Compilation
+- **CI workflow**: `.github/workflows/release-agent.yml` triggers on `agent-v*` tags
+- **Cross-compilation**: `cross` crate builds for `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` on Ubuntu runners
+- **Artifacts**: Binary + SHA256 checksum per architecture, uploaded as GitHub release assets to `berth-app/berth-agent` public repo
+- **Install**: `curl -sSL https://agent.getberth.dev/install.sh | sudo bash`
+- **Self-upgrade**: Agent downloads new binary from GitHub releases, verifies SHA256, atomic swap, exit(42), systemd restarts
+
 ### Agent Self-Upgrade (March 8, 2026) — Cloudflared Model
-Tested end-to-end: v0.1.7 → v0.1.8 fully automated, zero manual intervention.
-- **Pattern:** Agent downloads binary from GitHub, atomic rename swap, exit(42), systemd restarts with new binary
+Tested end-to-end: v0.3.1 → v0.4.0 fully automated, zero manual intervention.
+- **Pattern:** Agent downloads binary from GitHub, verifies SHA256, atomic rename swap, exit(42), systemd restarts with new binary
 - **Key systemd settings:** `SuccessExitStatus=42` (prevents rate-limiting), `ExecStopPost=+/usr/local/lib/berth/rollback.sh` (runs as root)
 - **Probation:** 30s window, 3 TCP self-connects required to pass. Rollback on failure.
 - **CLI:** `berth-agent update [--version X.Y.Z] [--yes]` for self-serve updates
+- **Systemd service**: Runs as user `berth` at `/home/berth/.berth/bin/berth-agent`, config in `/home/berth/.berth/agent.env`
 
 ### Public URL Publishing (March 9, 2026) — Cloudflared Tunnels
 Tested end-to-end: run a Python HTTP server, click Publish, get a public trycloudflare.com URL.
@@ -113,9 +152,10 @@ See `tasks.md` for detailed pending work. The app runs via `cargo tauri dev` on 
 
 ```
 berth-app/          # Tauri 2.0 app (Rust backend + React frontend)
-berth-agent/        # Rust binary (runs locally or on remote targets)
+berth-agent/        # Rust binary (cross-compiled for Linux x86_64/aarch64, distributed via GitHub releases)
 berth-cli/          # CLI interface (thin wrapper over core)
 berth-core/         # Shared Rust library (business logic, gRPC, models)
+berth-proto/        # Shared contract crate (proto types, NATS relay, message auth, runtime types)
 berth-mcp/          # MCP server implementation (Rust)
 ```
 
@@ -354,3 +394,6 @@ berth env import my-bot .env           # Import from .env file
 | Agent self-upgrade | Cloudflared model — exit(42) + systemd restart | Atomic binary swap, 30s probation, automatic rollback on failure |
 | Phase 4 pivot | Real workloads over cloud targets | Cloud targets (Lambda, Workers) deferred to Phase 5. Env vars, service mode, Compose, public URLs increase value for existing local+remote story. 3.4:1 infra-to-feature ratio indicated over-engineering — focus on user value |
 | Public URL publishing | Pluggable tunnel providers (cloudflared/ngrok/custom) | Berth orchestrates, user picks provider. Zero Berth infrastructure or liability. No relay server to host. Users who want custom domains bring their own Cloudflare/ngrok account |
+| Agent distribution | CI cross-compilation + GitHub releases | `cross` crate builds x86_64 + aarch64 Linux on GitHub Actions. Published to `berth-app/berth-agent`. Agent self-upgrades from releases |
+| NATS command security | HMAC-SHA256 signing + challenge-response pairing | Shared secret established during pairing (agent SQLite + desktop Keychain). All commands signed with nonce + timestamp. Pre-pairing commands rejected |
+| Pairing codes | 8-char codes (32^8 ≈ 1.1T) + 5min expiry | Challenge-response (HMAC of challenge using code as key). Rate limiting (5 failures → cooldown). Replaces 6-char/15min |
