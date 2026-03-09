@@ -163,10 +163,12 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "unknown-agent".to_string());
 
     // Resolve owner_id: CLI/env → SQLite config → pairing mode
-    let owner_id: Option<String> = cli.owner_id.clone().or_else(|| {
-        let s = store.blocking_lock();
+    let owner_id: Option<String> = if let Some(oid) = cli.owner_id.clone() {
+        Some(oid)
+    } else {
+        let s = store.lock().await;
         s.get_config("owner_id").ok().flatten()
-    });
+    };
 
     let env_file = db_dir.join("agent.env");
 
