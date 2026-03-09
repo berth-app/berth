@@ -1,29 +1,41 @@
+// Re-export berth-proto for backward compatibility.
+// Crates that previously imported from berth_core:: continue to work.
+
+// Shared protocol types — re-exported from berth-proto
+pub use berth_proto::nats_relay;
+pub use berth_proto::env;
+pub mod executor;
+pub mod agent_transport {
+    pub use berth_proto::transport::*;
+}
+
+// Runtime types from berth-proto + detection logic
+pub mod runtime;
+
+// Agent client (gRPC client + types) — wraps proto and transport types
 pub mod agent_client;
 pub mod agent_service;
 pub mod archive;
+pub mod auth;
 pub mod container;
 pub mod containerfile;
 #[cfg(target_os = "macos")]
 pub mod credentials;
 pub mod discovery;
-pub mod env;
-pub mod executor;
 pub mod local_agent;
 pub mod project;
-pub mod runtime;
 pub mod scheduler;
 pub mod setup;
 pub mod store;
+pub mod supabase;
 pub mod target;
-pub mod agent_transport;
-pub mod nats_relay;
+pub mod tls;
+pub mod tunnel;
+pub mod uds;
 #[cfg(feature = "nats")]
 pub mod nats_subscriber;
 #[cfg(feature = "nats")]
 pub mod nats_cmd_client;
-pub mod tls;
-pub mod tunnel;
-pub mod uds;
 
 pub use project::{Project, ProjectStatus, RunMode};
 pub use runtime::{Runtime, RuntimeInfo};

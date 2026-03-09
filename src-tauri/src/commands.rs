@@ -1,4 +1,3 @@
-use berth_core::agent_client::AgentClient;
 use berth_core::agent_transport::AgentTransport;
 use berth_core::nats_cmd_client::NatsAgentClient;
 use tauri::Emitter;
@@ -42,8 +41,8 @@ pub(crate) fn get_store() -> Result<ProjectStore, String> {
     ProjectStore::open(db_path.to_str().unwrap_or("berth.db")).map_err(|e| e.to_string())
 }
 
-/// Get a transport for the given target. None or "local" uses the embedded local agent via gRPC.
-/// Remote targets with `nats_enabled` use NATS command channel; otherwise gRPC.
+/// Get a transport for the given target. None or "local" uses the embedded local agent via UDS.
+/// All remote targets use NATS command channel — gRPC fallback removed.
 async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransport>, String> {
     match target_id {
         None | Some("local") | Some("") => {
@@ -61,20 +60,19 @@ async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransp
                 .find(|t| t.id == uuid)
                 .ok_or_else(|| format!("Target {tid} not found"))?;
 
-            // Use NATS transport if enabled and agent_id is set
-            if target.nats_enabled {
-                if let Some(ref agent_id) = target.nats_agent_id {
-                    let nats_client = get_nats_client().await?;
-                    return Ok(Box::new(NatsAgentClient::new(nats_client, agent_id.clone())));
-                }
+            let agent_id = target.nats_agent_id.as_deref().unwrap_or("").to_string();
+            if agent_id.is_empty() {
+                return Err("Remote targets require a NATS Agent ID. Add one in target settings.".into());
             }
-
-            // Fall back to gRPC
-            let endpoint = target.grpc_endpoint();
-            let client = AgentClient::connect(&endpoint)
-                .await
-                .map_err(|e| format!("Failed to connect to agent: {e}"))?;
-            Ok(Box::new(client))
+            let owner_id = target.owner_id.clone().unwrap_or_else(|| {
+                // Fallback to install_id for targets created before pairing
+                let s = get_store().ok();
+                s.and_then(|s| s.get_all_settings().ok())
+                    .and_then(|settings| settings.get("install_id").cloned())
+                    .unwrap_or_default()
+            });
+            let nats_client = get_nats_client().await?;
+            Ok(Box::new(NatsAgentClient::new(nats_client, agent_id, owner_id)))
         }
     }
 }
@@ -462,6 +460,7 @@ pub struct TargetInfo {
     pub nats_agent_id: Option<String>,
     pub nats_enabled: bool,
     pub tunnel_providers: Vec<String>,
+    pub owner_id: Option<String>,
 }
 
 impl From<&Target> for TargetInfo {
@@ -478,6 +477,7 @@ impl From<&Target> for TargetInfo {
             nats_agent_id: t.nats_agent_id.clone(),
             nats_enabled: t.nats_enabled,
             tunnel_providers: vec![],
+            owner_id: t.owner_id.clone(),
         }
     }
 }
@@ -508,6 +508,119 @@ pub fn remove_target(id: String) -> Result<(), String> {
     let store = get_store()?;
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
     store.delete_target(uuid).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct PairingResult {
+    pub success: bool,
+    pub agent_id: String,
+    pub agent_hostname: String,
+    pub agent_os: String,
+    pub agent_version: String,
+    pub owner_id: String,
+    pub target_id: String,
+}
+
+#[tauri::command]
+pub async fn pair_agent(code: String) -> Result<PairingResult, String> {
+    use berth_core::nats_relay::{
+        pairing_advertise_subject, pairing_ack_subject, pairing_claim_subject,
+        PairingAdvertisement, PairingAck, PairingClaim,
+    };
+    use futures::StreamExt;
+
+    let code = code.trim().to_uppercase();
+    if code.len() != 6 {
+        return Err("Pairing code must be 6 characters".into());
+    }
+
+    let nats_client = get_nats_client().await?;
+    let store = get_store()?;
+
+    // Get install_id as owner_id
+    let settings = store.get_all_settings().unwrap_or_default();
+    let owner_id = settings
+        .get("install_id")
+        .cloned()
+        .ok_or("install_id not found — restart the app")?;
+
+    // Subscribe to ack first, then discover agent
+    let ack_subject = pairing_ack_subject(&code);
+    let mut ack_sub = nats_client
+        .subscribe(ack_subject)
+        .await
+        .map_err(|e| format!("Failed to subscribe to pairing ack: {e}"))?;
+
+    // Subscribe to advertisement to discover agent info
+    let adv_subject = pairing_advertise_subject(&code);
+    let mut adv_sub = nats_client
+        .subscribe(adv_subject)
+        .await
+        .map_err(|e| format!("Failed to subscribe to pairing advertisements: {e}"))?;
+
+    // Wait up to 15s for an advertisement
+    let advertisement: PairingAdvertisement = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        async {
+            while let Some(msg) = adv_sub.next().await {
+                if let Ok(ad) = serde_json::from_slice::<PairingAdvertisement>(&msg.payload) {
+                    return ad;
+                }
+            }
+            unreachable!()
+        },
+    )
+    .await
+    .map_err(|_| "No agent found with that code. Check the code and try again.")?;
+
+    // Send claim
+    let claim = PairingClaim {
+        owner_id: owner_id.clone(),
+    };
+    let claim_subject = pairing_claim_subject(&code);
+    let payload = serde_json::to_vec(&claim).map_err(|e| e.to_string())?;
+    nats_client
+        .publish(claim_subject, payload.into())
+        .await
+        .map_err(|e| format!("Failed to send pairing claim: {e}"))?;
+    nats_client.flush().await.map_err(|e| e.to_string())?;
+
+    // Wait for ack
+    let _ack: PairingAck = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        async {
+            while let Some(msg) = ack_sub.next().await {
+                if let Ok(ack) = serde_json::from_slice::<PairingAck>(&msg.payload) {
+                    return ack;
+                }
+            }
+            unreachable!()
+        },
+    )
+    .await
+    .map_err(|_| "Agent did not acknowledge pairing. Try again.")?;
+
+    // Create target
+    let mut target = Target::new_remote(
+        advertisement.hostname.clone(),
+        String::new(), // no direct host needed for NATS
+        0,
+    );
+    target.nats_agent_id = Some(advertisement.agent_id.clone());
+    target.nats_enabled = true;
+    target.owner_id = Some(owner_id.clone());
+    target.agent_version = Some(advertisement.version.clone());
+    store.insert_target(&target).map_err(|e| e.to_string())?;
+
+    Ok(PairingResult {
+        success: true,
+        agent_id: advertisement.agent_id,
+        agent_hostname: advertisement.hostname,
+        agent_os: format!("{}/{}", advertisement.os, advertisement.arch),
+        agent_version: advertisement.version,
+        owner_id,
+        target_id: target.id.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -1272,4 +1385,190 @@ pub fn import_env_file(project_id: String, content: String) -> Result<u32, Strin
         store.set_env_var(uuid, &key, &value).map_err(|e| e.to_string())?;
     }
     Ok(count)
+}
+
+// --- Auth commands ---
+
+use berth_core::auth::{AuthState, UserTier};
+use berth_core::supabase::SupabaseClient;
+
+#[derive(Serialize, Clone)]
+pub struct AuthInfo {
+    pub tier: String,
+    pub email: Option<String>,
+    pub user_id: Option<String>,
+}
+
+impl From<&AuthState> for AuthInfo {
+    fn from(state: &AuthState) -> Self {
+        Self {
+            tier: state.tier.to_string(),
+            email: state.email.clone(),
+            user_id: state.user_id.clone(),
+        }
+    }
+}
+
+fn load_auth_state() -> AuthState {
+    get_store()
+        .ok()
+        .and_then(|store| store.get_all_settings().ok())
+        .and_then(|settings| settings.get("auth_state").cloned())
+        .and_then(|json| serde_json::from_str::<AuthState>(&json).ok())
+        .unwrap_or_default()
+}
+
+fn save_auth_state(state: &AuthState) -> Result<(), String> {
+    let store = get_store()?;
+    let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
+    store.set_setting("auth_state", &json).map_err(|e| e.to_string())
+}
+
+/// Get the current auth state (cached in SQLite settings).
+#[tauri::command]
+pub fn auth_get_state() -> Result<AuthInfo, String> {
+    Ok(AuthInfo::from(&load_auth_state()))
+}
+
+/// Send a magic link email via Supabase. User must click the link in their email.
+#[tauri::command]
+pub async fn auth_send_magic_link(email: String) -> Result<(), String> {
+    let email = email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return Err("Please enter a valid email address".into());
+    }
+
+    let client = SupabaseClient::new();
+    client.send_magic_link(&email).await.map_err(|e| e.to_string())?;
+
+    // Remember the pending email so the UI can show "check your email"
+    let store = get_store()?;
+    store.set_setting("auth_pending_email", &email).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Handle the auth callback after user clicks magic link.
+/// Called from the deep link handler with tokens from the redirect URL.
+#[tauri::command]
+pub async fn auth_handle_callback(
+    access_token: String,
+    refresh_token: String,
+    app: tauri::AppHandle,
+) -> Result<AuthInfo, String> {
+    // Store tokens in Keychain
+    #[cfg(target_os = "macos")]
+    {
+        berth_core::credentials::store_auth_token(&access_token)
+            .map_err(|e| format!("Failed to store access token: {e}"))?;
+        berth_core::credentials::store_refresh_token(&refresh_token)
+            .map_err(|e| format!("Failed to store refresh token: {e}"))?;
+    }
+
+    // Fetch profile from Supabase
+    let client = SupabaseClient::new();
+    let profile = client.get_profile(&access_token).await.map_err(|e| e.to_string())?;
+
+    let tier = match profile.tier.as_str() {
+        "pro" => UserTier::Pro,
+        "team" => UserTier::Team,
+        "early_adopter" => UserTier::EarlyAdopter,
+        _ => UserTier::Free,
+    };
+
+    let now = chrono::Utc::now();
+    let state = AuthState {
+        tier,
+        email: profile.email.or_else(|| {
+            get_store().ok()
+                .and_then(|s| s.get_all_settings().ok())
+                .and_then(|s| s.get("auth_pending_email").cloned())
+        }),
+        user_id: Some(profile.id),
+        last_validated_at: Some(now),
+        offline_grace_until: if tier == UserTier::Pro || tier == UserTier::Team {
+            Some(now + chrono::Duration::days(7))
+        } else {
+            None
+        },
+    };
+
+    save_auth_state(&state)?;
+
+    // Clear pending email
+    if let Ok(store) = get_store() {
+        let _ = store.set_setting("auth_pending_email", "");
+    }
+
+    // Notify frontend
+    let _ = app.emit("auth-state-changed", AuthInfo::from(&state));
+
+    Ok(AuthInfo::from(&state))
+}
+
+/// Refresh the access token using the stored refresh token.
+#[tauri::command]
+pub async fn auth_refresh() -> Result<AuthInfo, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let refresh_token = berth_core::credentials::get_refresh_token()
+            .map_err(|e| e.to_string())?
+            .ok_or("No refresh token found. Please sign in again.")?;
+
+        let client = SupabaseClient::new();
+        let tokens = client.refresh_session(&refresh_token).await.map_err(|e| e.to_string())?;
+
+        // Update tokens in Keychain
+        berth_core::credentials::store_auth_token(&tokens.access_token)
+            .map_err(|e| e.to_string())?;
+        berth_core::credentials::store_refresh_token(&tokens.refresh_token)
+            .map_err(|e| e.to_string())?;
+
+        // Re-fetch profile to update tier
+        let profile = client.get_profile(&tokens.access_token).await.map_err(|e| e.to_string())?;
+
+        let tier = match profile.tier.as_str() {
+            "pro" => UserTier::Pro,
+            "team" => UserTier::Team,
+            _ => UserTier::Free,
+        };
+
+        let now = chrono::Utc::now();
+        let state = AuthState {
+            tier,
+            email: profile.email,
+            user_id: Some(profile.id),
+            last_validated_at: Some(now),
+            offline_grace_until: if tier == UserTier::Pro || tier == UserTier::Team {
+                Some(now + chrono::Duration::days(7))
+            } else {
+                None
+            },
+        };
+
+        save_auth_state(&state)?;
+        return Ok(AuthInfo::from(&state));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    Err("Token refresh requires macOS Keychain".into())
+}
+
+/// Log out: clear auth state, Keychain tokens, and revoke server session.
+#[tauri::command]
+pub async fn auth_logout() -> Result<AuthInfo, String> {
+    // Revoke server session if we have an access token
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(Some(token)) = berth_core::credentials::get_auth_token() {
+            let client = SupabaseClient::new();
+            let _ = client.sign_out(&token).await;
+        }
+        let _ = berth_core::credentials::clear_auth_tokens();
+    }
+
+    let state = AuthState::default();
+    save_auth_state(&state)?;
+
+    Ok(AuthInfo::from(&state))
 }

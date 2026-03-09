@@ -139,6 +139,20 @@ Phase 3 is marked complete in CLAUDE.md but has loose ends:
 
 ## Phase 5: Growth (Month 7+)
 
+### License Model (DRF-014)
+- [x] **P0** License model design: DRF-014 (`reasoning/drf/014-license-model.yaml`) — tier definitions, enforcement points, UX patterns, offline behavior
+- [ ] **P1** `auth.rs` in berth-core: UserTier enum (Anonymous/Free/Pro/Team), AuthState struct, capability methods, effective_tier() with offline grace
+- [ ] **P1** Tauri managed state: AppAuthState, get_auth_state/refresh_auth_state commands
+- [ ] **P1** 3 hard enforcement gates in commands.rs: get_nats_client(), publish_project, update_target_nats
+- [ ] **P1** Frontend auth module (`src/lib/auth.ts`): tier types, capability checks, getAuthState() wrapper
+- [ ] **P1** UpgradePrompt.tsx: reusable inline upgrade nudge component
+- [ ] **P1** AccountSection in Settings.tsx: tier display, sign-in/upgrade CTA
+- [ ] **P1** Soft nudges in Targets.tsx (NATS) and ProjectDetail.tsx (Publish)
+- [ ] **P1** Supabase integration: profile lookup, tier validation, NATS credential provisioning
+- [ ] **P1** Stripe integration: Pro subscription ($12/mo), checkout + webhook handling
+- [ ] **P1** 7-day offline grace period with cached tier_expires_at
+
+### Auth & Subscription
 - [ ] **P1** Pro tier + subscription infrastructure (Stripe)
 - [ ] **P1** Team features: shared projects, shared targets, RBAC
 - [ ] **P2** Web dashboard (companion, not replacement)

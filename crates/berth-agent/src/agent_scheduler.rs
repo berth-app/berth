@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use tokio::sync::Mutex;
 
-use berth_core::executor::{self, LogStream};
-use berth_core::runtime::Runtime;
-use berth_core::container;
+use crate::executor::{self, LogStream};
+use berth_proto::runtime::Runtime;
+use crate::container;
 
 use crate::agent_store::AgentStore;
 use crate::nats_publisher::{self, NatsPublisher};
@@ -167,7 +167,7 @@ pub async fn tick(store: &Arc<Mutex<AgentStore>>, nats: &Option<Arc<NatsPublishe
         nats_publisher::maybe_publish_event(nats, "schedule_triggered", Some(&sched.project_id), Some(&execution_id), &data).await;
 
         // Advance schedule
-        let next = berth_core::scheduler::parse_next_run(&sched.cron_expr, now);
+        let next = berth_proto::schedule::parse_next_run(&sched.cron_expr, now);
         {
             let store = store.lock().await;
             let _ = store.update_schedule_after_run(&sched.id, now, next);

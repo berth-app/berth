@@ -97,6 +97,7 @@ export interface TargetInfo {
   nats_agent_id: string | null;
   nats_enabled: boolean;
   tunnel_providers: string[];
+  owner_id: string | null;
 }
 
 export async function listTargets(): Promise<TargetInfo[]> {
@@ -107,18 +108,32 @@ export async function addTarget(
   name: string,
   host: string,
   port: number,
-  natsAgentId?: string
+  natsAgentId: string
 ): Promise<TargetInfo> {
   return tauriInvoke<TargetInfo>("add_target", {
     name,
     host,
     port,
-    nats_agent_id: natsAgentId || null,
+    nats_agent_id: natsAgentId,
   });
 }
 
 export async function removeTarget(id: string): Promise<void> {
   return tauriInvoke("remove_target", { id });
+}
+
+export interface PairingResult {
+  success: boolean;
+  agent_id: string;
+  agent_hostname: string;
+  agent_os: string;
+  agent_version: string;
+  owner_id: string;
+  target_id: string;
+}
+
+export async function pairAgent(code: string): Promise<PairingResult> {
+  return tauriInvoke<PairingResult>("pair_agent", { code });
 }
 
 export async function updateTargetNats(
@@ -383,5 +398,39 @@ export async function importEnvFile(
   content: string
 ): Promise<number> {
   return tauriInvoke<number>("import_env_file", { projectId, content });
+}
+
+// --- Auth ---
+
+export interface AuthInfo {
+  tier: "anonymous" | "free" | "early_adopter" | "pro" | "team";
+  email: string | null;
+  user_id: string | null;
+}
+
+export async function authGetState(): Promise<AuthInfo> {
+  return tauriInvoke<AuthInfo>("auth_get_state");
+}
+
+export async function authSendMagicLink(email: string): Promise<void> {
+  return tauriInvoke("auth_send_magic_link", { email });
+}
+
+export async function authHandleCallback(
+  accessToken: string,
+  refreshToken: string
+): Promise<AuthInfo> {
+  return tauriInvoke<AuthInfo>("auth_handle_callback", {
+    accessToken,
+    refreshToken,
+  });
+}
+
+export async function authRefresh(): Promise<AuthInfo> {
+  return tauriInvoke<AuthInfo>("auth_refresh");
+}
+
+export async function authLogout(): Promise<AuthInfo> {
+  return tauriInvoke<AuthInfo>("auth_logout");
 }
 

@@ -6,89 +6,20 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tonic::transport::Channel;
 
-use crate::agent_transport::{AgentTransport, DeployParams, DeployResponseLine, ExecuteParams, ExecuteResponseLine};
-use crate::executor::{LogLine, LogStream};
+use berth_proto::transport::{AgentTransport, DeployParams, DeployResponseLine, ExecuteParams, ExecuteResponseLine};
+use berth_proto::executor::{LogLine, LogStream};
 
 pub mod proto {
-    tonic::include_proto!("berth");
+    pub use berth_proto::proto::*;
 }
 
 use proto::agent_service_client::AgentServiceClient;
 
-/// Health information returned by a remote agent.
-pub struct AgentHealth {
-    pub version: String,
-    pub status: String,
-    pub uptime_seconds: u64,
-    pub podman_version: Option<String>,
-    pub container_ready: bool,
-    pub os: Option<String>,
-    pub arch: Option<String>,
-    pub probation_status: String,
-    pub tunnel_providers: Vec<String>,
-}
-
-/// Execution history entry from a remote agent.
-pub struct RemoteExecution {
-    pub id: String,
-    pub project_id: String,
-    pub deployment_id: String,
-    pub started_at: String,
-    pub finished_at: String,
-    pub exit_code: i32,
-    pub trigger: String,
-    pub status: String,
-}
-
-/// Event from a remote agent's store-and-forward queue.
-pub struct RemoteEvent {
-    pub id: i64,
-    pub event_type: String,
-    pub project_id: String,
-    pub execution_id: String,
-    pub data: String,
-    pub created_at: String,
-}
-
-/// Schedule info from a remote agent.
-pub struct RemoteSchedule {
-    pub id: String,
-    pub project_id: String,
-    pub cron_expr: String,
-    pub enabled: bool,
-    pub created_at: String,
-    pub last_triggered_at: String,
-    pub next_run_at: String,
-}
-
-/// Result of deploying a project (build or setup).
-pub struct DeployResult {
-    pub image_tag: Option<String>,
-    pub version: u32,
-    pub success: bool,
-}
-
-/// Status of a remote agent including resource usage and running projects.
-pub struct AgentStatus {
-    pub agent_id: String,
-    pub status: String,
-    pub cpu_usage: f64,
-    pub memory_bytes: u64,
-    pub running_projects: Vec<RunningProject>,
-}
-
-/// A project currently running on the remote agent.
-pub struct RunningProject {
-    pub project_id: String,
-    pub status: String,
-    pub started_at: String,
-}
-
-/// Result of executing a project, including logs and exit code.
-pub struct ExecuteResult {
-    pub logs: Vec<LogLine>,
-    pub exit_code: i32,
-}
+// Re-export transport types for backward compatibility
+pub use berth_proto::transport::{
+    AgentHealth, AgentStatus, DeployResult, ExecuteResult,
+    RemoteEvent, RemoteExecution, RemoteSchedule, RunningProject,
+};
 
 /// gRPC client for communicating with a remote Berth agent.
 #[derive(Clone)]

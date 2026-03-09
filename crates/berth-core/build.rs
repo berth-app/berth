@@ -1,4 +1,4 @@
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::compile_protos("../../proto/berth.proto")?;
-    Ok(())
+fn main() {
+    // Proto compilation moved to berth-proto crate.
+    // berth-core now depends on berth-proto for proto types.
 }

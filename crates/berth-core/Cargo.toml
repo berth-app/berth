@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
+berth-proto = { path = "../berth-proto" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -31,6 +32,7 @@ async-nats = { workspace = true, optional = true }
 futures = { version = "0.3", optional = true }
 base64 = { version = "0.22", optional = true }
 async-trait = "0.1"
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 semver = { workspace = true }
 sha2 = { version = "0.10", optional = true }
 

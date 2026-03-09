@@ -2,6 +2,7 @@
 //! Requires a running berth-agent at 192.168.1.222:50051
 
 use berth_core::agent_client::AgentClient;
+use berth_core::agent_transport::AgentTransport;
 
 const REMOTE_ENDPOINT: &str = "http://192.168.1.222:50051";
 

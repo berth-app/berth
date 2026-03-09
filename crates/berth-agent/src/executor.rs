@@ -5,10 +5,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
-// Re-export types from berth-proto so existing code using berth_core::executor:: still works
 pub use berth_proto::executor::{LogLine, LogStream};
 
-use crate::runtime::Runtime;
+use berth_proto::runtime::Runtime;
 
 /// Build the command to execute a project based on its runtime.
 fn build_command(

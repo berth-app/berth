@@ -8,6 +8,7 @@ pub struct NatsConfig {
     pub url: String,
     pub creds_path: Option<String>,
     pub agent_id: String,
+    pub owner_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,22 +42,22 @@ pub struct NatsHeartbeat {
     pub timestamp: DateTime<Utc>,
 }
 
-pub fn event_subject(agent_id: &str, event_type: &str) -> String {
+pub fn event_subject(owner_id: &str, agent_id: &str, event_type: &str) -> String {
     let category = match event_type {
         t if t.starts_with("deploy") => "deploy",
         t if t.starts_with("execution") => "execution",
         t if t.starts_with("schedule") => "schedule",
         _ => "agent",
     };
-    format!("berth.{agent_id}.event.{category}")
+    format!("berth.{owner_id}.{agent_id}.event.{category}")
 }
 
-pub fn log_subject(agent_id: &str, project_id: &str) -> String {
-    format!("berth.{agent_id}.log.{project_id}")
+pub fn log_subject(owner_id: &str, agent_id: &str, project_id: &str) -> String {
+    format!("berth.{owner_id}.{agent_id}.log.{project_id}")
 }
 
-pub fn heartbeat_subject(agent_id: &str) -> String {
-    format!("berth.{agent_id}.heartbeat")
+pub fn heartbeat_subject(owner_id: &str, agent_id: &str) -> String {
+    format!("berth.{owner_id}.{agent_id}.heartbeat")
 }
 
 // --- NATS Command Channel Types ---
@@ -263,12 +264,66 @@ pub struct NatsScheduleInfo {
     pub next_run_at: String,
 }
 
-pub fn cmd_subject(agent_id: &str, cmd_type: &str) -> String {
-    format!("berth.{agent_id}.cmd.{cmd_type}")
+pub fn cmd_subject(owner_id: &str, agent_id: &str, cmd_type: &str) -> String {
+    format!("berth.{owner_id}.{agent_id}.cmd.{cmd_type}")
 }
 
-pub fn resp_subject(agent_id: &str, request_id: &str) -> String {
-    format!("berth.{agent_id}.resp.{request_id}")
+pub fn resp_subject(owner_id: &str, agent_id: &str, request_id: &str) -> String {
+    format!("berth.{owner_id}.{agent_id}.resp.{request_id}")
+}
+
+pub fn upload_subject(owner_id: &str, agent_id: &str, request_id: &str) -> String {
+    format!("berth.{owner_id}.{agent_id}.upload.{request_id}")
+}
+
+// --- Pairing Protocol Types ---
+
+const PAIRING_CODE_CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+pub const PAIRING_CODE_LENGTH: usize = 6;
+pub const PAIRING_EXPIRY_SECS: u64 = 900; // 15 minutes
+
+pub fn generate_pairing_code() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..PAIRING_CODE_LENGTH)
+        .map(|_| PAIRING_CODE_CHARSET[rng.gen_range(0..PAIRING_CODE_CHARSET.len())] as char)
+        .collect()
+}
+
+pub fn pairing_advertise_subject(code: &str) -> String {
+    format!("berth.pairing.advertise.{code}")
+}
+
+pub fn pairing_claim_subject(code: &str) -> String {
+    format!("berth.pairing.claim.{code}")
+}
+
+pub fn pairing_ack_subject(code: &str) -> String {
+    format!("berth.pairing.ack.{code}")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingAdvertisement {
+    pub agent_id: String,
+    pub code: String,
+    pub hostname: String,
+    pub os: String,
+    pub arch: String,
+    pub version: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingClaim {
+    pub owner_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingAck {
+    pub success: bool,
+    pub agent_id: String,
+    pub owner_id: String,
+    pub message: String,
 }
 
 #[cfg(test)]
@@ -277,20 +332,54 @@ mod tests {
 
     #[test]
     fn test_event_subjects() {
-        assert_eq!(event_subject("vps1", "deploy_completed"), "berth.vps1.event.deploy");
-        assert_eq!(event_subject("vps1", "execution_completed"), "berth.vps1.event.execution");
-        assert_eq!(event_subject("vps1", "schedule_triggered"), "berth.vps1.event.schedule");
-        assert_eq!(event_subject("vps1", "agent_upgraded"), "berth.vps1.event.agent");
+        assert_eq!(event_subject("owner1", "vps1", "deploy_completed"), "berth.owner1.vps1.event.deploy");
+        assert_eq!(event_subject("owner1", "vps1", "execution_completed"), "berth.owner1.vps1.event.execution");
+        assert_eq!(event_subject("owner1", "vps1", "schedule_triggered"), "berth.owner1.vps1.event.schedule");
+        assert_eq!(event_subject("owner1", "vps1", "agent_upgraded"), "berth.owner1.vps1.event.agent");
     }
 
     #[test]
     fn test_log_subject() {
-        assert_eq!(log_subject("vps1", "proj-123"), "berth.vps1.log.proj-123");
+        assert_eq!(log_subject("owner1", "vps1", "proj-123"), "berth.owner1.vps1.log.proj-123");
     }
 
     #[test]
     fn test_heartbeat_subject() {
-        assert_eq!(heartbeat_subject("vps1"), "berth.vps1.heartbeat");
+        assert_eq!(heartbeat_subject("owner1", "vps1"), "berth.owner1.vps1.heartbeat");
+    }
+
+    #[test]
+    fn test_cmd_subject() {
+        assert_eq!(cmd_subject("owner1", "vps1", "health"), "berth.owner1.vps1.cmd.health");
+    }
+
+    #[test]
+    fn test_resp_subject() {
+        assert_eq!(resp_subject("owner1", "vps1", "req-123"), "berth.owner1.vps1.resp.req-123");
+    }
+
+    #[test]
+    fn test_upload_subject() {
+        assert_eq!(upload_subject("owner1", "vps1", "req-123"), "berth.owner1.vps1.upload.req-123");
+    }
+
+    #[test]
+    fn test_pairing_subjects() {
+        assert_eq!(pairing_advertise_subject("K7M4XN"), "berth.pairing.advertise.K7M4XN");
+        assert_eq!(pairing_claim_subject("K7M4XN"), "berth.pairing.claim.K7M4XN");
+        assert_eq!(pairing_ack_subject("K7M4XN"), "berth.pairing.ack.K7M4XN");
+    }
+
+    #[test]
+    fn test_generate_pairing_code() {
+        let code = generate_pairing_code();
+        assert_eq!(code.len(), PAIRING_CODE_LENGTH);
+        for c in code.chars() {
+            assert!(PAIRING_CODE_CHARSET.contains(&(c as u8)), "invalid char: {c}");
+        }
+        // Two codes should be different (probabilistic but 32^6 = ~1B)
+        let code2 = generate_pairing_code();
+        assert_ne!(code, code2);
     }
 
     #[test]

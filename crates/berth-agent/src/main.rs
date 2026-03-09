@@ -1,9 +1,16 @@
 mod agent_scheduler;
 mod agent_store;
+mod archive;
+mod container;
+mod containerfile;
+mod executor;
 mod nats_cmd_handler;
 mod nats_publisher;
+mod pairing;
 mod persistent_service;
-mod service;
+mod setup;
+#[allow(dead_code)]
+mod tunnel;
 mod update;
 
 use std::net::SocketAddr;
@@ -14,8 +21,8 @@ use clap::{Parser, Subcommand};
 use tokio::sync::Mutex;
 use tonic::transport::Server;
 
-use berth_core::agent_client::proto::agent_service_server::AgentServiceServer;
-use berth_core::nats_relay::NatsConfig;
+use berth_proto::proto::agent_service_server::AgentServiceServer;
+use berth_proto::nats_relay::NatsConfig;
 
 use agent_store::AgentStore;
 use nats_publisher::NatsPublisher;
@@ -54,6 +61,10 @@ struct Cli {
     /// Agent ID for NATS subjects (defaults to hostname)
     #[arg(long, env = "BERTH_NATS_AGENT_ID")]
     nats_agent_id: Option<String>,
+
+    /// Owner ID (set during pairing, stored in agent.db)
+    #[arg(long, env = "BERTH_OWNER_ID")]
+    owner_id: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -144,18 +155,73 @@ async fn main() -> anyhow::Result<()> {
 
     let store = Arc::new(Mutex::new(store));
 
+    // Resolve agent_id
+    let agent_id = cli
+        .nats_agent_id
+        .clone()
+        .or_else(|| sysinfo::System::host_name())
+        .unwrap_or_else(|| "unknown-agent".to_string());
+
+    // Resolve owner_id: CLI/env → SQLite config → pairing mode
+    let owner_id: Option<String> = cli.owner_id.clone().or_else(|| {
+        let s = store.blocking_lock();
+        s.get_config("owner_id").ok().flatten()
+    });
+
+    let env_file = db_dir.join("agent.env");
+
     // Initialize NATS publisher if configured
     let nats_publisher: Option<Arc<NatsPublisher>> = if let Some(nats_url) = &cli.nats_url {
-        let agent_id = cli
-            .nats_agent_id
-            .clone()
-            .or_else(|| sysinfo::System::host_name())
-            .unwrap_or_else(|| "unknown-agent".to_string());
+        // If no owner_id, we need to pair first. Connect to NATS for pairing.
+        let owner_id = if let Some(oid) = owner_id.clone() {
+            oid
+        } else {
+            tracing::info!("No owner_id configured — entering pairing mode");
+
+            // Connect to NATS just for pairing
+            let mut opts = async_nats::ConnectOptions::new();
+            if let Some(ref creds_path) = cli.nats_creds {
+                match opts.credentials_file(creds_path).await {
+                    Ok(new_opts) => opts = new_opts,
+                    Err(e) => {
+                        tracing::warn!("Failed to load NATS credentials for pairing: {e}");
+                        opts = async_nats::ConnectOptions::new();
+                    }
+                }
+            }
+            let pairing_client = match opts.connect(nats_url).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Cannot connect to NATS for pairing: {e}");
+                    tracing::error!("Agent cannot start without pairing. Configure BERTH_OWNER_ID or fix NATS connection.");
+                    std::process::exit(1);
+                }
+            };
+
+            let pairing_service = pairing::PairingService::new(
+                pairing_client.clone(),
+                agent_id.clone(),
+                store.clone(),
+                env_file.clone(),
+            );
+
+            match pairing_service.run().await {
+                Some(result) => {
+                    tracing::info!("Pairing complete. Owner: {}", result.owner_id);
+                    result.owner_id
+                }
+                None => {
+                    tracing::error!("Pairing failed — agent cannot start without an owner");
+                    std::process::exit(1);
+                }
+            }
+        };
 
         let config = NatsConfig {
             url: nats_url.clone(),
             creds_path: cli.nats_creds.clone(),
-            agent_id,
+            agent_id: agent_id.clone(),
+            owner_id: owner_id.clone(),
         };
 
         match NatsPublisher::connect(&config).await {
@@ -196,15 +262,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Start NATS command handler if configured
     if let Some(ref publisher) = nats_publisher {
-        let agent_id = cli
-            .nats_agent_id
-            .clone()
-            .or_else(|| sysinfo::System::host_name())
-            .unwrap_or_else(|| "unknown-agent".to_string());
+        // owner_id is guaranteed to exist here (pairing blocks until set)
+        let handler_owner_id = cli.owner_id.clone().or_else(|| {
+            let s = store.blocking_lock();
+            s.get_config("owner_id").ok().flatten()
+        }).unwrap_or_default();
 
         let handler = nats_cmd_handler::NatsCommandHandler::new(
             publisher.client().clone(),
-            agent_id,
+            agent_id.clone(),
+            handler_owner_id,
             service.clone(),
         );
         tokio::spawn(handler.run());

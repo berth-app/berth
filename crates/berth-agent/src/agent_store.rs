@@ -124,6 +124,11 @@ impl AgentStore {
                 created_at TEXT NOT NULL,
                 last_triggered_at TEXT,
                 next_run_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );",
         )?;
         Ok(())
@@ -465,6 +470,24 @@ impl AgentStore {
     pub fn delete_schedule(&self, id: &str) -> Result<bool> {
         let deleted = self.conn.execute("DELETE FROM schedules WHERE id = ?1", [id])?;
         Ok(deleted > 0)
+    }
+
+    // --- Config ---
+
+    pub fn get_config(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM agent_config WHERE key = ?1")?;
+        let mut rows = stmt.query_map([key], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO agent_config (key, value) VALUES (?1, ?2)",
+            [key, value],
+        )?;
+        Ok(())
     }
 
     pub fn update_schedule_after_run(

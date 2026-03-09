@@ -8,14 +8,14 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
-use berth_core::agent_client::proto::agent_service_server::AgentService;
-use berth_core::agent_client::proto::*;
-use berth_core::agent_client::{RemoteExecution, RemoteSchedule};
-use berth_core::agent_transport::{ExecuteResponseLine, DeployResponseLine};
-use berth_core::executor::{self, LogLine, LogStream};
-use berth_core::runtime::Runtime;
-use berth_core::tunnel::{TunnelManager, TunnelProvider};
-use berth_core::{archive, container, setup};
+use berth_proto::proto::agent_service_server::AgentService;
+use berth_proto::proto::*;
+use berth_proto::transport::{RemoteExecution, RemoteSchedule, ExecuteResponseLine, DeployResponseLine};
+use berth_proto::executor::{LogLine, LogStream};
+use berth_proto::runtime::Runtime;
+use crate::executor;
+use crate::tunnel::{TunnelManager, TunnelProvider};
+use crate::{archive, container, setup};
 
 use crate::agent_store::{AgentStore, Deployment, Execution};
 use crate::nats_publisher::{self, NatsPublisher};
@@ -781,7 +781,7 @@ impl PersistentAgentService {
 
     pub async fn do_add_schedule(&self, project_id: &str, cron_expr: &str) -> Result<(String, String), String> {
         let now = chrono::Utc::now();
-        let next = berth_core::scheduler::parse_next_run(cron_expr, now);
+        let next = berth_proto::schedule::parse_next_run(cron_expr, now);
         if next.is_none() {
             return Err(format!("Invalid cron expression: {cron_expr}"));
         }
@@ -797,7 +797,7 @@ impl PersistentAgentService {
         };
         let store = self.store.lock().await;
         store.insert_schedule(&schedule).map_err(|e| e.to_string())?;
-        Ok((id, next.map(|t| t.to_rfc3339()).unwrap_or_default()))
+        Ok((id, next.map(|t: chrono::DateTime<chrono::Utc>| t.to_rfc3339()).unwrap_or_default()))
     }
 
     pub async fn do_remove_schedule(&self, schedule_id: &str) -> Result<bool, String> {
@@ -1605,7 +1605,7 @@ impl AgentService for PersistentAgentService {
 
         let proto_events = events
             .into_iter()
-            .map(|e| berth_core::agent_client::proto::AgentEvent {
+            .map(|e| berth_proto::proto::AgentEvent {
                 id: e.id,
                 event_type: e.event_type,
                 project_id: e.project_id.unwrap_or_default(),
@@ -1644,7 +1644,7 @@ impl AgentService for PersistentAgentService {
     ) -> Result<Response<AddScheduleResponse>, Status> {
         let req = request.into_inner();
         let now = chrono::Utc::now();
-        let next = berth_core::scheduler::parse_next_run(&req.cron_expr, now);
+        let next = berth_proto::schedule::parse_next_run(&req.cron_expr, now);
 
         if next.is_none() {
             return Err(Status::invalid_argument(format!(
@@ -1671,7 +1671,7 @@ impl AgentService for PersistentAgentService {
 
         Ok(Response::new(AddScheduleResponse {
             schedule_id: id,
-            next_run_at: next.map(|t| t.to_rfc3339()).unwrap_or_default(),
+            next_run_at: next.map(|t: chrono::DateTime<chrono::Utc>| t.to_rfc3339()).unwrap_or_default(),
         }))
     }
 

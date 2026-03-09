@@ -15,6 +15,7 @@ pub struct Target {
     pub agent_version: Option<String>,
     pub nats_agent_id: Option<String>,
     pub nats_enabled: bool,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +48,7 @@ impl Target {
             agent_version: None,
             nats_agent_id: None,
             nats_enabled: false,
+            owner_id: None,
         }
     }
 
@@ -63,6 +65,7 @@ impl Target {
             agent_version: None,
             nats_agent_id: None,
             nats_enabled: false,
+            owner_id: None,
         }
     }
 

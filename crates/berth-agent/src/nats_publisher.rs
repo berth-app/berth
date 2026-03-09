@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_nats::jetstream;
 use chrono::Utc;
-use berth_core::nats_relay::{
+use berth_proto::nats_relay::{
     self, NatsConfig, NatsEvent, NatsHeartbeat, NatsLogLine,
 };
 
@@ -10,6 +10,7 @@ pub struct NatsPublisher {
     client: async_nats::Client,
     jetstream: jetstream::Context,
     agent_id: String,
+    owner_id: String,
 }
 
 impl NatsPublisher {
@@ -32,6 +33,7 @@ impl NatsPublisher {
             client,
             jetstream,
             agent_id: config.agent_id.clone(),
+            owner_id: config.owner_id.clone(),
         })
     }
 
@@ -55,7 +57,7 @@ impl NatsPublisher {
             created_at: Utc::now(),
         };
 
-        let subject = nats_relay::event_subject(&self.agent_id, event_type);
+        let subject = nats_relay::event_subject(&self.owner_id, &self.agent_id, event_type);
         match serde_json::to_vec(&event) {
             Ok(payload) => {
                 if let Err(e) = self.jetstream.publish(subject, payload.into()).await {
@@ -86,7 +88,7 @@ impl NatsPublisher {
             seq,
         };
 
-        let subject = nats_relay::log_subject(&self.agent_id, project_id);
+        let subject = nats_relay::log_subject(&self.owner_id, &self.agent_id, project_id);
         match serde_json::to_vec(&log_line) {
             Ok(payload) => {
                 if let Err(e) = self.jetstream.publish(subject, payload.into()).await {
@@ -109,7 +111,7 @@ impl NatsPublisher {
             timestamp: Utc::now(),
         };
 
-        let subject = nats_relay::heartbeat_subject(&self.agent_id);
+        let subject = nats_relay::heartbeat_subject(&self.owner_id, &self.agent_id);
         match serde_json::to_vec(&hb) {
             Ok(payload) => {
                 // Heartbeats are ephemeral — use core NATS, not JetStream

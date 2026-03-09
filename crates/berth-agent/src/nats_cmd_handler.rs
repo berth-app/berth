@@ -3,14 +3,15 @@ use std::sync::Arc;
 use base64::Engine;
 use futures::StreamExt;
 
-use berth_core::nats_relay::*;
-use berth_core::executor::LogStream;
+use berth_proto::nats_relay::*;
+use berth_proto::executor::LogStream;
 
 use crate::persistent_service::PersistentAgentService;
 
 pub struct NatsCommandHandler {
     client: async_nats::Client,
     agent_id: String,
+    owner_id: String,
     service: Arc<PersistentAgentService>,
 }
 
@@ -18,17 +19,19 @@ impl NatsCommandHandler {
     pub fn new(
         client: async_nats::Client,
         agent_id: String,
+        owner_id: String,
         service: Arc<PersistentAgentService>,
     ) -> Self {
         Self {
             client,
             agent_id,
+            owner_id,
             service,
         }
     }
 
     pub async fn run(self) {
-        let subject = format!("berth.{}.cmd.>", self.agent_id);
+        let subject = format!("berth.{}.{}.cmd.>", self.owner_id, self.agent_id);
         let mut sub = match self.client.subscribe(subject.clone()).await {
             Ok(s) => s,
             Err(e) => {
@@ -51,10 +54,11 @@ impl NatsCommandHandler {
             let client = self.client.clone();
             let service = self.service.clone();
             let agent_id = self.agent_id.clone();
+            let owner_id = self.owner_id.clone();
             let reply_to = msg.reply.map(|s| s.to_string()).unwrap_or_else(|| cmd.reply_to.clone());
 
             tokio::spawn(async move {
-                handle_command(client, service, cmd, reply_to, agent_id).await;
+                handle_command(client, service, cmd, reply_to, agent_id, owner_id).await;
             });
         }
     }
@@ -66,6 +70,7 @@ async fn handle_command(
     cmd: NatsCommand,
     reply_to: String,
     agent_id: String,
+    owner_id: String,
 ) {
     let request_id = cmd.request_id.clone();
 
@@ -408,7 +413,7 @@ async fn handle_command(
             github_token,
             checksum_sha256,
         } => {
-            let result_subject = berth_core::nats_relay::resp_subject(&agent_id, &request_id);
+            let result_subject = berth_proto::nats_relay::resp_subject(&owner_id, &agent_id, &request_id);
 
             tracing::info!("Upgrade requested: v{version}, downloading from {download_url}");
 
@@ -522,7 +527,7 @@ async fn handle_command(
             checksum_sha256,
         } => {
             // Create upload subject for receiving archive chunks
-            let upload_subject = format!("berth.{}.upload.{}", agent_id, request_id);
+            let upload_subject = berth_proto::nats_relay::upload_subject(&owner_id, &agent_id, &request_id);
 
             let mut chunk_sub = match client.subscribe(upload_subject.clone()).await {
                 Ok(s) => s,
@@ -580,7 +585,7 @@ async fn handle_command(
                         }
                     }
                     Ok(None) => {
-                        let result_subject = berth_core::nats_relay::resp_subject(&agent_id, &request_id);
+                        let result_subject = berth_proto::nats_relay::resp_subject(&owner_id, &agent_id, &request_id);
                         let resp = NatsResponse {
                             request_id: request_id.clone(),
                             status: NatsResponseStatus::Error("Deploy chunk stream ended unexpectedly".into()),
@@ -590,7 +595,7 @@ async fn handle_command(
                         return;
                     }
                     Err(_) => {
-                        let result_subject = berth_core::nats_relay::resp_subject(&agent_id, &request_id);
+                        let result_subject = berth_proto::nats_relay::resp_subject(&owner_id, &agent_id, &request_id);
                         let resp = NatsResponse {
                             request_id: request_id.clone(),
                             status: NatsResponseStatus::Error("Deploy chunk transfer timed out".into()),
@@ -610,7 +615,7 @@ async fn handle_command(
             hasher.update(&archive);
             let actual_checksum = format!("{:x}", hasher.finalize());
 
-            let resp_subj = berth_core::nats_relay::resp_subject(&agent_id, &request_id);
+            let resp_subj = berth_proto::nats_relay::resp_subject(&owner_id, &agent_id, &request_id);
 
             if actual_checksum != checksum_sha256 {
                 let resp = NatsResponse {

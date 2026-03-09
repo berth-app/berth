@@ -1,29 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Runtime {
-    Python,
-    Node,
-    Go,
-    Rust,
-    Shell,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeInfo {
-    pub runtime: Runtime,
-    pub version_file: Option<String>,
-    pub entrypoint: Option<String>,
-    pub confidence: f32,
-    #[serde(default)]
-    pub dependencies: Vec<String>,
-    #[serde(default)]
-    pub scripts: HashMap<String, String>,
-}
+use berth_proto::runtime::{Runtime, RuntimeInfo};
 
 /// Detect the runtime of a project by scanning its directory for marker files.
 pub fn detect_runtime(path: &Path) -> RuntimeInfo {
@@ -166,7 +144,6 @@ fn parse_deps(path: &Path, marker: &str, runtime: Runtime) -> (Vec<String>, Hash
     }
 }
 
-/// Parse requirements.txt: one package per line, ignore comments and options.
 fn parse_requirements_txt(dir: &Path) -> Vec<String> {
     let content = match std::fs::read_to_string(dir.join("requirements.txt")) {
         Ok(c) => c,
@@ -178,7 +155,6 @@ fn parse_requirements_txt(dir: &Path) -> Vec<String> {
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('-'))
         .map(|l| {
-            // Strip version specifiers: "requests>=2.28" -> "requests"
             l.split(&['=', '>', '<', '!', '~', ';', '['][..])
                 .next()
                 .unwrap_or(l)
@@ -188,14 +164,12 @@ fn parse_requirements_txt(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Parse pyproject.toml: extract [project].dependencies list.
 fn parse_pyproject_toml(dir: &Path) -> Vec<String> {
     let content = match std::fs::read_to_string(dir.join("pyproject.toml")) {
         Ok(c) => c,
         Err(_) => return vec![],
     };
 
-    // Simple line-based extraction from dependencies array
     let mut in_deps = false;
     let mut deps = vec![];
 
@@ -203,7 +177,6 @@ fn parse_pyproject_toml(dir: &Path) -> Vec<String> {
         let trimmed = line.trim();
         if trimmed == "dependencies = [" || trimmed.starts_with("dependencies = [") {
             in_deps = true;
-            // Check for inline: dependencies = ["foo", "bar"]
             if let Some(rest) = trimmed.strip_prefix("dependencies = [") {
                 for item in rest.trim_end_matches(']').split(',') {
                     let dep = item.trim().trim_matches('"').trim_matches('\'');
@@ -246,7 +219,6 @@ fn parse_pyproject_toml(dir: &Path) -> Vec<String> {
     deps
 }
 
-/// Parse package.json: extract dependencies keys and scripts.
 fn parse_package_json(dir: &Path) -> (Vec<String>, HashMap<String, String>) {
     let content = match std::fs::read_to_string(dir.join("package.json")) {
         Ok(c) => c,
@@ -278,7 +250,6 @@ fn parse_package_json(dir: &Path) -> (Vec<String>, HashMap<String, String>) {
     (deps, scripts)
 }
 
-/// Parse go.mod: extract require directives.
 fn parse_go_mod(dir: &Path) -> Vec<String> {
     let content = match std::fs::read_to_string(dir.join("go.mod")) {
         Ok(c) => c,
@@ -299,14 +270,12 @@ fn parse_go_mod(dir: &Path) -> Vec<String> {
             continue;
         }
         if in_require {
-            // "github.com/foo/bar v1.2.3"
             if let Some(module) = trimmed.split_whitespace().next() {
                 if !module.starts_with("//") {
                     deps.push(module.to_string());
                 }
             }
         }
-        // Single-line require
         if let Some(rest) = trimmed.strip_prefix("require ") {
             if !rest.starts_with('(') {
                 if let Some(module) = rest.split_whitespace().next() {
@@ -319,7 +288,6 @@ fn parse_go_mod(dir: &Path) -> Vec<String> {
     deps
 }
 
-/// Parse Cargo.toml: extract [dependencies] keys.
 fn parse_cargo_toml(dir: &Path) -> Vec<String> {
     let content = match std::fs::read_to_string(dir.join("Cargo.toml")) {
         Ok(c) => c,

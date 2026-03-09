@@ -54,6 +54,36 @@ pub fn store_aws_credentials(profile: &str, access_key: &str, secret_key: &str) 
     store_credential(&format!("aws:{profile}:secret-key"), secret_key)
 }
 
+// ---------------------------------------------------------------------------
+// Auth token helpers
+// ---------------------------------------------------------------------------
+
+/// Store an auth access token in the macOS Keychain.
+pub fn store_auth_token(token: &str) -> Result<()> {
+    store_credential("auth:access_token", token)
+}
+
+/// Get the stored auth access token.
+pub fn get_auth_token() -> Result<Option<String>> {
+    get_credential("auth:access_token")
+}
+
+/// Store an auth refresh token in the macOS Keychain.
+pub fn store_refresh_token(token: &str) -> Result<()> {
+    store_credential("auth:refresh_token", token)
+}
+
+/// Get the stored auth refresh token.
+pub fn get_refresh_token() -> Result<Option<String>> {
+    get_credential("auth:refresh_token")
+}
+
+/// Clear all auth tokens from the Keychain (logout).
+pub fn clear_auth_tokens() -> Result<()> {
+    delete_credential("auth:access_token")?;
+    delete_credential("auth:refresh_token")
+}
+
 /// Get AWS credentials for a named profile.
 /// Returns `Some((access_key, secret_key))` if both are present, `None` otherwise.
 pub fn get_aws_credentials(profile: &str) -> Result<Option<(String, String)>> {

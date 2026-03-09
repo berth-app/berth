@@ -9,10 +9,10 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::agent_client::proto::agent_service_server::AgentService;
-use crate::agent_client::proto::*;
+use berth_proto::proto::agent_service_server::AgentService;
+use berth_proto::proto::*;
 use crate::executor::{self, LogStream};
-use crate::runtime::Runtime;
+use berth_proto::runtime::parse_runtime;
 use crate::tunnel::{TunnelManager, TunnelProvider};
 use crate::{archive, container, setup};
 
@@ -74,17 +74,6 @@ impl AgentServiceImpl {
         self.deploys_dir
             .join(project_id)
             .join(format!("v{version}"))
-    }
-}
-
-fn parse_runtime(s: &str) -> Runtime {
-    match s {
-        "python" => Runtime::Python,
-        "node" => Runtime::Node,
-        "go" => Runtime::Go,
-        "rust" => Runtime::Rust,
-        "shell" => Runtime::Shell,
-        _ => Runtime::Unknown,
     }
 }
 

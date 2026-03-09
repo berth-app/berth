@@ -185,6 +185,7 @@ fn start_nats_subscriber(app_handle: tauri::AppHandle) {
             url: nats_url,
             creds_path: nats_creds,
             agent_id: String::new(), // not used for subscriber
+            owner_id: install_id.clone(),
         };
 
         let subscriber = match NatsSubscriber::connect(&config, &install_id).await {
@@ -349,6 +350,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             // Start the embedded local agent on a background task
             tauri::async_runtime::spawn(async {
@@ -412,6 +414,44 @@ pub fn run() {
             // Start NATS subscriber (bridges remote agent events to UI)
             start_nats_subscriber(app.handle().clone());
 
+            // Handle berth:// deep links (auth callback from magic link)
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_app = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        if url.scheme() == "berth" {
+                            let url_str = url.to_string();
+                            tracing::info!("Deep link received: {url_str}");
+
+                            // Parse query params for auth callback
+                            if let Some(query) = url.query() {
+                                let params: std::collections::HashMap<String, String> = query
+                                    .split('&')
+                                    .filter_map(|pair| {
+                                        let mut parts = pair.splitn(2, '=');
+                                        let k = parts.next()?;
+                                        let v = parts.next().unwrap_or("");
+                                        Some((k.to_string(), v.to_string()))
+                                    })
+                                    .collect();
+
+                                if let (Some(access), Some(refresh)) =
+                                    (params.get("access_token"), params.get("refresh_token"))
+                                {
+                                    // Emit to frontend so Settings.tsx can call auth_handle_callback
+                                    let payload = format!(
+                                        "berth://auth/callback?access_token={}&refresh_token={}",
+                                        access, refresh
+                                    );
+                                    let _ = dl_app.emit("auth-callback", payload);
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -426,6 +466,7 @@ pub fn run() {
             list_targets,
             add_target,
             remove_target,
+            pair_agent,
             update_target_nats,
             ping_target,
             get_agent_stats,
@@ -452,6 +493,11 @@ pub fn run() {
             set_env_var,
             delete_env_var,
             import_env_file,
+            auth_get_state,
+            auth_send_magic_link,
+            auth_handle_callback,
+            auth_refresh,
+            auth_logout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Berth");

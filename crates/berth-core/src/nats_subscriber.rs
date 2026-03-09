@@ -4,7 +4,7 @@ use async_nats::jetstream;
 use futures::stream::{Stream, StreamExt};
 use tokio::sync::mpsc;
 
-use crate::nats_relay::{
+use berth_proto::nats_relay::{
     self, NatsConfig, NatsEvent, NatsHeartbeat, NatsLogLine,
 };
 
@@ -51,11 +51,11 @@ impl NatsSubscriber {
             .await?;
 
         let filter_subjects: Vec<String> = if agent_ids.is_empty() {
-            vec!["berth.*.event.>".to_string()]
+            vec![format!("berth.{}.*.event.>", self.install_id)]
         } else {
             agent_ids
                 .iter()
-                .map(|id| format!("berth.{id}.event.>"))
+                .map(|id| format!("berth.{}.{id}.event.>", self.install_id))
                 .collect()
         };
 
@@ -107,7 +107,7 @@ impl NatsSubscriber {
         agent_id: &str,
         project_id: &str,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = NatsLogLine> + Send>>> {
-        let subject = nats_relay::log_subject(agent_id, project_id);
+        let subject = nats_relay::log_subject(&self.install_id, agent_id, project_id);
 
         let stream = self
             .jetstream
@@ -158,7 +158,7 @@ impl NatsSubscriber {
         let (tx, rx) = mpsc::unbounded_channel();
 
         for agent_id in agent_ids {
-            let subject = nats_relay::heartbeat_subject(agent_id);
+            let subject = nats_relay::heartbeat_subject(&self.install_id, agent_id);
             let mut sub = self.client.subscribe(subject).await?;
             let tx = tx.clone();
 

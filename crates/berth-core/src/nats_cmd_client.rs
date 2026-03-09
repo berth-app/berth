@@ -5,21 +5,21 @@ use async_trait::async_trait;
 use base64::Engine;
 use futures::StreamExt;
 
-use crate::agent_client::{AgentHealth, AgentStatus, RemoteExecution, RemoteSchedule, RunningProject};
-use crate::agent_transport::{AgentTransport, DeployParams, DeployResponseLine, ExecuteParams, ExecuteResponseLine};
-use crate::executor::{LogLine, LogStream};
-use crate::nats_relay::*;
+use berth_proto::transport::{AgentHealth, AgentStatus, AgentTransport, DeployParams, DeployResponseLine, ExecuteParams, ExecuteResponseLine, RemoteExecution, RemoteSchedule, RunningProject};
+use berth_proto::executor::{LogLine, LogStream};
+use berth_proto::nats_relay::*;
 
 /// NATS-based command client for communicating with remote agents through NATS relay.
 #[derive(Clone)]
 pub struct NatsAgentClient {
     client: async_nats::Client,
     agent_id: String,
+    owner_id: String,
 }
 
 impl NatsAgentClient {
-    pub fn new(client: async_nats::Client, agent_id: String) -> Self {
-        Self { client, agent_id }
+    pub fn new(client: async_nats::Client, agent_id: String, owner_id: String) -> Self {
+        Self { client, agent_id, owner_id }
     }
 
     async fn request_reply(&self, cmd_type: &str, cmd: NatsCommandKind) -> Result<NatsResponse> {
@@ -31,7 +31,7 @@ impl NatsAgentClient {
         };
 
         let payload = serde_json::to_vec(&command).context("Failed to serialize NATS command")?;
-        let subject = cmd_subject(&self.agent_id, cmd_type);
+        let subject = cmd_subject(&self.owner_id, &self.agent_id, cmd_type);
 
         let msg = tokio::time::timeout(
             Duration::from_secs(15),
@@ -55,7 +55,7 @@ impl NatsAgentClient {
         cmd_type: &str,
         command: NatsCommand,
     ) -> Result<async_nats::Subscriber> {
-        let resp_subj = resp_subject(&self.agent_id, &command.request_id);
+        let resp_subj = resp_subject(&self.owner_id, &self.agent_id, &command.request_id);
 
         // Subscribe BEFORE publishing
         let sub = self
@@ -65,7 +65,7 @@ impl NatsAgentClient {
             .context("Failed to subscribe to response subject")?;
 
         let payload = serde_json::to_vec(&command).context("Failed to serialize NATS command")?;
-        let subject = cmd_subject(&self.agent_id, cmd_type);
+        let subject = cmd_subject(&self.owner_id, &self.agent_id, cmd_type);
 
         self.client
             .publish(subject, payload.into())
@@ -155,7 +155,7 @@ impl AgentTransport for NatsAgentClient {
         let request_id = uuid::Uuid::new_v4().to_string();
         let command = NatsCommand {
             request_id: request_id.clone(),
-            reply_to: resp_subject(&self.agent_id, &request_id),
+            reply_to: resp_subject(&self.owner_id, &self.agent_id, &request_id),
             cmd: NatsCommandKind::Execute {
                 project_id: params.project_id.clone(),
                 runtime: params.runtime.clone(),
@@ -223,7 +223,7 @@ impl AgentTransport for NatsAgentClient {
             let archive_b64 = base64::engine::general_purpose::STANDARD.encode(&params.source_archive);
             NatsCommand {
                 request_id: request_id.clone(),
-                reply_to: resp_subject(&self.agent_id, &request_id),
+                reply_to: resp_subject(&self.owner_id, &self.agent_id, &request_id),
                 cmd: NatsCommandKind::Deploy {
                     project_id: params.project_id.clone(),
                     runtime: params.runtime.clone(),
@@ -265,7 +265,7 @@ impl AgentTransport for NatsAgentClient {
         if is_chunked {
             // Chunked path: handshake → send chunks → stream deploy lines
             let payload = serde_json::to_vec(&command).context("Failed to serialize deploy command")?;
-            let subject = cmd_subject(&self.agent_id, "deploy");
+            let subject = cmd_subject(&self.owner_id, &self.agent_id, "deploy");
 
             // Request-reply for handshake
             let msg = tokio::time::timeout(
@@ -285,7 +285,7 @@ impl AgentTransport for NatsAgentClient {
             };
 
             // Subscribe to response stream before sending chunks
-            let resp_subj = resp_subject(&self.agent_id, &request_id);
+            let resp_subj = resp_subject(&self.owner_id, &self.agent_id, &request_id);
             let mut sub = self.client.subscribe(resp_subj).await
                 .context("Failed to subscribe to deploy response")?;
 
@@ -405,7 +405,7 @@ impl AgentTransport for NatsAgentClient {
         let request_id = uuid::Uuid::new_v4().to_string();
         let command = NatsCommand {
             request_id: request_id.clone(),
-            reply_to: resp_subject(&self.agent_id, &request_id),
+            reply_to: resp_subject(&self.owner_id, &self.agent_id, &request_id),
             cmd: NatsCommandKind::GetExecutionLogs {
                 execution_id: execution_id.to_string(),
                 since_seq,
@@ -515,7 +515,7 @@ impl AgentTransport for NatsAgentClient {
         let request_id = uuid::Uuid::new_v4().to_string();
         let command = NatsCommand {
             request_id: request_id.clone(),
-            reply_to: resp_subject(&self.agent_id, &request_id),
+            reply_to: resp_subject(&self.owner_id, &self.agent_id, &request_id),
             cmd: NatsCommandKind::UpgradeDownload {
                 version: version.to_string(),
                 download_url: download_url.to_string(),
@@ -525,12 +525,12 @@ impl AgentTransport for NatsAgentClient {
         };
 
         // Subscribe before publishing so we don't miss the response
-        let resp_subj = resp_subject(&self.agent_id, &request_id);
+        let resp_subj = resp_subject(&self.owner_id, &self.agent_id, &request_id);
         let mut sub = self.client.subscribe(resp_subj).await
             .context("Failed to subscribe to upgrade response")?;
 
         let payload = serde_json::to_vec(&command).context("Failed to serialize upgrade command")?;
-        let subject = cmd_subject(&self.agent_id, "upgrade");
+        let subject = cmd_subject(&self.owner_id, &self.agent_id, "upgrade");
         self.client.publish(subject, payload.into()).await
             .context("Failed to publish upgrade command")?;
         self.client.flush().await

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Server, Plus, Activity, Trash2, Wifi, ArrowUpCircle, Undo2 } from "lucide-react";
+import { Server, Activity, Trash2, Wifi, ArrowUpCircle, Undo2, Link2 } from "lucide-react";
 import {
   TargetInfo,
   AgentStats,
   UpgradeCheck,
+  PairingResult,
   listTargets,
   addTarget,
   removeTarget,
@@ -13,6 +14,7 @@ import {
   upgradeAgent,
   rollbackAgent,
   upgradeAllAgents,
+  pairAgent,
 } from "../lib/invoke";
 import { useToast } from "../components/Toast";
 
@@ -133,6 +135,11 @@ export default function Targets() {
   const [upgradeChecks, setUpgradeChecks] = useState<Record<string, UpgradeCheck>>({});
   const [upgradingId, setUpgradingId] = useState<string | null>(null);
   const [upgradingAll, setUpgradingAll] = useState(false);
+  const [showPair, setShowPair] = useState(false);
+  const [pairCode, setPairCode] = useState("");
+  const [pairing, setPairing] = useState(false);
+  const [pairStatus, setPairStatus] = useState<"idle" | "discovering" | "pairing">("idle");
+  const [pairResult, setPairResult] = useState<PairingResult | null>(null);
   const { toast } = useToast();
 
   const refresh = async () => {
@@ -181,12 +188,9 @@ export default function Targets() {
         name.trim(),
         host.trim(),
         parseInt(port) || 50051,
-        natsAgentId.trim() || undefined
+        natsAgentId.trim()
       );
-      toast(
-        `Target '${name}' added${natsAgentId.trim() ? " (NATS enabled)" : ""}`,
-        "success"
-      );
+      toast(`Target '${name}' added`, "success");
       setName("");
       setHost("");
       setPort("50051");
@@ -319,6 +323,28 @@ export default function Targets() {
     }
   };
 
+  const handlePair = async () => {
+    if (pairCode.trim().length !== 6) return;
+    setPairing(true);
+    setPairResult(null);
+    setPairStatus("discovering");
+    try {
+      // Backend discovers agent via advertisement, then claims + waits for ack
+      // We show "Discovering..." briefly, then switch to "Pairing..." after a short delay
+      const pairTimer = setTimeout(() => setPairStatus("pairing"), 3000);
+      const result = await pairAgent(pairCode.trim());
+      clearTimeout(pairTimer);
+      setPairResult(result);
+      toast(`Paired with ${result.agent_hostname}`, "success");
+      refresh();
+    } catch (e) {
+      toast(`Pairing failed: ${e}`, "error");
+    } finally {
+      setPairing(false);
+      setPairStatus("idle");
+    }
+  };
+
   const upgradesAvailable = Object.values(upgradeChecks).filter((c) => c.available).length;
 
   return (
@@ -340,18 +366,110 @@ export default function Targets() {
             </button>
           )}
           <button
-            onClick={() => setShowAdd(!showAdd)}
+            onClick={() => { setShowPair(true); setShowAdd(false); }}
             className="btn btn-primary"
           >
-            <Plus size={14} strokeWidth={2} />
-            Add Target
+            <Link2 size={14} strokeWidth={2} />
+            Pair Agent
           </button>
         </div>
       </div>
 
-      {/* Add form */}
+      {/* Pair Agent modal */}
+      {showPair && (
+        <div className="mx-5 mb-4 glass-card-static p-4 animate-card-enter">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-berth-text-primary">Pair Agent</h3>
+            <button
+              onClick={() => { setShowPair(false); setPairCode(""); setPairResult(null); }}
+              className="btn btn-ghost btn-icon text-berth-text-tertiary"
+            >
+              &times;
+            </button>
+          </div>
+          {pairResult ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-berth-success" />
+                <span className="text-sm text-berth-success font-medium">Paired successfully</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-berth-text-secondary">Host</span>
+                  <span className="text-berth-text-primary font-mono">{pairResult.agent_hostname}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-berth-text-secondary">OS</span>
+                  <span className="text-berth-text-primary">{pairResult.agent_os}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-berth-text-secondary">Version</span>
+                  <span className="text-berth-text-primary">v{pairResult.agent_version}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-berth-text-secondary">Agent ID</span>
+                  <span className="text-berth-text-primary font-mono">{pairResult.agent_id}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowPair(false); setPairCode(""); setPairResult(null); }}
+                className="btn btn-primary w-full"
+              >
+                Done
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs text-berth-text-secondary">
+                Enter the 6-character pairing code shown on your agent.
+              </p>
+              <input
+                type="text"
+                value={pairCode}
+                onChange={(e) => setPairCode(e.target.value.toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, "").slice(0, 6))}
+                placeholder="K7M4XN"
+                maxLength={6}
+                className="input text-center text-lg font-mono tracking-[0.3em] uppercase"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter") handlePair(); }}
+              />
+              <button
+                onClick={handlePair}
+                disabled={pairCode.trim().length !== 6 || pairing}
+                className="btn btn-primary w-full"
+              >
+                {pairing ? (
+                  <span className="flex items-center gap-2">
+                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    {pairStatus === "discovering" ? "Discovering agent..." : "Pairing..."}
+                  </span>
+                ) : (
+                  "Pair"
+                )}
+              </button>
+              <button
+                onClick={() => { setShowPair(false); setShowAdd(true); }}
+                className="text-xs text-berth-text-tertiary hover:text-berth-text-secondary w-full text-center"
+              >
+                Add target manually instead
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add form (manual) */}
       {showAdd && (
         <div className="mx-5 mb-4 glass-card-static p-4 animate-card-enter">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium text-berth-text-primary">Add Target Manually</h3>
+            <button
+              onClick={() => setShowAdd(false)}
+              className="btn btn-ghost btn-icon text-berth-text-tertiary"
+            >
+              &times;
+            </button>
+          </div>
           <div className="grid grid-cols-[1fr_1fr_80px] gap-3 mb-3">
             <div>
               <label className="text-xs text-berth-text-secondary block mb-1">
@@ -392,8 +510,7 @@ export default function Targets() {
           <div className="flex gap-3 items-end">
             <div className="flex-1">
               <label className="text-xs text-berth-text-secondary block mb-1">
-                NATS Agent ID{" "}
-                <span className="text-berth-text-tertiary">(optional)</span>
+                NATS Agent ID
               </label>
               <input
                 type="text"
@@ -405,7 +522,7 @@ export default function Targets() {
             </div>
             <button
               onClick={handleAdd}
-              disabled={!name.trim() || !host.trim()}
+              disabled={!name.trim() || !host.trim() || !natsAgentId.trim()}
               className="btn btn-primary"
             >
               Add
@@ -455,8 +572,15 @@ export default function Targets() {
               No remote targets configured
             </p>
             <p className="text-xs text-berth-text-tertiary mt-1">
-              Add a target to deploy code to remote machines
+              Pair an agent to deploy code to remote machines
             </p>
+            <button
+              onClick={() => { setShowPair(true); setShowAdd(false); }}
+              className="btn btn-primary mt-4"
+            >
+              <Link2 size={14} strokeWidth={2} />
+              Pair Agent
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -493,7 +617,13 @@ export default function Targets() {
                       <span className="badge badge-error text-[10px]">Offline</span>
                     )}
                     {t.nats_enabled && (
-                      <span className="badge badge-success">NATS</span>
+                      <span className="badge text-[10px] bg-berth-accent/15 text-berth-accent">NATS</span>
+                    )}
+                    {t.owner_id && (
+                      <span className="badge text-[10px] bg-berth-success/10 text-berth-success">
+                        <Link2 size={8} />
+                        Paired
+                      </span>
                     )}
                     {upgradingId === t.id ? (
                       <span className="badge badge-warning flex items-center gap-1">

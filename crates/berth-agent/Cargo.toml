@@ -8,7 +8,7 @@ name = "berth-agent"
 path = "src/main.rs"
 
 [dependencies]
-berth-core = { path = "../berth-core", features = ["nats"] }
+berth-proto = { path = "../berth-proto" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -28,3 +28,9 @@ base64 = "0.22"
 futures = "0.3"
 sha2 = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tar = "0.4"
+flate2 = "1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

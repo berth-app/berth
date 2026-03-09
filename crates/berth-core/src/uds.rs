@@ -6,7 +6,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tower::service_fn;
 
-use crate::agent_client::proto::agent_service_server::AgentServiceServer;
+use berth_proto::proto::agent_service_server::AgentServiceServer;
 use crate::agent_service::AgentServiceImpl;
 
 /// Default path for the local agent Unix domain socket.
