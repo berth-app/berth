@@ -73,7 +73,7 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-ExecStart=/usr/local/bin/berth-agent --listen-all --port 50051 --nats-url tls://connect.ngs.global --nats-creds /path/to/nats.creds --nats-agent-id my-server
+ExecStart=/usr/local/bin/berth-agent --nats-url tls://connect.ngs.global --nats-creds /path/to/your-synadia.creds
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info

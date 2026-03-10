@@ -445,6 +445,7 @@ dependencies = [
  "async-nats",
  "async-trait",
  "base64 0.22.1",
+ "berth-core",
  "berth-proto",
  "chrono",
  "clap",

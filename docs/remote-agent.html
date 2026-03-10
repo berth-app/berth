@@ -113,7 +113,7 @@
   <tr><td>Supported platforms</td><td>Linux x86_64, Linux aarch64</td></tr>
   <tr><td>Scheduler</td><td>Built-in, tick every 30s, runs independently of app</td></tr>
   <tr><td>Tunnel providers</td><td>cloudflared (pluggable)</td></tr>
-  <tr><td>NATS transport</td><td><code>tls://connect.ngs.global</code> (Synadia Cloud)</td></tr>
+  <tr><td>NATS transport</td><td>User-provided via Synadia Cloud (BYON)</td></tr>
 </table>
 
 <!-- ============================================================ -->
@@ -144,8 +144,8 @@
                   (fallback, port 50051)         outbound TLS          │
                           │                             │              │
                           │              ┌──────────────┴────────────┐ │
-                          │              │  Synadia Cloud            │ │
-                          │              │  tls://connect.ngs.global │ │
+                          │              │  Your NATS Server (BYON)  │ │
+                          │              │  e.g. Synadia Cloud       │ │
                           │              └──────────────┬────────────┘ │
                           │                             │              │
                           │                      NATS (outbound TLS)   │
@@ -274,7 +274,7 @@ Transport selection: target.nats_enabled → NatsAgentClient
 <p>The primary transport for remote agent communication. Both the desktop app and the agent connect outbound to Synadia Cloud &mdash; zero inbound ports required on either side. Works behind NAT, firewalls, and across different networks.</p>
 
 <div class="callout callout-success">
-  <p><strong>Zero inbound ports:</strong> Both desktop and agent connect outbound to <code>tls://connect.ngs.global</code>. No port forwarding, no firewall rules, no direct network connectivity between desktop and agent.</p>
+  <p><strong>Zero inbound ports:</strong> Both desktop and agent connect outbound to your Synadia Cloud NATS account. No port forwarding, no firewall rules, no direct network connectivity between desktop and agent.</p>
 </div>
 
 <h3>AgentTransport Trait</h3>

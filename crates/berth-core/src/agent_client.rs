@@ -42,6 +42,35 @@ impl AgentClient {
         Ok(Self { inner })
     }
 
+    /// Connect to a remote agent with mTLS (mutual TLS).
+    ///
+    /// Requires CA certificate, client certificate, and client key PEM strings.
+    pub async fn connect_tls(
+        endpoint: &str,
+        ca_cert_pem: &str,
+        client_cert_pem: &str,
+        client_key_pem: &str,
+    ) -> Result<Self> {
+        let client_bundle = crate::tls::CertBundle {
+            cert_pem: client_cert_pem.to_string(),
+            key_pem: client_key_pem.to_string(),
+        };
+        let tls_config = crate::tls::client_tls_config(&client_bundle, ca_cert_pem)?;
+
+        let channel = Channel::from_shared(endpoint.to_string())
+            .context("Invalid agent endpoint URL")?
+            .tls_config(tls_config)
+            .context("Failed to configure TLS for agent connection")?
+            .connect()
+            .await
+            .context("Failed to connect to remote agent via mTLS — verify the agent is running and certificates are correct")?;
+
+        let inner = AgentServiceClient::new(channel)
+            .max_decoding_message_size(64 * 1024 * 1024)
+            .max_encoding_message_size(64 * 1024 * 1024);
+        Ok(Self { inner })
+    }
+
     /// Connect to a local agent via Unix domain socket.
     pub async fn connect_uds(path: &Path) -> Result<Self> {
         let channel = crate::uds::connect_uds(path).await?;

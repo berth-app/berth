@@ -65,6 +65,18 @@ struct Cli {
     /// Owner ID (set during pairing, stored in agent.db)
     #[arg(long, env = "BERTH_OWNER_ID")]
     owner_id: Option<String>,
+
+    /// Path to TLS server certificate (PEM) for mTLS direct connections
+    #[arg(long, env = "BERTH_TLS_CERT")]
+    tls_cert: Option<String>,
+
+    /// Path to TLS server private key (PEM)
+    #[arg(long, env = "BERTH_TLS_KEY")]
+    tls_key: Option<String>,
+
+    /// Path to CA certificate (PEM) for client verification (mTLS)
+    #[arg(long, env = "BERTH_TLS_CA")]
+    tls_ca: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -77,6 +89,12 @@ enum Commands {
         /// Skip confirmation prompt
         #[arg(long, short)]
         yes: bool,
+    },
+    /// Generate mTLS certificates for direct connections
+    InitTls {
+        /// Hostname for the server certificate SAN (defaults to system hostname)
+        #[arg(long)]
+        hostname: Option<String>,
     },
 }
 
@@ -123,6 +141,78 @@ async fn run_probation(addr: SocketAddr, berth_dir: &Path) -> bool {
     false
 }
 
+/// Generate mTLS certificates for direct connections.
+async fn run_init_tls(hostname: Option<String>) -> anyhow::Result<()> {
+    let berth_dir = dirs_next::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".berth");
+    let certs_dir = berth_dir.join("certs");
+    std::fs::create_dir_all(&certs_dir)?;
+
+    let hostname = hostname
+        .or_else(|| sysinfo::System::host_name())
+        .unwrap_or_else(|| "berth-agent".to_string());
+
+    // Generate or load CA
+    let ca = berth_core::tls::generate_ca()?;
+    let ca_cert_pem = ca.pem();
+    let ca_key_pem = ca.key().serialize_pem();
+
+    // Save CA
+    std::fs::write(certs_dir.join("ca.crt"), &ca_cert_pem)?;
+    std::fs::write(certs_dir.join("ca.key"), &ca_key_pem)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            certs_dir.join("ca.key"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
+
+    // Generate server certificate
+    let server_bundle = berth_core::tls::generate_server_cert(&ca, &hostname)?;
+    std::fs::write(certs_dir.join("server.crt"), &server_bundle.cert_pem)?;
+    std::fs::write(certs_dir.join("server.key"), &server_bundle.key_pem)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            certs_dir.join("server.key"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
+
+    // Generate client certificate for the desktop app
+    let client_bundle = berth_core::tls::generate_client_cert(&ca, "berth-desktop")?;
+    std::fs::write(certs_dir.join("client.crt"), &client_bundle.cert_pem)?;
+    std::fs::write(certs_dir.join("client.key"), &client_bundle.key_pem)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            certs_dir.join("client.key"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
+
+    println!("mTLS certificates generated in {}", certs_dir.display());
+    println!();
+    println!("Server certificate hostname: {hostname}");
+    println!();
+    println!("Copy these files to your desktop machine for direct connection:");
+    println!("  {}/ca.crt", certs_dir.display());
+    println!("  {}/client.crt", certs_dir.display());
+    println!("  {}/client.key", certs_dir.display());
+    println!();
+    println!("Add these to your agent.env:");
+    println!("  BERTH_TLS_CERT={}/server.crt", certs_dir.display());
+    println!("  BERTH_TLS_KEY={}/server.key", certs_dir.display());
+    println!("  BERTH_TLS_CA={}/ca.crt", certs_dir.display());
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -133,8 +223,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Handle subcommands before initializing the full agent
-    if let Some(Commands::Update { version, yes }) = cli.command {
-        return update::run_update(version.as_deref(), yes).await;
+    match cli.command {
+        Some(Commands::Update { version, yes }) => {
+            return update::run_update(version.as_deref(), yes).await;
+        }
+        Some(Commands::InitTls { hostname }) => {
+            return run_init_tls(hostname).await;
+        }
+        None => {}
     }
 
     tracing_subscriber::fmt::init();
@@ -320,16 +416,33 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let addr: SocketAddr = if cli.listen_all {
-        format!("0.0.0.0:{}", cli.port)
-    } else {
-        format!("127.0.0.1:{}", cli.port)
-    }
-    .parse()?;
+    // Determine connection mode and address binding
+    let has_nats = nats_publisher.is_some();
+    let has_tls = cli.tls_cert.is_some() && cli.tls_key.is_some() && cli.tls_ca.is_some();
 
-    tracing::info!("Berth agent listening on {} (persistent mode)", addr);
-    if nats_publisher.is_some() {
-        tracing::info!("NATS relay enabled");
+    let addr: SocketAddr = if has_nats {
+        // Synadia mode: gRPC restricted to localhost (NATS provides remote access)
+        if cli.listen_all {
+            tracing::info!("NATS relay mode — ignoring --listen-all, gRPC restricted to localhost");
+        }
+        format!("127.0.0.1:{}", cli.port).parse()?
+    } else if cli.listen_all {
+        // Direct mode: must have TLS to bind externally
+        if !has_tls {
+            tracing::error!("Cannot bind to 0.0.0.0 without TLS. Run `berth-agent init-tls` to generate certificates, then set BERTH_TLS_CERT, BERTH_TLS_KEY, and BERTH_TLS_CA.");
+            std::process::exit(1);
+        }
+        format!("0.0.0.0:{}", cli.port).parse()?
+    } else {
+        format!("127.0.0.1:{}", cli.port).parse()?
+    };
+
+    if has_nats {
+        tracing::info!("NATS relay enabled — gRPC on {} (localhost only)", addr);
+    } else if has_tls {
+        tracing::info!("Direct connection mode — mTLS enabled on {}", addr);
+    } else {
+        tracing::info!("Running in gRPC-only mode on {} (no NATS relay configured)", addr);
     }
 
     // Check probation state
@@ -350,11 +463,34 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn gRPC server as a task (non-blocking)
     let server_service = service.clone();
+    let tls_cert = cli.tls_cert.clone();
+    let tls_key = cli.tls_key.clone();
+    let tls_ca = cli.tls_ca.clone();
     let server_handle = tokio::spawn(async move {
-        Server::builder()
-            .add_service(AgentServiceServer::from_arc(server_service))
-            .serve(addr)
-            .await
+        if let (Some(cert_path), Some(key_path), Some(ca_path)) = (tls_cert, tls_key, tls_ca) {
+            let cert_pem = std::fs::read_to_string(&cert_path)
+                .unwrap_or_else(|e| panic!("Failed to read TLS cert {cert_path}: {e}"));
+            let key_pem = std::fs::read_to_string(&key_path)
+                .unwrap_or_else(|e| panic!("Failed to read TLS key {key_path}: {e}"));
+            let ca_pem = std::fs::read_to_string(&ca_path)
+                .unwrap_or_else(|e| panic!("Failed to read TLS CA {ca_path}: {e}"));
+
+            let server_bundle = berth_core::tls::CertBundle { cert_pem, key_pem };
+            let tls_config = berth_core::tls::server_tls_config(&server_bundle, &ca_pem)
+                .expect("Failed to build TLS config");
+
+            Server::builder()
+                .tls_config(tls_config)
+                .expect("Failed to configure TLS on gRPC server")
+                .add_service(AgentServiceServer::from_arc(server_service))
+                .serve(addr)
+                .await
+        } else {
+            Server::builder()
+                .add_service(AgentServiceServer::from_arc(server_service))
+                .serve(addr)
+                .await
+        }
     });
 
     if in_probation {

@@ -215,10 +215,9 @@ install_env_file() {
 # Berth Agent Configuration
 # Uncomment and edit the lines you need.
 
-# NATS relay (enables zero-port remote control from desktop app)
+# Synadia Cloud NATS relay (BYON — create account at cloud.synadia.com)
 # BERTH_NATS_URL=tls://connect.ngs.global
 # BERTH_NATS_CREDS=/home/berth/.berth/nats.creds
-# BERTH_NATS_AGENT_ID=my-server
 
 # gRPC port (default 50051)
 # BERTH_PORT=50051

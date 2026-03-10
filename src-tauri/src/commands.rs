@@ -43,7 +43,7 @@ pub(crate) fn get_store() -> Result<ProjectStore, String> {
 }
 
 /// Get a transport for the given target. None or "local" uses the embedded local agent via UDS.
-/// All remote targets use NATS command channel — gRPC fallback removed.
+/// Remote targets use NATS (Synadia Cloud) or direct gRPC with mTLS.
 async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransport>, String> {
     match target_id {
         None | Some("local") | Some("") => {
@@ -61,35 +61,81 @@ async fn get_agent_client(target_id: Option<&str>) -> Result<Box<dyn AgentTransp
                 .find(|t| t.id == uuid)
                 .ok_or_else(|| format!("Target {tid} not found"))?;
 
-            let agent_id = target.nats_agent_id.as_deref().unwrap_or("").to_string();
-            if agent_id.is_empty() {
-                return Err("Remote targets require a NATS Agent ID. Add one in target settings.".into());
-            }
-            let owner_id = target.owner_id.clone().ok_or_else(|| {
-                "Target has no owner_id — re-pair this agent in target settings".to_string()
-            })?;
-            let nats_client = get_nats_client().await?;
-            let mut client = NatsAgentClient::new(nats_client, agent_id, owner_id);
+            let has_nats_id = target.nats_agent_id.as_deref().map_or(false, |id| !id.is_empty());
+            let has_host = target.host.as_deref().map_or(false, |h| !h.is_empty()) && target.port > 0;
 
-            // Load shared secret from Keychain for HMAC signing
-            #[cfg(target_os = "macos")]
-            {
-                let key = format!("agent-secret:{}", uuid);
-                if let Ok(Some(hex_secret)) = berth_core::credentials::get_credential(&key) {
-                    if let Ok(secret_bytes) = hex::decode(&hex_secret) {
-                        client = client.with_secret(secret_bytes);
+            // Prefer NATS if agent has a NATS ID and NATS client is available
+            if has_nats_id {
+                if let Ok(nats_client) = get_nats_client().await {
+                    let agent_id = target.nats_agent_id.as_deref().unwrap().to_string();
+                    let owner_id = target.owner_id.clone().ok_or_else(|| {
+                        "Target has no owner_id — re-pair this agent in target settings".to_string()
+                    })?;
+                    let mut client = NatsAgentClient::new(nats_client, agent_id, owner_id);
+
+                    // Load shared secret from Keychain for HMAC signing
+                    #[cfg(target_os = "macos")]
+                    {
+                        let key = format!("agent-secret:{}", uuid);
+                        if let Ok(Some(hex_secret)) = berth_core::credentials::get_credential(&key) {
+                            if let Ok(secret_bytes) = hex::decode(&hex_secret) {
+                                client = client.with_secret(secret_bytes);
+                            }
+                        }
                     }
+
+                    return Ok(Box::new(client));
                 }
             }
 
-            Ok(Box::new(client))
+            // Fall back to direct gRPC with mTLS
+            if has_host {
+                let settings = store.get_all_settings().unwrap_or_default();
+                let host = target.host.as_deref().unwrap();
+                let endpoint = format!("https://{}:{}", host, target.port);
+
+                // Check for TLS certificates
+                if let (Some(ca_path), Some(cert_path), Some(key_path)) = (
+                    settings.get("tls_ca"),
+                    settings.get("tls_client_cert"),
+                    settings.get("tls_client_key"),
+                ) {
+                    let ca_pem = std::fs::read_to_string(ca_path)
+                        .map_err(|e| format!("Failed to read CA cert: {e}"))?;
+                    let cert_pem = std::fs::read_to_string(cert_path)
+                        .map_err(|e| format!("Failed to read client cert: {e}"))?;
+                    let key_pem = std::fs::read_to_string(key_path)
+                        .map_err(|e| format!("Failed to read client key: {e}"))?;
+
+                    let client = berth_core::agent_client::AgentClient::connect_tls(
+                        &endpoint, &ca_pem, &cert_pem, &key_pem,
+                    )
+                    .await
+                    .map_err(|e| format!("Direct mTLS connection failed: {e}"))?;
+
+                    return Ok(Box::new(client));
+                }
+
+                return Err(format!(
+                    "Target has host {}:{} but no TLS certificates configured. \
+                     Import the agent's CA and client certificates in Settings, \
+                     or use Synadia Cloud for relay-based connections.",
+                    host, target.port
+                ));
+            }
+
+            Err(
+                "Target has no connection method configured. Either:\n\
+                 - Set up Synadia Cloud (NATS relay) and pair the agent, or\n\
+                 - Add a host:port and import mTLS certificates for direct connection."
+                    .into(),
+            )
         }
     }
 }
 
 /// Get the shared NATS client, or connect on demand from settings.
-// TODO(prod): Hardcode NATS URL to tls://connect.ngs.global for production builds.
-// Keep settings-based override for dev/test (e.g. behind a compile flag or env var).
+/// NATS URL is user-provided (BYON — Synadia Cloud recommended). No default URL.
 async fn get_nats_client() -> Result<async_nats::Client, String> {
     // Try reading from global state (set by start_nats_subscriber in lib.rs)
     if let Some(client) = nats_client_lock().lock().await.clone() {
@@ -102,7 +148,7 @@ async fn get_nats_client() -> Result<async_nats::Client, String> {
     let nats_url = settings
         .get("nats_url")
         .cloned()
-        .ok_or("NATS not configured. Set nats_url in Settings.")?;
+        .ok_or("NATS not configured. Set your Synadia Cloud nats_url in Settings, or use direct gRPC connection.")?;
     let nats_creds = settings.get("nats_creds").cloned();
 
     let mut opts = async_nats::ConnectOptions::new();
