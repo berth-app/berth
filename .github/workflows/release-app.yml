@@ -56,8 +56,10 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          # Find the DMG produced by Tauri (path varies by Tauri version)
-          DMG=$(find src-tauri/target -name "*.dmg" -path "*/bundle/*" | head -1)
+          # Find the DMG produced by Tauri (workspace uses root target/ dir)
+          echo "Searching for DMG..."
+          find target -name "*.dmg" 2>/dev/null || true
+          DMG=$(find target -name "*.dmg" | head -1)
           echo "Found DMG at: $DMG"
           cp "$DMG" "Berth_${VERSION}_universal.dmg"
 
