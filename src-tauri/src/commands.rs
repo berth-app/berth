@@ -947,6 +947,68 @@ pub fn update_setting(key: String, value: String) -> Result<(), String> {
     store.set_setting(&key, &value).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn save_nats_credentials(credentials: String) -> Result<(), String> {
+    // Validate that it looks like a NATS credentials block
+    if !credentials.contains("BEGIN NATS USER JWT") || !credentials.contains("BEGIN USER NKEY SEED") {
+        return Err(
+            "Invalid credentials format. Expected a Synadia Cloud credentials block containing \
+             both a NATS USER JWT and USER NKEY SEED section."
+                .into(),
+        );
+    }
+
+    let data_dir = dirs_next::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.berth.app");
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let creds_path = data_dir.join("nats.creds");
+
+    std::fs::write(&creds_path, credentials.trim()).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&creds_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Save the path in settings
+    let store = get_store()?;
+    store
+        .set_setting("nats_creds", creds_path.to_str().unwrap_or(""))
+        .map_err(|e| e.to_string())?;
+
+    // Auto-set NATS URL if not already configured
+    let settings = store.get_all_settings().unwrap_or_default();
+    if settings.get("nats_url").map_or(true, |v| v.is_empty()) {
+        store
+            .set_setting("nats_url", "tls://connect.ngs.global")
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_nats_credentials() -> Result<(), String> {
+    let store = get_store()?;
+    let settings = store.get_all_settings().unwrap_or_default();
+
+    // Delete the credentials file if it exists
+    if let Some(creds_path) = settings.get("nats_creds") {
+        let path = std::path::Path::new(creds_path);
+        if path.exists() {
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Clear the setting
+    store.set_setting("nats_creds", "").map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // --- Project notification setting ---
 
 #[tauri::command]

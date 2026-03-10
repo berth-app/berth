@@ -3,6 +3,8 @@ import {
   getSettings,
   updateSetting,
   listTargets,
+  saveNatsCredentials,
+  clearNatsCredentials,
   type TargetInfo,
 } from "../lib/invoke";
 import { useToast } from "../components/Toast";
@@ -17,6 +19,8 @@ export default function Settings() {
   const [targets, setTargets] = useState<TargetInfo[]>([]);
   const [themes, setThemes] = useState<ThemeManifestEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [natsPaste, setNatsPaste] = useState("");
+  const [natsSaving, setNatsSaving] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -59,6 +63,35 @@ export default function Settings() {
         </div>
       </div>
     );
+  }
+
+  const natsConfigured = !!(settings.nats_creds && settings.nats_creds.length > 0);
+
+  async function handleSaveNatsCreds() {
+    if (!natsPaste.trim()) return;
+    setNatsSaving(true);
+    try {
+      await saveNatsCredentials(natsPaste);
+      const s = await getSettings();
+      setSettings(s);
+      setNatsPaste("");
+      toast("NATS credentials saved", "success");
+    } catch (e) {
+      toast(`Failed to save credentials: ${e}`, "error");
+    } finally {
+      setNatsSaving(false);
+    }
+  }
+
+  async function handleClearNatsCreds() {
+    try {
+      await clearNatsCredentials();
+      const s = await getSettings();
+      setSettings(s);
+      toast("NATS credentials cleared", "success");
+    } catch (e) {
+      toast(`Failed to clear credentials: ${e}`, "error");
+    }
   }
 
   const activePalette = settings.theme_palette ?? "default";
@@ -229,10 +262,21 @@ export default function Settings() {
               <div className="px-4 py-3">
                 <div className="text-xs text-berth-text-tertiary mb-3">
                   Connect via Synadia Cloud for relay-based agent communication.
-                  Create a free account at{" "}
-                  <a href="https://cloud.synadia.com" target="_blank" rel="noopener noreferrer" className="text-berth-accent hover:underline">cloud.synadia.com</a>{" "}
-                  to get your credentials. Not required for direct connections.
+                  Not required for direct connections.
                 </div>
+
+                {/* Step-by-step instructions */}
+                <div className="text-xs text-berth-text-secondary mb-3 space-y-1">
+                  <div className="font-medium text-berth-text-primary">Setup:</div>
+                  <ol className="list-decimal list-inside space-y-0.5 text-[11px]">
+                    <li>Sign up at{" "}
+                      <a href="https://cloud.synadia.com" target="_blank" rel="noopener noreferrer" className="text-berth-accent hover:underline">cloud.synadia.com</a>
+                    </li>
+                    <li>Create an account &rarr; copy your credentials</li>
+                    <li>Paste the full credentials block below</li>
+                  </ol>
+                </div>
+
                 <div className="flex flex-col gap-3">
                   <div>
                     <label className="text-sm text-berth-text-primary block mb-1">
@@ -246,27 +290,58 @@ export default function Settings() {
                       className="input !py-1.5 !text-sm w-full"
                     />
                   </div>
+
+                  {/* Credentials: show paste area or configured status */}
                   <div>
                     <label className="text-sm text-berth-text-primary block mb-1">
-                      Credentials File
+                      Credentials
                     </label>
-                    <input
-                      type="text"
-                      placeholder="/path/to/your.creds"
-                      value={settings.nats_creds ?? ""}
-                      onChange={(e) => save("nats_creds", e.target.value)}
-                      className="input !py-1.5 !text-sm w-full"
-                    />
-                    <div className="text-[10px] text-berth-text-tertiary mt-1">
-                      .creds file from your Synadia Cloud dashboard or nsc tool
-                    </div>
+                    {natsConfigured ? (
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                          <span className="text-xs text-berth-text-secondary">
+                            Credentials configured
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleClearNatsCreds}
+                          className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <textarea
+                          placeholder={"-----BEGIN NATS USER JWT-----\neyJ0eX...\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\nSUANP...\n------END USER NKEY SEED------"}
+                          value={natsPaste}
+                          onChange={(e) => setNatsPaste(e.target.value)}
+                          rows={6}
+                          className="input !py-1.5 !text-sm w-full font-mono resize-none"
+                        />
+                        <div className="text-[10px] text-red-400 mt-1">
+                          These credentials are sensitive. Never share them with anyone.
+                        </div>
+                        {natsPaste.trim() && (
+                          <button
+                            onClick={handleSaveNatsCreds}
+                            disabled={natsSaving}
+                            className="btn-primary mt-2 !py-1 !px-3 !text-xs"
+                          >
+                            {natsSaving ? "Saving..." : "Save Credentials"}
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
-                {settings.nats_url && (
+
+                {natsConfigured && settings.nats_url && (
                   <div className="mt-3 flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
                     <span className="text-xs text-berth-text-secondary">
-                      Configured — enable NATS per target in Targets page
+                      Ready — enable NATS per target in Targets page
                     </span>
                   </div>
                 )}

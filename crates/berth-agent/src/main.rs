@@ -96,6 +96,12 @@ enum Commands {
         #[arg(long)]
         hostname: Option<String>,
     },
+    /// Configure NATS credentials by pasting from Synadia Cloud
+    SetupNats {
+        /// NATS server URL (default: tls://connect.ngs.global)
+        #[arg(long, default_value = "tls://connect.ngs.global")]
+        url: String,
+    },
 }
 
 /// Probation health check: TCP-connect to our own gRPC port repeatedly
@@ -213,6 +219,85 @@ async fn run_init_tls(hostname: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Configure NATS credentials interactively by reading from stdin.
+async fn run_setup_nats(url: String) -> anyhow::Result<()> {
+    let berth_dir = dirs_next::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".berth");
+    std::fs::create_dir_all(&berth_dir)?;
+
+    println!("Paste your Synadia Cloud credentials below.");
+    println!("The block should contain both a NATS USER JWT and USER NKEY SEED section.");
+    println!("Press Ctrl+D (EOF) when done:\n");
+
+    let mut input = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+    let input = input.trim().to_string();
+
+    if !input.contains("BEGIN NATS USER JWT") || !input.contains("BEGIN USER NKEY SEED") {
+        anyhow::bail!(
+            "Invalid credentials format. Expected a block containing both \
+             '-----BEGIN NATS USER JWT-----' and '-----BEGIN USER NKEY SEED-----'."
+        );
+    }
+
+    // Write credentials file
+    let creds_path = berth_dir.join("nats.creds");
+    std::fs::write(&creds_path, &input)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&creds_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    // Update agent.env
+    let env_path = berth_dir.join("agent.env");
+    let env_content = if env_path.exists() {
+        std::fs::read_to_string(&env_path)?
+    } else {
+        String::new()
+    };
+
+    let mut lines: Vec<String> = env_content.lines().map(|l| l.to_string()).collect();
+
+    // Update or add BERTH_NATS_CREDS
+    let creds_line = format!("BERTH_NATS_CREDS={}", creds_path.display());
+    if let Some(idx) = lines.iter().position(|l| l.starts_with("BERTH_NATS_CREDS=")) {
+        lines[idx] = creds_line;
+    } else {
+        lines.push(creds_line);
+    }
+
+    // Update or add BERTH_NATS_URL
+    let url_line = format!("BERTH_NATS_URL={url}");
+    if let Some(idx) = lines.iter().position(|l| l.starts_with("BERTH_NATS_URL=")) {
+        lines[idx] = url_line;
+    } else {
+        lines.push(url_line);
+    }
+
+    let new_content = lines.join("\n");
+    std::fs::write(&env_path, &new_content)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    println!();
+    println!("NATS credentials saved to {}", creds_path.display());
+    println!("agent.env updated with BERTH_NATS_URL={url}");
+    println!();
+    println!("\x1b[31mThese credentials are sensitive. Never share them with anyone.\x1b[0m");
+    println!();
+    println!("Restart the agent to connect:");
+    println!("  sudo systemctl restart berth-agent");
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -229,6 +314,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::InitTls { hostname }) => {
             return run_init_tls(hostname).await;
+        }
+        Some(Commands::SetupNats { url }) => {
+            return run_setup_nats(url).await;
         }
         None => {}
     }

@@ -246,6 +246,16 @@ export async function updateSetting(
   return tauriInvoke("update_setting", { key, value });
 }
 
+// --- NATS Credentials ---
+
+export async function saveNatsCredentials(credentials: string): Promise<void> {
+  return tauriInvoke("save_nats_credentials", { credentials });
+}
+
+export async function clearNatsCredentials(): Promise<void> {
+  return tauriInvoke("clear_nats_credentials");
+}
+
 // --- Project Notification Setting ---
 
 export async function setProjectTarget(

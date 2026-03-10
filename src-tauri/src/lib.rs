@@ -411,6 +411,15 @@ pub fn run() {
             // Start background scheduler loop
             start_scheduler(app.handle().clone());
 
+            // Ensure install_id exists (used as owner_id for pairing + NATS)
+            if let Ok(store) = commands::get_store() {
+                let settings = store.get_all_settings().unwrap_or_default();
+                if settings.get("install_id").is_none() {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    let _ = store.set_setting("install_id", &id);
+                }
+            }
+
             // Start NATS subscriber (bridges remote agent events to UI)
             start_nats_subscriber(app.handle().clone());
 
@@ -438,6 +447,8 @@ pub fn run() {
             toggle_schedule,
             get_settings,
             update_setting,
+            save_nats_credentials,
+            clear_nats_credentials,
             import_file,
             list_execution_logs,
             set_project_notify,
