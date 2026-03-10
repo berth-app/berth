@@ -25,6 +25,13 @@
       }
     ]
   },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  },
   "plugins": {
     "shell": {
       "open": true
