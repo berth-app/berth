@@ -108,8 +108,8 @@ jobs:
           DMG_SHA=$(cat "Berth_${VERSION}_universal.dmg.sha256" | awk '{print $1}')
           CLI_SHA=$(cat "berth-cli-darwin-universal.tar.gz.sha256" | awk '{print $1}')
 
-          # Clone the tap repo
-          gh repo clone berth-app/homebrew-berth /tmp/homebrew-berth
+          # Clone the tap repo (use token in URL for push auth)
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/berth-app/homebrew-berth.git" /tmp/homebrew-berth
 
           # Update cask
           cat > /tmp/homebrew-berth/Casks/berth.rb << 'CASK_EOF'
