@@ -56,8 +56,9 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          # Find the DMG produced by Tauri
-          DMG=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          # Find the DMG produced by Tauri (path varies by Tauri version)
+          DMG=$(find src-tauri/target -name "*.dmg" -path "*/bundle/*" | head -1)
+          echo "Found DMG at: $DMG"
           cp "$DMG" "Berth_${VERSION}_universal.dmg"
 
           # Package CLI
