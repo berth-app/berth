@@ -1,0 +1,21 @@
+target/
+node_modules/
+dist/
+.claude-octopus/
+.claude/
+internal/
+.DS_Store
+*.db
+.env
+.env.*
+*.pem
+*.key
+agent.env
+
+# Internal docs (not for public repo)
+CLAUDE.md
+tasks.md
+reasoning/
+
+# Separate repo
+berth-store/

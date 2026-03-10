@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "berth": {
+      "command": "cargo",
+      "args": ["run", "-p", "berth-mcp", "--quiet"],
+      "cwd": "."
+    }
+  }
+}

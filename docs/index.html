@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Berth - Technical Documentation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--text); }
+  h4 { font-size: 0.95rem; margin: 1rem 0 0.3rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  p, li { color: var(--muted); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; color: var(--text); }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+  th { background: var(--surface); color: var(--text); font-weight: 600; }
+  td { color: var(--muted); }
+  .badge { display: inline-block; padding: 0.15em 0.5em; border-radius: 12px; font-size: 0.75em; font-weight: 600; }
+  .badge-done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-stub { background: rgba(210,153,34,0.15); color: var(--orange); }
+  .badge-partial { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }
+  nav { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 2rem; }
+  nav a { display: inline-block; margin: 0.2rem 0.5rem; font-size: 0.9rem; }
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; font-family: 'SF Mono', monospace; font-size: 0.8rem; line-height: 1.4; white-space: pre; overflow-x: auto; color: var(--muted); }
+  .diagram .highlight { color: var(--accent); }
+  .diagram .green { color: var(--green); }
+  .diagram .red { color: var(--red); }
+  .diagram .purple { color: var(--purple); }
+  .diagram .orange { color: var(--orange); }
+  .diagram .pink { color: var(--pink); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+  .card h3 { margin-top: 0; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Berth</h1>
+<p class="subtitle">Mac-native deployment control plane for AI-generated code. &mdash; v0.1.0</p>
+
+<nav>
+  <strong>Contents:</strong>
+  <a href="#architecture">Architecture</a>
+  <a href="#data-flow">Data Flow</a>
+  <a href="#crates">Rust Crates</a>
+  <a href="#database">Database</a>
+  <a href="#tauri-commands">Tauri Commands</a>
+  <a href="#events">Events</a>
+  <a href="#frontend">Frontend</a>
+  <a href="#design-tokens">Design Tokens</a>
+  <a href="#protobuf">Protobuf</a>
+  <a href="#mcp">MCP Server</a>
+  <a href="#publish">Publishing</a>
+  <a href="#cli">CLI</a>
+  <a href="#file-map">File Map</a>
+  <a href="#roadmap">Roadmap</a>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="architecture">System Architecture</h2>
+
+<div class="diagram">
+<span class="highlight">+----------------------------------------------------------+</span>
+<span class="highlight">|                    Tauri Desktop App                      |</span>
+<span class="highlight">|                                                          |</span>
+<span class="highlight">|  <span class="green">React 19 Frontend</span>          <span class="purple">Rust Backend</span>               |</span>
+<span class="highlight">|  +--------------------+    +-------------------------+  |</span>
+<span class="highlight">|  | ProjectList.tsx    |    | commands.rs             |  |</span>
+<span class="highlight">|  | ProjectDetail.tsx  |&lt;--&gt;| (18 Tauri commands)     |  |</span>
+<span class="highlight">|  | PasteAndDeploy.tsx |    |   + Embedded Agent (UDS)|  |</span>
+<span class="highlight">|  | Targets.tsx        |    |                         |  |</span>
+<span class="highlight">|  | Settings.tsx       |    |                         |  |</span>
+<span class="highlight">|  +--------------------+    +------------+------------+  |</span>
+<span class="highlight">|       invoke() / listen()               |                |</span>
+<span class="highlight">+------------------------------------------+----------------+</span>
+                                           |
+                                    <span class="purple">berth-core</span>
+                              +------------+------------+
+                              |                         |
+                     +--------+--------+    +-----------+---------+
+                     | <span class="green">executor.rs</span>     |    | <span class="green">store.rs</span>             |
+                     | spawn_and_stream|    | SQLite (rusqlite)   |
+                     | LogLine channel |    | projects table      |
+                     +-----------------+    +---------------------+
+                              |
+              +---------------+---------------+
+              |               |               |
+         <span class="orange">Local Mac</span>      <span class="orange">Linux VPS</span>       <span class="orange">Serverless</span>
+         (Phase 1)     (Phase 3)       (Phase 4)
+</div>
+
+<h3>Workspace Crates</h3>
+<div class="grid">
+  <div class="card">
+    <h3>berth-core <span class="badge badge-done">Done</span></h3>
+    <p>Shared business logic: project model, runtime detection, process executor, SQLite store.</p>
+  </div>
+  <div class="card">
+    <h3>berth-app (src-tauri) <span class="badge badge-done">Done</span></h3>
+    <p>Tauri 2.0 desktop app. Rust backend with 18 commands + React frontend with 5 pages. Agent-based execution via UDS.</p>
+  </div>
+  <div class="card">
+    <h3>berth-mcp <span class="badge badge-done">Done</span></h3>
+    <p>MCP server for AI agent control. 17 tools via JSON-RPC 2.0 stdio. E2E tested.</p>
+  </div>
+  <div class="card">
+    <h3>berth-agent <span class="badge badge-done">Done</span></h3>
+    <p>Persistent execution agent. 14 gRPC RPCs, SQLite store (~/.berth/agent.db), agent-side scheduler, store-and-forward events, remote upgrade. Deployed on Linux via systemd.</p>
+  </div>
+  <div class="card">
+    <h3>berth-cli <span class="badge badge-done">Done</span></h3>
+    <p>CLI interface. 12 commands + schedule + targets subcommands. Full feature parity with MCP.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="data-flow">Data Flow</h2>
+
+<h3>Project Execution Flow</h3>
+<div class="diagram">
+<span class="green">User clicks "Run"</span>
+      |
+      v
+<span class="highlight">ProjectDetail.tsx</span> --invoke("run_project")--> <span class="purple">commands.rs::run_project()</span>
+                                                  |
+                                         +--------+--------+
+                                         |                 |
+                                    store.get(uuid)   target check
+                                         |            (local or remote?)
+                                         v
+                                  <span class="green">AgentClient::connect_uds() or connect(tcp)</span>
+                                         |
+                                  <span class="green">AgentClient::execute_streaming()</span>
+                                         |
+                                  <span class="purple">AgentService::execute()</span>
+                                         |
+                                  <span class="green">executor::spawn_and_stream()</span>
+                                         |
+                              Streams ExecuteResponse (log lines)
+                                         |
+                              tokio::spawn(log_task)
+                                         |
+                                  <span class="highlight">app.emit("project-log", LogEvent)</span>
+                                         |
+                                         v
+                                  <span class="green">ProjectDetail.tsx</span>
+                                  listen("project-log")
+                                  appends to logs state
+                                  renders in log viewer
+
+<span class="red">When process exits:</span>
+  Stream ends with is_final=true + exit_code
+      --> store.update_status(Idle or Failed)
+      --> <span class="highlight">app.emit("project-status-change")</span>
+</div>
+
+<h3>Project Creation Flow</h3>
+<div class="diagram">
+<span class="green">PasteAndDeploy.tsx</span>
+      |
+      +--> invoke("detect_runtime", { path })
+      |         |
+      |    <span class="purple">runtime::detect_runtime()</span>
+      |         |
+      |    Scans for marker files:
+      |    requirements.txt -> Python
+      |    package.json     -> Node
+      |    go.mod           -> Go
+      |    Cargo.toml       -> Rust
+      |         |
+      |    Returns RuntimeInfo { runtime, entrypoint, confidence }
+      |
+      +--> invoke("create_project", { name, path })
+               |
+          <span class="purple">commands.rs::create_project()</span>
+               |
+          detect_runtime + Project::new + store.insert
+               |
+          Returns Project (saved to SQLite)
+</div>
+
+<!-- ============================================================ -->
+<h2 id="crates">Rust Crates Detail</h2>
+
+<h3>berth-core::project</h3>
+<pre><code>pub struct Project {
+    pub id: Uuid,
+    pub name: String,
+    pub path: String,
+    pub runtime: Runtime,
+    pub entrypoint: Option&lt;String&gt;,
+    pub status: ProjectStatus,
+    pub created_at: DateTime&lt;Utc&gt;,
+    pub updated_at: DateTime&lt;Utc&gt;,
+}
+
+pub enum ProjectStatus {
+    Idle,       // Not running
+    Running,    // Process active
+    Stopped,    // Manually stopped
+    Failed,     // Non-zero exit code
+}
+
+impl Project {
+    pub fn new(name: String, path: String, runtime: Runtime) -&gt; Self
+    // Generates UUID v4, sets status to Idle, timestamps to now
+}</code></pre>
+
+<h3>berth-core::runtime</h3>
+<pre><code>pub enum Runtime {
+    Python, Node, Go, Rust, Shell, Unknown,
+}
+
+pub struct RuntimeInfo {
+    pub runtime: Runtime,
+    pub version_file: Option&lt;String&gt;,
+    pub entrypoint: Option&lt;String&gt;,
+    pub confidence: f32,          // 0.0 - 1.0
+    pub dependencies: Vec&lt;String&gt;,
+    pub scripts: HashMap&lt;String, String&gt;,
+}
+
+pub fn detect_runtime(path: &amp;Path) -&gt; RuntimeInfo</code></pre>
+
+<h4>Detection Matrix</h4>
+<table>
+  <tr><th>Marker File</th><th>Runtime</th><th>Entrypoints Checked</th></tr>
+  <tr><td><code>requirements.txt</code>, <code>pyproject.toml</code>, <code>setup.py</code></td><td>Python</td><td><code>main.py</code>, <code>app.py</code>, <code>run.py</code>, <code>__main__.py</code></td></tr>
+  <tr><td><code>package.json</code></td><td>Node</td><td><code>index.js</code>, <code>index.ts</code>, <code>main.js</code>, <code>app.js</code></td></tr>
+  <tr><td><code>go.mod</code></td><td>Go</td><td><code>main.go</code>, <code>cmd/main.go</code></td></tr>
+  <tr><td><code>Cargo.toml</code></td><td>Rust</td><td><code>src/main.rs</code></td></tr>
+  <tr><td><code>*.sh</code>, <code>*.bash</code></td><td>Shell</td><td><code>run.sh</code>, <code>start.sh</code>, <code>main.sh</code></td></tr>
+</table>
+
+<h3>berth-core::executor</h3>
+<pre><code>pub struct LogLine {
+    pub stream: LogStream,        // Stdout or Stderr
+    pub text: String,
+    pub timestamp: DateTime&lt;Utc&gt;,
+}
+
+pub enum LogStream { Stdout, Stderr }
+
+pub async fn spawn_and_stream(
+    runtime: Runtime,
+    entrypoint: &amp;str,
+    working_dir: &amp;str,
+) -&gt; anyhow::Result&lt;(Child, mpsc::Receiver&lt;LogLine&gt;)&gt;</code></pre>
+
+<h4>Command Mapping</h4>
+<table>
+  <tr><th>Runtime</th><th>Command</th></tr>
+  <tr><td>Python</td><td><code>python3 -u &lt;entrypoint&gt;</code></td></tr>
+  <tr><td>Node</td><td><code>node &lt;entrypoint&gt;</code></td></tr>
+  <tr><td>Go</td><td><code>go run &lt;entrypoint&gt;</code></td></tr>
+  <tr><td>Rust</td><td><code>cargo run</code></td></tr>
+  <tr><td>Shell / Unknown</td><td><code>sh &lt;entrypoint&gt;</code></td></tr>
+</table>
+<p>All commands run with <code>kill_on_drop(true)</code>, piped stdout/stderr, and two background tokio tasks reading into a 256-capacity mpsc channel.</p>
+
+<h3>berth-core::store</h3>
+<pre><code>pub struct ProjectStore { conn: Connection }
+
+impl ProjectStore {
+    pub fn open(path: &amp;str) -&gt; Result&lt;Self&gt;
+    pub fn open_in_memory() -&gt; Result&lt;Self&gt;
+    pub fn list(&amp;self) -&gt; Result&lt;Vec&lt;Project&gt;&gt;
+    pub fn insert(&amp;self, project: &amp;Project) -&gt; Result&lt;()&gt;
+    pub fn get(&amp;self, id: Uuid) -&gt; Result&lt;Option&lt;Project&gt;&gt;
+    pub fn update_status(&amp;self, id: Uuid, status: ProjectStatus) -&gt; Result&lt;()&gt;
+    pub fn record_run_start(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
+    pub fn record_run_end(&amp;self, id: Uuid, exit_code: Option&lt;i32&gt;) -&gt; Result&lt;()&gt;
+    pub fn delete(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
+
+    // Schedule CRUD
+    pub fn insert_schedule(&amp;self, schedule: &amp;Schedule) -&gt; Result&lt;()&gt;
+    pub fn list_schedules(&amp;self) -&gt; Result&lt;Vec&lt;Schedule&gt;&gt;
+    pub fn get_schedules_for_project(&amp;self, project_id: Uuid) -&gt; Result&lt;Vec&lt;Schedule&gt;&gt;
+    pub fn update_schedule_after_run(&amp;self, ...) -&gt; Result&lt;()&gt;
+    pub fn set_schedule_enabled(&amp;self, id: Uuid, enabled: bool) -&gt; Result&lt;()&gt;
+    pub fn delete_schedule(&amp;self, id: Uuid) -&gt; Result&lt;()&gt;
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="database">Database Schema</h2>
+
+<h3>SQLite &mdash; <code>~/Library/Application Support/com.berth.app/berth.db</code></h3>
+
+<div class="diagram">
++-------------------------------------------------------------------+
+|                          <span class="highlight">projects</span>                                 |
++-------------------------------------------------------------------+
+| <span class="green">id</span>          TEXT PRIMARY KEY    UUID v4 as string                 |
+| <span class="green">name</span>        TEXT NOT NULL       Human-readable project name       |
+| <span class="green">path</span>        TEXT NOT NULL       Absolute filesystem path           |
+| <span class="green">runtime</span>     TEXT NOT NULL       python|node|go|rust|shell|unknown  |
+| <span class="green">entrypoint</span>  TEXT               main.py, index.js, etc. (nullable) |
+| <span class="green">status</span>      TEXT NOT NULL       idle|running|stopped|failed         |
+|             DEFAULT 'idle'                                         |
+| <span class="green">created_at</span>  TEXT NOT NULL       RFC 3339 timestamp                 |
+| <span class="green">updated_at</span>  TEXT NOT NULL       RFC 3339 timestamp                 |
+| <span class="green">last_run_at</span> TEXT               RFC 3339 (nullable)                |
+| <span class="green">last_exit_code</span> INTEGER          Process exit code (nullable)       |
+| <span class="green">run_count</span>   INTEGER NOT NULL   Total execution count              |
+|             DEFAULT 0                                              |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                          <span class="highlight">schedules</span>                                |
++-------------------------------------------------------------------+
+| <span class="green">id</span>              TEXT PRIMARY KEY  UUID v4 as string                 |
+| <span class="green">project_id</span>      TEXT NOT NULL     FK -> projects(id) ON DELETE CASCADE |
+| <span class="green">cron_expr</span>       TEXT NOT NULL     @every 5m, @hourly, 30 9 * * *   |
+| <span class="green">enabled</span>         INTEGER NOT NULL  1 = enabled, 0 = disabled         |
+|                 DEFAULT 1                                          |
+| <span class="green">created_at</span>      TEXT NOT NULL     RFC 3339 timestamp                |
+| <span class="green">last_triggered_at</span> TEXT            RFC 3339 (nullable)               |
+| <span class="green">next_run_at</span>     TEXT              RFC 3339 (nullable)               |
++-------------------------------------------------------------------+
+</div>
+
+<h4>Status State Machine</h4>
+<div class="diagram">
+                   create_project()
+                        |
+                        v
+                  +----------+
+         +--------+  <span class="green">Idle</span>   +&lt;-------+
+         |        +----+-----+        |
+         |             |              |
+    run_project()  run_project()  exit code 0
+         |             |              |
+         v             v              |
+  +----------+   +-----------+       |
+  | <span class="red">Failed</span>   |   | <span class="highlight">Running</span>  +-------+
+  | (no      |   +-----+-----+
+  | entrypoint)        |
+  +----------+    stop_project()
+                       |
+                       v
+                 +-----------+
+                 | <span class="orange">Stopped</span>   |
+                 +-----------+
+
+  <span class="red">Failed</span> also occurs on non-zero exit code
+</div>
+
+<h3>Agent SQLite &mdash; <code>~/.berth/agent.db</code> (remote agent only)</h3>
+
+<div class="diagram">
++-------------------------------------------------------------------+
+|                        <span class="highlight">deployments</span>                                |
++-------------------------------------------------------------------+
+| <span class="green">id</span>           TEXT PRIMARY KEY    UUID v4                          |
+| <span class="green">project_id</span>   TEXT NOT NULL                                        |
+| <span class="green">version</span>      INTEGER NOT NULL                                     |
+| <span class="green">runtime</span>      TEXT NOT NULL       python|node|go|rust|shell         |
+| <span class="green">entrypoint</span>   TEXT NOT NULL                                        |
+| <span class="green">working_dir</span>  TEXT NOT NULL       /home/user/.berth/deploys/...   |
+| <span class="green">image_tag</span>    TEXT                container image (nullable)        |
+| <span class="green">status</span>       TEXT NOT NULL       deployed|running|stopped          |
+| <span class="green">deployed_at</span>  TEXT NOT NULL       RFC 3339                         |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                        <span class="highlight">executions</span>                                 |
++-------------------------------------------------------------------+
+| <span class="green">id</span>             TEXT PRIMARY KEY  UUID v4                          |
+| <span class="green">project_id</span>     TEXT NOT NULL                                      |
+| <span class="green">deployment_id</span>  TEXT                                               |
+| <span class="green">started_at</span>     TEXT NOT NULL     RFC 3339                         |
+| <span class="green">finished_at</span>    TEXT              RFC 3339 (nullable)              |
+| <span class="green">exit_code</span>      INTEGER                                            |
+| <span class="green">trigger</span>        TEXT NOT NULL     manual|schedule                  |
+| <span class="green">status</span>         TEXT NOT NULL     running|completed|failed|stopped  |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                      <span class="highlight">execution_logs</span>                               |
++-------------------------------------------------------------------+
+| <span class="green">id</span>             INTEGER PRIMARY KEY AUTOINCREMENT                  |
+| <span class="green">execution_id</span>   TEXT NOT NULL                                      |
+| <span class="green">seq</span>            INTEGER NOT NULL                                   |
+| <span class="green">stream</span>         TEXT NOT NULL     stdout|stderr                    |
+| <span class="green">text</span>           TEXT NOT NULL                                      |
+| <span class="green">timestamp</span>      TEXT NOT NULL     RFC 3339                         |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                          <span class="highlight">events</span>                                   |
++-------------------------------------------------------------------+
+| <span class="green">id</span>             INTEGER PRIMARY KEY AUTOINCREMENT                  |
+| <span class="green">event_type</span>     TEXT NOT NULL     deploy_completed, execution_*,   |
+|                                    schedule_triggered, agent_upgraded|
+| <span class="green">project_id</span>     TEXT                                               |
+| <span class="green">execution_id</span>   TEXT                                               |
+| <span class="green">data</span>           TEXT NOT NULL     JSON payload                     |
+| <span class="green">created_at</span>     TEXT NOT NULL     RFC 3339                         |
++-------------------------------------------------------------------+
+
++-------------------------------------------------------------------+
+|                        <span class="highlight">schedules</span> (agent-side)                      |
++-------------------------------------------------------------------+
+| <span class="green">id</span>                TEXT PRIMARY KEY  UUID v4                        |
+| <span class="green">project_id</span>        TEXT NOT NULL                                    |
+| <span class="green">cron_expr</span>         TEXT NOT NULL     @every 5m, @hourly, etc.       |
+| <span class="green">enabled</span>           INTEGER NOT NULL  1=enabled, 0=disabled           |
+| <span class="green">created_at</span>        TEXT NOT NULL     RFC 3339                       |
+| <span class="green">last_triggered_at</span> TEXT              RFC 3339 (nullable)            |
+| <span class="green">next_run_at</span>       TEXT              RFC 3339 (nullable)            |
++-------------------------------------------------------------------+
+</div>
+
+<h4>Column Formats</h4>
+<table>
+  <tr><th>Column</th><th>Format</th><th>Example</th></tr>
+  <tr><td><code>id</code></td><td>UUID v4 string</td><td><code>8bda6c73-3ead-47f5-a64d-8d8b48f428d3</code></td></tr>
+  <tr><td><code>runtime</code></td><td>lowercase enum</td><td><code>python</code>, <code>node</code>, <code>go</code>, <code>rust</code>, <code>shell</code>, <code>unknown</code></td></tr>
+  <tr><td><code>status</code></td><td>lowercase enum</td><td><code>idle</code>, <code>running</code>, <code>stopped</code>, <code>failed</code></td></tr>
+  <tr><td><code>created_at</code></td><td>RFC 3339</td><td><code>2026-03-06T08:30:00+00:00</code></td></tr>
+  <tr><td><code>updated_at</code></td><td>RFC 3339</td><td><code>2026-03-06T09:15:42+00:00</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="tauri-commands">Tauri Commands</h2>
+
+<table>
+  <tr><th>Command</th><th>Params</th><th>Returns</th><th>Async</th></tr>
+  <tr><td><code>list_projects</code></td><td>&mdash;</td><td><code>{ projects: Project[] }</code></td><td>No</td></tr>
+  <tr><td><code>create_project</code></td><td><code>name: String, path: String</code></td><td><code>Project</code></td><td>No</td></tr>
+  <tr><td><code>detect_runtime</code></td><td><code>path: String</code></td><td><code>RuntimeInfo</code></td><td>No</td></tr>
+  <tr><td><code>update_project</code></td><td><code>id: String, ...</code></td><td><code>Project</code></td><td>No</td></tr>
+  <tr><td><code>delete_project</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>save_paste_code</code></td><td><code>name: String, code: String</code></td><td><code>String (path)</code></td><td>No</td></tr>
+  <tr><td><code>run_project</code></td><td><code>id: String, target: Option&lt;String&gt;</code></td><td><code>()</code></td><td>Yes</td></tr>
+  <tr><td><code>stop_project</code></td><td><code>id: String, target: Option&lt;String&gt;</code></td><td><code>()</code></td><td>Yes</td></tr>
+  <tr><td><code>list_targets</code></td><td>&mdash;</td><td><code>Vec&lt;Target&gt;</code></td><td>No</td></tr>
+  <tr><td><code>add_target</code></td><td><code>name, host, port</code></td><td><code>Target</code></td><td>No</td></tr>
+  <tr><td><code>remove_target</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>ping_target</code></td><td><code>id: String</code></td><td><code>HealthResponse</code></td><td>Yes</td></tr>
+  <tr><td><code>get_agent_stats</code></td><td><code>id: String</code></td><td><code>AgentStats</code></td><td>Yes</td></tr>
+  <tr><td><code>set_project_target</code></td><td><code>id: String, targetId: Option&lt;String&gt;</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>set_project_notify</code></td><td><code>id: String, enabled: bool</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>read_project_file</code></td><td><code>id: String</code></td><td><code>String</code></td><td>No</td></tr>
+  <tr><td><code>write_project_file</code></td><td><code>id: String, content: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>import_file</code></td><td><code>filePath: String</code></td><td><code>Project</code></td><td>No</td></tr>
+  <tr><td><code>get_settings</code></td><td>&mdash;</td><td><code>Record&lt;String, String&gt;</code></td><td>No</td></tr>
+  <tr><td><code>update_setting</code></td><td><code>key: String, value: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>list_schedules</code></td><td><code>projectId: String</code></td><td><code>Vec&lt;Schedule&gt;</code></td><td>No</td></tr>
+  <tr><td><code>add_schedule</code></td><td><code>projectId, cronExpr</code></td><td><code>Schedule</code></td><td>No</td></tr>
+  <tr><td><code>remove_schedule</code></td><td><code>id: String</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>toggle_schedule</code></td><td><code>id: String, enabled: bool</code></td><td><code>()</code></td><td>No</td></tr>
+  <tr><td><code>list_execution_logs</code></td><td><code>projectId, limit</code></td><td><code>Vec&lt;ExecutionLog&gt;</code></td><td>No</td></tr>
+  <tr><td><code>publish_project</code></td><td><code>id, port, provider?, target?</code></td><td><code>PublishResult</code></td><td>No</td></tr>
+  <tr><td><code>unpublish_project</code></td><td><code>id, target?</code></td><td><code>UnpublishResult</code></td><td>No</td></tr>
+</table>
+
+<h3>Managed State</h3>
+<pre><code>// Embedded local agent (in-process, UDS transport)
+// AgentClient connects via ~/.berth/agent.sock
+// Lockfile coordination via ~/.berth/agent.lock
+// No ProcessRegistry — agent owns all process lifecycle
+
+pub struct AppState {
+    pub store: ProjectStore,
+    // Agent started on app init, shared across commands
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="events">Tauri Events</h2>
+
+<table>
+  <tr><th>Event Name</th><th>Payload</th><th>Emitted By</th></tr>
+  <tr><td><code>project-log</code></td><td><code>LogEvent</code></td><td>Background log task in <code>run_project</code></td></tr>
+  <tr><td><code>project-status-change</code></td><td><code>StatusEvent</code></td><td><code>run_project</code>, <code>stop_project</code>, log task cleanup</td></tr>
+</table>
+
+<h4>Event Payloads</h4>
+<pre><code>// LogEvent (Rust -> Frontend)
+{
+  "project_id": "8bda6c73-...",
+  "stream": "stdout",          // "stdout" | "stderr"
+  "text": "[1/10] AAPL: $215.13 (+4.64%)",
+  "timestamp": "2026-03-06T09:15:42.123+00:00"
+}
+
+// StatusEvent (Rust -> Frontend)
+{
+  "project_id": "8bda6c73-...",
+  "status": "running"          // "idle" | "running" | "stopped" | "failed"
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="frontend">Frontend Components</h2>
+
+<h3>Component Tree</h3>
+<div class="diagram">
+<span class="highlight">App.tsx</span> (root, view router, titlebar)
+  |
+  +-- view === "list"
+  |     <span class="green">ProjectList.tsx</span>
+  |       Props: onSelect(id), onNewProject()
+  |       State: projects[], loading
+  |
+  +-- view === "detail"
+  |     <span class="green">ProjectDetail.tsx</span>
+  |       Props: projectId, onBack()
+  |       State: project, status, logs[], error
+  |       Listens: project-log, project-status-change
+  |
+  +-- view === "paste"
+  |     <span class="green">PasteAndDeploy.tsx</span>
+  |       Props: onBack(), onCreated(id)
+  |       State: name, code, path, runtimeInfo, mode, creating, target
+  |
+  +-- view === "targets"
+  |     <span class="green">Targets.tsx</span>
+  |       Props: onBack()
+  |       State: targets[], showAdd, stats{}, expandedId
+  |
+  +-- view === "settings"
+        <span class="green">Settings.tsx</span>
+          Props: onBack()
+          State: settings{}, theme
+</div>
+
+<h3>TypeScript Interfaces</h3>
+<pre><code>interface Project {
+  id: string;
+  name: string;
+  path: string;
+  runtime: string;
+  entrypoint: string | null;
+  status: "idle" | "running" | "stopped" | "failed";
+  created_at: string;
+  updated_at: string;
+}
+
+interface RuntimeInfo {
+  runtime: string;
+  version_file: string | null;
+  entrypoint: string | null;
+  confidence: number;           // 0.0 - 1.0
+}
+
+interface LogEvent {
+  project_id: string;
+  stream: "stdout" | "stderr";
+  text: string;
+  timestamp: string;
+}
+
+interface StatusEvent {
+  project_id: string;
+  status: "idle" | "running" | "stopped" | "failed";
+}</code></pre>
+
+<h3>Invoke Functions</h3>
+<pre><code>listProjects(): Promise&lt;Project[]&gt;
+createProject(name: string, path: string): Promise&lt;Project&gt;
+detectRuntime(path: string): Promise&lt;RuntimeInfo&gt;
+deleteProject(id: string): Promise&lt;void&gt;
+runProject(id: string): Promise&lt;void&gt;
+stopProject(id: string): Promise&lt;void&gt;</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="design-tokens">Design Tokens</h2>
+
+<h4>Dark Mode (default)</h4>
+<table>
+  <tr><th>Token</th><th>Value</th><th>Usage</th></tr>
+  <tr><td><code>--berth-bg</code></td><td><code>#1c1c1e</code></td><td>Page background</td></tr>
+  <tr><td><code>--berth-surface</code></td><td><code>#2c2c2e</code></td><td>Cards, inputs, log viewer</td></tr>
+  <tr><td><code>--berth-border</code></td><td><code>#3a3a3c</code></td><td>Borders, dividers</td></tr>
+  <tr><td><code>--berth-text</code></td><td><code>#f5f5f7</code></td><td>Primary text</td></tr>
+  <tr><td><code>--berth-muted</code></td><td><code>#8e8e93</code></td><td>Secondary text, labels</td></tr>
+  <tr><td><code>--berth-accent</code></td><td><code>#0a84ff</code></td><td>Buttons, links, active states</td></tr>
+  <tr><td><code>--berth-success</code></td><td><code>#30d158</code></td><td>Running status</td></tr>
+  <tr><td><code>--berth-error</code></td><td><code>#ff453a</code></td><td>Failed status, stderr</td></tr>
+</table>
+
+<h4>Light Mode</h4>
+<table>
+  <tr><th>Token</th><th>Value</th></tr>
+  <tr><td><code>--berth-bg</code></td><td><code>#f2f2f7</code></td></tr>
+  <tr><td><code>--berth-surface</code></td><td><code>#ffffff</code></td></tr>
+  <tr><td><code>--berth-border</code></td><td><code>#d1d1d6</code></td></tr>
+  <tr><td><code>--berth-text</code></td><td><code>#1c1c1e</code></td></tr>
+  <tr><td><code>--berth-accent</code></td><td><code>#007aff</code></td></tr>
+  <tr><td><code>--berth-success</code></td><td><code>#34c759</code></td></tr>
+  <tr><td><code>--berth-error</code></td><td><code>#ff3b30</code></td></tr>
+</table>
+
+<h4>Typography</h4>
+<pre><code>font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+             "Helvetica Neue", Helvetica, Arial, sans-serif;
+-webkit-font-smoothing: antialiased;
+user-select: none;</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="protobuf">Protobuf / gRPC</h2>
+
+<pre><code>syntax = "proto3";
+package berth;
+
+service AgentService {
+  // Core RPCs (Phase 1-3)
+  rpc Execute(ExecuteRequest)           returns (stream ExecuteResponse);
+  rpc Status(StatusRequest)             returns (StatusResponse);
+  rpc StreamLogs(LogStreamRequest)      returns (stream LogStreamResponse);
+  rpc Stop(StopRequest)                 returns (StopResponse);
+  rpc Health(HealthRequest)             returns (HealthResponse);
+  rpc Deploy(DeployRequest)             returns (DeployResponse);
+
+  // Persistent Agent RPCs (Phase 3.5)
+  rpc GetExecutions(GetExecutionsRequest)       returns (GetExecutionsResponse);
+  rpc GetExecutionLogs(GetExecutionLogsRequest)  returns (stream LogStreamResponse);
+  rpc GetEvents(GetEventsRequest)               returns (GetEventsResponse);
+  rpc AckEvents(AckEventsRequest)               returns (AckEventsResponse);
+  rpc AddSchedule(AddScheduleRequest)           returns (AddScheduleResponse);
+  rpc RemoveSchedule(RemoveScheduleRequest)     returns (RemoveScheduleResponse);
+  rpc ListSchedules(ListSchedulesRequest)       returns (ListSchedulesResponse);
+  rpc Upgrade(stream UpgradeChunk)              returns (UpgradeResponse);
+}</code></pre>
+
+<h4>Message Types</h4>
+<table>
+  <tr><th>Message</th><th>Key Fields</th><th>Notes</th></tr>
+  <tr><td><code>ExecuteRequest</code></td><td>project_id, runtime, entrypoint, code (bytes), working_dir</td><td>code field for paste-and-deploy</td></tr>
+  <tr><td><code>ExecuteResponse</code></td><td>stream, text, timestamp, exit_code, is_final</td><td>Server-streaming, final message has exit code</td></tr>
+  <tr><td><code>HealthResponse</code></td><td>agent_version, status, uptime_seconds, os, arch</td><td>os/arch from std::env::consts</td></tr>
+  <tr><td><code>StatusResponse</code></td><td>agent_id, status, cpu_usage, memory_bytes, projects[]</td><td></td></tr>
+  <tr><td><code>DeployRequest</code></td><td>project_id, runtime, entrypoint, tarball (bytes)</td><td>Multi-file deploy via tarball</td></tr>
+  <tr><td><code>GetExecutionsRequest</code></td><td>project_id, limit</td><td>Query persistent execution history</td></tr>
+  <tr><td><code>ExecutionInfo</code></td><td>id, project_id, started_at, finished_at, exit_code, trigger, status</td><td>Nested in GetExecutionsResponse</td></tr>
+  <tr><td><code>GetEventsRequest</code></td><td>since_id, limit</td><td>Poll for store-and-forward events</td></tr>
+  <tr><td><code>AgentEvent</code></td><td>id, event_type, project_id, execution_id, data, created_at</td><td>Nested in GetEventsResponse</td></tr>
+  <tr><td><code>AgentScheduleInfo</code></td><td>id, project_id, cron_expr, enabled, last_triggered_at, next_run_at</td><td>Agent-side schedule</td></tr>
+  <tr><td><code>UpgradeChunk</code></td><td>data (bytes), chunk_index, total_chunks</td><td>Client-streaming binary upload</td></tr>
+  <tr><td><code>UpgradeResponse</code></td><td>success, new_version, message</td><td>Sent before systemd restart</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="mcp">MCP Server <span class="badge badge-done">Done</span></h2>
+
+<p>17 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05). E2E tested: deploy inline code, run, capture output, delete.</p>
+
+<table>
+  <tr><th>Tool</th><th>Purpose</th><th>Status</th></tr>
+  <tr><td><code>berth_list_projects</code></td><td>List all projects with status, runtime, run history</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_project_status</code></td><td>Detailed status of one project (by UUID or name)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_deploy</code></td><td>Create project + run (inline code or path)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_run</code></td><td>Run existing project, capture output with timeout</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_stop</code></td><td>Stop a running project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_logs</code></td><td>Fetch logs (pending log store)</td><td><span class="badge badge-partial">Partial</span></td></tr>
+  <tr><td><code>berth_import_code</code></td><td>Import code from path or inline, create project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_detect_runtime</code></td><td>Auto-detect language, entrypoint, deps, scripts</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_delete</code></td><td>Delete a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_health</code></td><td>System health (version, projects, schedules, platform)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_schedule_add</code></td><td>Add a cron-like schedule to a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_schedule_list</code></td><td>List all schedules</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_schedule_remove</code></td><td>Remove a schedule by UUID</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_publish</code></td><td>Publish a running project to a public URL via tunnel (cloudflared)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_unpublish</code></td><td>Stop the public URL tunnel for a project</td><td><span class="badge badge-done">Done</span></td></tr>
+</table>
+
+<p>Transport: stdio (primary, for Claude Code). HTTP via axum planned for Phase 3.</p>
+<p>Claude Code integration: <code>.mcp.json</code> config included in repo root.</p>
+
+<h3>MCP Architecture</h3>
+<pre><code>crates/berth-mcp/
+  src/
+    main.rs       -- Entry point, tokio::main, calls server::run_stdio()
+    lib.rs        -- Module exports (protocol, server, tools)
+    protocol.rs   -- JSON-RPC 2.0 types, MCP types (InitializeResult, Tool, CallToolResult)
+    server.rs     -- Stdio loop: read line -> parse JSON-RPC -> dispatch -> write response
+    tools.rs      -- Tool definitions (list_tools) + handlers (call_tool)</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="publish">Public URL Publishing <span class="badge badge-done">Done</span></h2>
+
+<p>Berth can publish any running project to a public URL via pluggable tunnel providers. Zero Berth-side infrastructure &mdash; tunnels run on the user's machine.</p>
+
+<h3>Architecture</h3>
+<div class="diagram">
+User clicks "Publish" (port 8080)
+        |
+   Tauri command: publish_project
+        |
+   AgentTransport::publish()
+        |          |
+     [gRPC]     [NATS]
+        |          |
+   AgentService / PersistentAgentService
+        |
+   TunnelManager::start()
+        |
+   cloudflared tunnel --url http://127.0.0.1:8080
+        |
+   Parse stderr for trycloudflare.com URL
+        |
+   Return URL to UI &rarr; copy to clipboard
+</div>
+
+<h3>Key Components</h3>
+<table>
+  <tr><th>File</th><th>Role</th></tr>
+  <tr><td><code>crates/berth-core/src/tunnel.rs</code></td><td>TunnelManager, TunnelProvider enum, cloudflared spawn + URL parsing, available_providers()</td></tr>
+  <tr><td><code>crates/berth-core/src/agent_service.rs</code></td><td>Local agent publish/unpublish gRPC handlers</td></tr>
+  <tr><td><code>crates/berth-agent/src/persistent_service.rs</code></td><td>Remote agent do_publish/do_unpublish + tunnel lifecycle</td></tr>
+  <tr><td><code>crates/berth-core/src/agent_transport.rs</code></td><td>publish()/unpublish() trait methods</td></tr>
+  <tr><td><code>crates/berth-core/src/nats_relay.rs</code></td><td>Publish/Unpublish NatsCommandKind + NatsResponseBody variants</td></tr>
+  <tr><td><code>crates/berth-agent/src/nats_cmd_handler.rs</code></td><td>NATS Publish/Unpublish command dispatch</td></tr>
+  <tr><td><code>proto/berth.proto</code></td><td>Publish/Unpublish RPCs + messages, tunnel_providers in HealthResponse</td></tr>
+  <tr><td><code>src-tauri/src/commands.rs</code></td><td>publish_project/unpublish_project Tauri commands</td></tr>
+  <tr><td><code>src/pages/ProjectDetail.tsx</code></td><td>PublishPanel component (port input, publish/unpublish, URL display)</td></tr>
+  <tr><td><code>crates/berth-mcp/src/tools.rs</code></td><td>berth_publish, berth_unpublish MCP tools</td></tr>
+  <tr><td><code>crates/berth-cli/src/main.rs</code></td><td>berth publish/unpublish CLI commands</td></tr>
+</table>
+
+<h3>Provider Design (Pluggable)</h3>
+<p>Adding a new provider (e.g. ngrok) requires changes to <strong>one file only</strong>: <code>tunnel.rs</code>.</p>
+<ol>
+  <li>Add variant to <code>TunnelProvider</code> enum</li>
+  <li>Add match arm in <code>TunnelManager::start()</code></li>
+  <li>Implement <code>start_ngrok()</code> with provider-specific URL parsing</li>
+  <li>Add detection in <code>available_providers()</code></li>
+</ol>
+<p>No proto changes, no transport changes, no new Tauri commands needed.</p>
+
+<h3>Proto Messages</h3>
+<pre><code>rpc Publish(PublishRequest) returns (PublishResponse);
+rpc Unpublish(UnpublishRequest) returns (UnpublishResponse);
+
+message PublishRequest {
+  string project_id = 1;
+  uint32 port = 2;
+  string provider = 3;       // "cloudflared" (default)
+  string provider_config = 4; // reserved for future provider options
+}
+message PublishResponse {
+  bool success = 1;
+  string url = 2;            // e.g. "https://random-words.trycloudflare.com"
+  string message = 3;
+  string provider = 4;
+}
+// HealthResponse includes: repeated string tunnel_providers = 9;</code></pre>
+
+<h3>Database</h3>
+<pre><code>-- Added columns to projects table:
+ALTER TABLE projects ADD COLUMN tunnel_url TEXT;
+ALTER TABLE projects ADD COLUMN tunnel_provider TEXT;
+
+-- Methods: store.set_tunnel_url(), store.clear_tunnel_url()</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="cli">CLI <span class="badge badge-done">Done</span></h2>
+
+<pre><code>berth list                                    # List all projects (table format)
+berth deploy &lt;path&gt; [--name N] [--target T]   # Create project + run
+berth run &lt;project&gt;                           # Run by name or UUID
+berth stop &lt;project&gt;                          # Stop a project
+berth logs &lt;project&gt; [-f|--follow]            # Run and capture output
+berth status &lt;project&gt;                        # Detailed project info
+berth import &lt;path&gt; [--name N]                # Import code as project
+berth detect &lt;path&gt;                           # Detect runtime + deps + scripts
+berth delete &lt;project&gt;                        # Delete a project
+berth health                                  # System health check
+berth targets list                            # List deploy targets
+berth targets add &lt;name&gt; --host &lt;host&gt;       # Add target (Phase 3)
+berth schedule add &lt;project&gt; --cron &lt;expr&gt;   # Add schedule (@every 5m, @hourly, etc.)
+berth schedule list                           # List all schedules
+berth schedule remove &lt;id&gt;                    # Remove a schedule
+berth schedule enable &lt;id&gt;                    # Enable a schedule
+berth schedule disable &lt;id&gt;                   # Disable a schedule
+berth schedule tick                           # Run one scheduler tick
+berth publish &lt;project&gt; --port 8080           # Publish via cloudflared tunnel
+berth unpublish &lt;project&gt;                     # Stop the public URL tunnel</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="file-map">File Map</h2>
+
+<div class="diagram">
+mac-berth/
++-- Cargo.toml                  <span class="muted">Workspace manifest</span>
++-- Cargo.lock
++-- package.json                <span class="muted">React frontend deps</span>
++-- tsconfig.json
++-- vite.config.ts
++-- tailwind.config.ts
++-- postcss.config.js
++-- index.html                  <span class="muted">Vite entry</span>
++-- CLAUDE.md                   <span class="muted">Project instructions</span>
++-- PRODUCT_VISION.md           <span class="muted">Business & market</span>
+|
++-- <span class="highlight">src/</span>                        <span class="muted">React frontend</span>
+|   +-- main.tsx                <span class="muted">React entry</span>
+|   +-- App.tsx                 <span class="muted">Root component, view router</span>
+|   +-- lib/
+|   |   +-- invoke.ts           <span class="muted">Typed Tauri invoke functions (targets, schedules, settings, etc.)</span>
+|   +-- pages/
+|   |   +-- ProjectList.tsx     <span class="muted">Project list with status</span>
+|   |   +-- ProjectDetail.tsx   <span class="muted">Run/Stop, log viewer, code editor, schedules, history</span>
+|   |   +-- PasteAndDeploy.tsx  <span class="muted">Code import wizard with target selector</span>
+|   |   +-- Targets.tsx         <span class="muted">Remote target management (add/remove/ping/stats)</span>
+|   |   +-- Settings.tsx        <span class="muted">App settings (theme, default target, auto-run)</span>
+|   +-- styles/
+|       +-- globals.css         <span class="muted">macOS design tokens</span>
+|
++-- <span class="purple">src-tauri/</span>                  <span class="muted">Tauri Rust backend</span>
+|   +-- Cargo.toml
+|   +-- tauri.conf.json         <span class="muted">Window, tray, plugins</span>
+|   +-- build.rs
+|   +-- capabilities/
+|   |   +-- default.json        <span class="muted">Permissions</span>
+|   +-- icons/
+|   |   +-- icon.png            <span class="muted">32x32 tray icon</span>
+|   +-- src/
+|       +-- main.rs             <span class="muted">Desktop entry</span>
+|       +-- lib.rs              <span class="muted">Tauri builder, state, plugins</span>
+|       +-- commands.rs         <span class="muted">18 commands + agent-based execution + monitoring</span>
+|
++-- <span class="green">crates/</span>
+|   +-- berth-core/            <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |       +-- lib.rs          <span class="muted">Re-exports</span>
+|   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
+|   |       +-- runtime.rs      <span class="muted">Runtime detection + dep parsing (req.txt, package.json, go.mod, Cargo.toml)</span>
+|   |       +-- executor.rs     <span class="muted">Process spawn + log stream (mpsc channel)</span>
+|   |       +-- store.rs        <span class="muted">SQLite CRUD (projects + schedules + targets) + migrations</span>
+|   |       +-- scheduler.rs    <span class="muted">Cron-like scheduler (parse, tick, execute due jobs)</span>
+|   |       +-- agent_service.rs <span class="muted">AgentServiceImpl (shared across all crates)</span>
+|   |       +-- agent_client.rs <span class="muted">gRPC client (TCP + UDS connect, streaming execute)</span>
+|   |       +-- uds.rs          <span class="muted">Unix Domain Socket transport helpers (serve + connect)</span>
+|   |       +-- local_agent.rs  <span class="muted">Embedded agent bootstrap + lockfile coordination</span>
+|   |       +-- tls.rs          <span class="muted">mTLS certificate generation (rcgen)</span>
+|   |       +-- credentials.rs  <span class="muted">Keychain credential storage (security-framework)</span>
+|   |       +-- tunnel.rs       <span class="muted">Pluggable tunnel manager (cloudflared, TunnelProvider trait)</span>
+|   |       +-- nats_relay.rs   <span class="muted">NATS message types (commands, responses, events)</span>
+|   |       +-- nats_cmd_client.rs <span class="muted">Desktop-side NATS command client</span>
+|   |       +-- agent_transport.rs <span class="muted">AgentTransport trait (gRPC + NATS unified)</span>
+|   |
+|   +-- berth-mcp/             <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |       +-- main.rs         <span class="muted">Entry point (stdio)</span>
+|   |       +-- lib.rs          <span class="muted">Module exports</span>
+|   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
+|   |       +-- server.rs       <span class="muted">Stdio server loop</span>
+|   |       +-- tools.rs        <span class="muted">19 tool definitions + handlers (incl. publish/unpublish)</span>
+|   |
+|   +-- berth-agent/           <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |   |   +-- main.rs              <span class="muted">Agent startup: SQLite init, gRPC server, scheduler loop</span>
+|   |   |   +-- service.rs           <span class="muted">Legacy re-export (AgentServiceImpl from berth-core)</span>
+|   |   |   +-- persistent_service.rs <span class="muted">PersistentAgentService (14 RPCs, SQLite persistence)</span>
+|   |   |   +-- agent_store.rs       <span class="muted">Agent SQLite store (~/.berth/agent.db, 5 tables)</span>
+|   |   |   +-- agent_scheduler.rs   <span class="muted">Agent-side cron scheduler (tick every 30s)</span>
+|   |   +-- build.rs                 <span class="muted">tonic-build proto compilation</span>
+|   |
+|   +-- berth-cli/             <span class="badge badge-done">Done</span>
+|       +-- src/main.rs         <span class="muted">12 commands + schedule subcommands</span>
+|
++-- proto/
+|   +-- berth.proto            <span class="muted">gRPC service (Phase 3)</span>
+|
++-- reasoning/                  <span class="muted">Decision records (DRF/CRF)</span>
+|   +-- crf/berth-project.yaml
+|   +-- drf/001-framework-selection.yaml
+|   +-- drf/002-agent-language.yaml
+|   +-- drf/003-product-positioning.yaml
+|   +-- drf/004-business-model.yaml
+|   +-- drf/005-mcp-as-core.yaml
+|   +-- drf/006-backend-storage.yaml
+|   +-- drf/007-agent-only-execution.yaml
+|
++-- docs/                       <span class="muted">This documentation</span>
+    +-- index.html
+    +-- remote-agent.html
+</div>
+
+<!-- ============================================================ -->
+<h2 id="roadmap">Roadmap & Status</h2>
+
+<h3>Phase 1: Foundation <span class="badge badge-done">Complete</span></h3>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>Tauri app scaffold (project list, detail, code import)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>berth-core: project model, runtime detection</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Run/Stop execution (agent-based via UDS, log streaming via events)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Paste & Deploy end-to-end (save to disk, smart quote normalization)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>xterm.js log viewer (ANSI colors, auto-fit, 10k scrollback)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Basic monitoring (run count, last run, exit codes, live uptime)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Local agent gRPC (tonic on localhost:50051)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Menu bar tray icon (TrayIconBuilder + managed state)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>UI polish (toasts, skeletons, runtime badges, live status)</td><td><span class="badge badge-done">Done</span></td></tr>
+</table>
+
+<h3>Phase 2: MCP + CLI <span class="badge badge-done">Complete</span></h3>
+<table>
+  <tr><th>Item</th><th>Status</th></tr>
+  <tr><td>MCP server (stdio, 13 tools, JSON-RPC 2.0)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>CLI tool (12 commands + schedule subcommands)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>.mcp.json config for Claude Code integration</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>E2E MCP test (deploy inline code, run, capture output, delete)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Scheduling (@every, @hourly, @daily, @weekly, M H * * *)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>Auto-detect: parse requirements.txt, package.json, go.mod, Cargo.toml</td><td><span class="badge badge-done">Done</span></td></tr>
+</table>
+
+<h3>Phase 3: Remote Agents <span class="badge badge-done">Complete</span></h3>
+<p>Persistent remote agent with SQLite store, 14 gRPC RPCs, agent-side scheduler, store-and-forward events, remote upgrade, dependency install during deployment. Agent install script, gRPC communication, remote deploy, agent health monitoring, mDNS LAN discovery, agent-only execution architecture (UDS for local, TCP gRPC for remote). Deployed and verified on remote Linux server.</p>
+
+<h3>Phase 4: Cloud Targets <span class="badge badge-stub">Not Started</span></h3>
+<p>AWS Lambda, Cloudflare Workers, deployment history, code signing, Homebrew cask.</p>
+
+<h3>Phase 5: Growth <span class="badge badge-stub">Not Started</span></h3>
+<p>Pro tier, team features, web dashboard, Windows/Linux builds.</p>
+
+<!-- ============================================================ -->
+<h2>Tech Stack Summary</h2>
+<table>
+  <tr><th>Layer</th><th>Technology</th><th>Version</th></tr>
+  <tr><td>Desktop Framework</td><td>Tauri</td><td>2.10</td></tr>
+  <tr><td>Frontend</td><td>React + TypeScript</td><td>19 / 5.6</td></tr>
+  <tr><td>Build Tool</td><td>Vite</td><td>6.0</td></tr>
+  <tr><td>Styling</td><td>Tailwind CSS</td><td>3.4</td></tr>
+  <tr><td>Rust Runtime</td><td>tokio</td><td>1.x (full)</td></tr>
+  <tr><td>Database</td><td>SQLite via rusqlite</td><td>0.32 (bundled)</td></tr>
+  <tr><td>Serialization</td><td>serde + serde_json</td><td>1.x</td></tr>
+  <tr><td>gRPC (Phase 3)</td><td>tonic + prost</td><td>0.12 / 0.13</td></tr>
+  <tr><td>CLI Parsing</td><td>clap</td><td>4.x</td></tr>
+  <tr><td>Logging</td><td>tracing + tracing-subscriber</td><td>0.1 / 0.3</td></tr>
+</table>
+
+<hr style="border-color: var(--border); margin: 3rem 0 1rem;">
+<p style="text-align: center; font-size: 0.85rem;">
+  Berth v0.1.0 &mdash; Documentation generated March 2026<br>
+  <a href="https://github.com/berth-app/berth">github.com/berth-app/berth</a>
+</p>
+
+</div>
+</body>
+</html>

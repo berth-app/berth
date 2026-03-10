@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-utils/schema.json",
+  "productName": "Berth",
+  "version": "0.1.9",
+  "identifier": "com.berth.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npx vite",
+    "beforeBuildCommand": "npx tsc && npx vite build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "",
+        "titleBarStyle": "Overlay",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 700,
+        "minHeight": 400,
+        "resizable": true,
+        "decorations": true,
+        "transparent": true
+      }
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["berth"]
+      }
+    }
+  }
+}
