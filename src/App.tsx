@@ -6,9 +6,10 @@ import PasteAndDeploy from "./pages/PasteAndDeploy";
 import Targets from "./pages/Targets";
 import Settings from "./pages/Settings";
 import TemplateStore from "./pages/TemplateStore";
+import Onboarding from "./pages/Onboarding";
 import { ToastProvider } from "./components/Toast";
 import Sidebar from "./components/Sidebar";
-import { getSettings } from "./lib/invoke";
+import { getSettings, updateSetting } from "./lib/invoke";
 import { setTheme, initThemeListener } from "./lib/theme";
 
 type View = "list" | "detail" | "paste" | "targets" | "settings" | "store";
@@ -18,13 +19,21 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null
   );
+  const [showOnboarding, setShowOnboarding] = useState<boolean | null>(null);
 
   useEffect(() => {
     getSettings()
-      .then((s) =>
-        setTheme(s.theme_palette ?? "default", s.theme ?? "system")
-      )
-      .catch(() => {});
+      .then((s) => {
+        setTheme(s.theme_palette ?? "default", s.theme ?? "system");
+        if (s.onboarding_completed !== "true") {
+          setShowOnboarding(true);
+        } else {
+          setShowOnboarding(false);
+        }
+      })
+      .catch(() => {
+        setShowOnboarding(true);
+      });
     initThemeListener();
   }, []);
 
@@ -45,6 +54,26 @@ export default function App() {
   function handleSelectProject(id: string) {
     setSelectedProjectId(id);
     setView("detail");
+  }
+
+  async function handleOnboardingComplete(deployedProjectId?: string) {
+    await updateSetting("onboarding_completed", "true").catch(() => {});
+    setShowOnboarding(false);
+    if (deployedProjectId) {
+      setSelectedProjectId(deployedProjectId);
+      setView("detail");
+    }
+  }
+
+  // Don't render until we know whether to show onboarding
+  if (showOnboarding === null) return null;
+
+  if (showOnboarding) {
+    return (
+      <ToastProvider>
+        <Onboarding onComplete={handleOnboardingComplete} />
+      </ToastProvider>
+    );
   }
 
   return (

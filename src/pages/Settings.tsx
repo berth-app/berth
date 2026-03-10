@@ -446,7 +446,7 @@ export default function Settings() {
                 Berth
               </div>
               <div className="text-xs text-berth-text-secondary mt-0.5">
-                v0.4.2 — Deployment control plane for AI-generated code
+                v0.4.3 — Deployment control plane for AI-generated code
               </div>
               <div className="text-[10px] text-berth-text-tertiary mt-1">
                 Licensed under BSL 1.1 (converts to Apache 2.0 after 3 years)

@@ -910,3 +910,34 @@ body {
   background: var(--berth-accent-bg);
   color: var(--berth-accent);
 }
+
+/* ================================================================
+   Onboarding Wizard
+   ================================================================ */
+@keyframes onboarding-enter-forward {
+  from { opacity: 0; transform: translateX(30px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes onboarding-enter-backward {
+  from { opacity: 0; transform: translateX(-30px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes onboarding-celebrate {
+  0% { opacity: 0; transform: scale(0.9); }
+  50% { transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.onboarding-step-enter-forward {
+  animation: onboarding-enter-forward 0.3s ease-out;
+}
+
+.onboarding-step-enter-backward {
+  animation: onboarding-enter-backward 0.3s ease-out;
+}
+
+.onboarding-celebration {
+  animation: onboarding-celebrate 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
