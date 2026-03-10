@@ -77,7 +77,7 @@ uninstall() {
   # Optionally remove the berth user
   if id "${AGENT_USER}" &>/dev/null; then
     printf "Remove the '%s' system user? [y/N] " "${AGENT_USER}"
-    read -r answer
+    read -r answer </dev/tty
     if [ "${answer}" = "y" ] || [ "${answer}" = "Y" ]; then
       userdel "${AGENT_USER}" 2>/dev/null || true
       ok "User '${AGENT_USER}' removed."
@@ -153,6 +153,16 @@ create_user() {
 # ---------------------------------------------------------------------------
 
 download_binary() {
+  # Dev mode: use pre-built local binary instead of downloading
+  if [ -n "${LOCAL_BINARY:-}" ] && [ -f "${LOCAL_BINARY}" ]; then
+    info "Using local binary: ${LOCAL_BINARY}"
+    cp "${LOCAL_BINARY}" "${INSTALL_PATH}"
+    chmod +x "${INSTALL_PATH}"
+    chown "${AGENT_USER}:${AGENT_USER}" "${INSTALL_PATH}"
+    ok "Binary installed to ${INSTALL_PATH}"
+    return
+  fi
+
   local url="${BASE_URL}/${BINARY_NAME}-linux-${ARCH}"
   info "Downloading ${BINARY_NAME} from ${url}..."
 
@@ -200,34 +210,179 @@ install_rollback_script() {
 }
 
 # ---------------------------------------------------------------------------
-# Generate environment file (idempotent — won't overwrite existing)
+# Connection mode selection
 # ---------------------------------------------------------------------------
 
-install_env_file() {
+choose_connection_mode() {
   local env_file="${BERTH_DIR}/agent.env"
   if [ -f "${env_file}" ]; then
-    info "Environment file already exists, skipping."
+    info "Environment file already exists, skipping setup."
+    CONNECTION_MODE="existing"
     return
   fi
 
-  info "Creating environment file at ${env_file}..."
-  cat > "${env_file}" <<'ENVEOF'
-# Berth Agent Configuration
-# Uncomment and edit the lines you need.
+  echo ""
+  printf "\033[1;36m┌─────────────────────────────────────────────┐\033[0m\n"
+  printf "\033[1;36m│  How will you connect to this agent?        │\033[0m\n"
+  printf "\033[1;36m│                                             │\033[0m\n"
+  printf "\033[1;36m│  1) Synadia Cloud (recommended)             │\033[0m\n"
+  printf "\033[1;36m│     Zero inbound ports, works behind NAT    │\033[0m\n"
+  printf "\033[1;36m│                                             │\033[0m\n"
+  printf "\033[1;36m│  2) Direct connection                       │\033[0m\n"
+  printf "\033[1;36m│     Desktop connects to this server's IP    │\033[0m\n"
+  printf "\033[1;36m│     Requires network reachability + mTLS    │\033[0m\n"
+  printf "\033[1;36m└─────────────────────────────────────────────┘\033[0m\n"
+  echo ""
 
-# Synadia Cloud NATS relay (BYON — create account at cloud.synadia.com)
-# BERTH_NATS_URL=tls://connect.ngs.global
-# BERTH_NATS_CREDS=/home/berth/.berth/nats.creds
+  local choice=""
+  while [ "${choice}" != "1" ] && [ "${choice}" != "2" ]; do
+    printf "Choose [1/2]: "
+    read -r choice </dev/tty
+  done
 
-# gRPC port (default 50051)
-# BERTH_PORT=50051
+  if [ "${choice}" = "1" ]; then
+    CONNECTION_MODE="synadia"
+    setup_synadia "${env_file}"
+  else
+    CONNECTION_MODE="direct"
+    setup_direct "${env_file}"
+  fi
+}
 
-# Log level
+setup_synadia() {
+  local env_file="$1"
+
+  echo ""
+  info "Synadia Cloud setup"
+  echo ""
+  echo "  Copy your NATS credentials from Synadia Cloud:"
+  echo ""
+  echo "    1. Sign up or log in at https://cloud.synadia.com"
+  echo "    2. Open your System (or create one)"
+  echo "    3. Go to Accounts → select an account → Users"
+  echo "    4. Click on a user (or create one for the agent)"
+  echo "    5. Click 'Copy Credentials'"
+  echo ""
+
+  printf "Paste your credentials below, then press Enter on an empty line to finish.\n"
+  printf "(Or just press Enter to skip and configure later)\n\n"
+
+  local creds=""
+  local line
+  local first_line=true
+  while IFS= read -r line </dev/tty; do
+    # Empty line = done
+    if [ -z "${line}" ]; then
+      # If first line is empty, user is skipping
+      if [ "${first_line}" = true ]; then
+        break
+      fi
+      # Otherwise, could be a blank line in the middle of creds — check if we have both parts
+      if echo "${creds}" | grep -q "BEGIN NATS USER JWT" && echo "${creds}" | grep -q "BEGIN USER NKEY SEED"; then
+        break
+      fi
+      # Blank line in middle of paste, keep going
+      creds="${creds}
+"
+      continue
+    fi
+    first_line=false
+    if [ -z "${creds}" ]; then
+      creds="${line}"
+    else
+      creds="${creds}
+${line}"
+    fi
+  done
+
+  if [ -n "${creds}" ]; then
+    # Validate it contains both required sections
+    if ! echo "${creds}" | grep -q "BEGIN NATS USER JWT"; then
+      err "Missing NATS USER JWT section in pasted credentials."
+      err "Make sure you clicked 'Copy Credentials' on the User page in Synadia Cloud."
+      exit 1
+    fi
+    if ! echo "${creds}" | grep -q "BEGIN USER NKEY SEED"; then
+      err "Missing USER NKEY SEED section in pasted credentials."
+      err "Make sure you copied the complete credentials (both JWT and NKey)."
+      exit 1
+    fi
+
+    # Write credentials file
+    printf "%s\n" "${creds}" > "${BERTH_DIR}/nats.creds"
+    chown "${AGENT_USER}:${AGENT_USER}" "${BERTH_DIR}/nats.creds"
+    chmod 600 "${BERTH_DIR}/nats.creds"
+    ok "Credentials saved to ${BERTH_DIR}/nats.creds"
+
+    cat > "${env_file}" <<ENVEOF
+# Berth Agent Configuration — Synadia Cloud
 RUST_LOG=info
+BERTH_NATS_URL=tls://connect.ngs.global
+BERTH_NATS_CREDS=${BERTH_DIR}/nats.creds
+ENVEOF
+  else
+    info "Skipping credentials — configure later:"
+    echo "    1. In Synadia Cloud → User → click 'Copy Credentials'"
+    echo "    2. Paste into: ${BERTH_DIR}/nats.creds"
+    echo "    3. Restart:    sudo systemctl restart berth-agent"
+
+    cat > "${env_file}" <<ENVEOF
+# Berth Agent Configuration — Synadia Cloud
+RUST_LOG=info
+
+# Paste credentials from Synadia Cloud into ${BERTH_DIR}/nats.creds, then uncomment:
+# BERTH_NATS_URL=tls://connect.ngs.global
+# BERTH_NATS_CREDS=${BERTH_DIR}/nats.creds
+ENVEOF
+  fi
+
+  chown "${AGENT_USER}:${AGENT_USER}" "${env_file}"
+  ok "Environment file created at ${env_file}"
+}
+
+setup_direct() {
+  local env_file="$1"
+
+  echo ""
+  info "Direct connection setup (mTLS)"
+
+  # Generate mTLS certificates
+  info "Generating mTLS certificates..."
+  sudo -u "${AGENT_USER}" "${INSTALL_PATH}" init-tls 2>&1 | while IFS= read -r line; do
+    echo "  ${line}"
+  done
+
+  local certs_dir="${BERTH_DIR}/certs"
+
+  cat > "${env_file}" <<ENVEOF
+# Berth Agent Configuration — Direct Connection (mTLS)
+RUST_LOG=info
+BERTH_TLS_CERT=${certs_dir}/server.crt
+BERTH_TLS_KEY=${certs_dir}/server.key
+BERTH_TLS_CA=${certs_dir}/ca.crt
 ENVEOF
 
   chown "${AGENT_USER}:${AGENT_USER}" "${env_file}"
   ok "Environment file created at ${env_file}"
+
+  # Detect server IP for user convenience
+  local server_ip
+  server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<server-ip>")
+
+  echo ""
+  printf "\033[1;33m┌──────────────────────────────────────────────────┐\033[0m\n"
+  printf "\033[1;33m│  Direct connection configured                    │\033[0m\n"
+  printf "\033[1;33m│                                                  │\033[0m\n"
+  printf "\033[1;33m│  Agent endpoint: \033[1;37m%-15s:50051\033[1;33m          │\033[0m\n" "${server_ip}"
+  printf "\033[1;33m│                                                  │\033[0m\n"
+  printf "\033[1;33m│  Copy these to your desktop machine:             │\033[0m\n"
+  printf "\033[1;33m│    %s/ca.crt         \033[0m\n" "${certs_dir}"
+  printf "\033[1;33m│    %s/client.crt     \033[0m\n" "${certs_dir}"
+  printf "\033[1;33m│    %s/client.key     \033[0m\n" "${certs_dir}"
+  printf "\033[1;33m│                                                  │\033[0m\n"
+  printf "\033[1;33m│  Then import in Berth app:                       │\033[0m\n"
+  printf "\033[1;33m│    Settings → Direct Connection (mTLS)           │\033[0m\n"
+  printf "\033[1;33m└──────────────────────────────────────────────────┘\033[0m\n"
 }
 
 # ---------------------------------------------------------------------------
@@ -289,34 +444,32 @@ main() {
   create_user
   download_binary
   install_rollback_script
-  install_env_file
+  choose_connection_mode
   install_service
 
   echo ""
   ok "Berth agent is running."
 
-  # Wait briefly and extract pairing code from journal
-  sleep 3
-  local pairing_code
-  pairing_code=$(journalctl -u "${SERVICE_NAME}" --no-pager -n 50 2>/dev/null | grep -oP '(?<=\[PAIRING\] Code: )[A-Z0-9]{6}' | tail -1 || true)
+  # For Synadia mode, try to extract pairing code
+  if [ "${CONNECTION_MODE}" = "synadia" ]; then
+    sleep 3
+    local pairing_code
+    pairing_code=$(journalctl -u "${SERVICE_NAME}" --no-pager -n 50 2>/dev/null | grep -oP '(?<=\[PAIRING\] Code: )[A-Z0-9]{8}' | tail -1 || true)
 
-  if [ -n "${pairing_code}" ]; then
-    echo ""
-    printf "\033[1;33m┌────────────────────────────────────────┐\033[0m\n"
-    printf "\033[1;33m│  Pairing code:  \033[1;37m%-6s\033[1;33m                  │\033[0m\n" "${pairing_code}"
-    printf "\033[1;33m│  Valid for 15 minutes                  │\033[0m\n"
-    printf "\033[1;33m│                                        │\033[0m\n"
-    printf "\033[1;33m│  Enter in Berth → Targets → Pair Agent │\033[0m\n"
-    printf "\033[1;33m└────────────────────────────────────────┘\033[0m\n"
-    echo ""
-  else
-    info "Configure NATS relay for remote control:"
-    echo "    sudo nano ${BERTH_DIR}/agent.env"
-    echo ""
-    info "Once NATS is configured, restart the agent to get a pairing code:"
-    echo "    sudo systemctl restart ${SERVICE_NAME}"
-    echo "    journalctl -u ${SERVICE_NAME} -f   # look for [PAIRING] Code: XXXXXX"
-    echo ""
+    if [ -n "${pairing_code}" ]; then
+      echo ""
+      printf "\033[1;33m┌────────────────────────────────────────┐\033[0m\n"
+      printf "\033[1;33m│  Pairing code:  \033[1;37m%-8s\033[1;33m                │\033[0m\n" "${pairing_code}"
+      printf "\033[1;33m│  Valid for 5 minutes                   │\033[0m\n"
+      printf "\033[1;33m│                                        │\033[0m\n"
+      printf "\033[1;33m│  Enter in Berth → Targets → Pair Agent │\033[0m\n"
+      printf "\033[1;33m└────────────────────────────────────────┘\033[0m\n"
+      echo ""
+    else
+      info "Pairing code not found yet. Check logs:"
+      echo "    journalctl -u ${SERVICE_NAME} -f   # look for [PAIRING] Code: XXXXXXXX"
+      echo ""
+    fi
   fi
 
   info "Useful commands:"

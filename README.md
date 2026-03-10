@@ -55,36 +55,15 @@ cargo tauri dev
 ### Deploy a Remote Agent
 
 ```bash
-# On the Linux server:
-# 1. Install Rust + protoc
-sudo apt install -y protobuf-compiler build-essential
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-# 2. Build and install
-cargo build -p berth-agent --release
-sudo cp target/release/berth-agent /usr/local/bin/
-
-# 3. Create systemd service
-sudo tee /etc/systemd/system/berth-agent.service > /dev/null <<EOF
-[Unit]
-Description=Berth Agent
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-ExecStart=/usr/local/bin/berth-agent --nats-url tls://connect.ngs.global --nats-creds /path/to/your-synadia.creds
-Restart=always
-RestartSec=5
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now berth-agent
+# One-line install on any Linux server:
+curl -sSL https://agent.getberth.dev/install.sh | sudo bash
 ```
+
+The installer will ask you to choose a connection mode:
+- **Synadia Cloud** (recommended) — zero inbound ports, works behind NAT. Requires a free [Synadia Cloud](https://cloud.synadia.com) account and a `.creds` file (User → Get Connected → Download Credentials).
+- **Direct Connection** — mTLS over gRPC. Requires network reachability between desktop and server.
+
+For manual/development setup, see the [berth-agent](https://github.com/berth-app/berth-agent) repo.
 
 ### Register Target in App
 
