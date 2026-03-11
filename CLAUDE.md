@@ -24,6 +24,8 @@ feat/my-feature  →  PR to dev  →  validate & accumulate  →  PR to main (wi
 - **Never PR feature branches directly to `main`** — always go through `dev`
 - One logical change per commit
 - Commit messages: imperative mood, max 72 chars first line
+- **NEVER use `Co-Authored-By: Claude` or any Claude/AI signature in commit messages, PR descriptions, or anywhere in the codebase**
+- After finishing work on a feature branch, create the PR targeting `dev`, then switch back to `dev` locally
 
 ## Architecture
 
