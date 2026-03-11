@@ -1,0 +1,203 @@
+use std::collections::HashMap;
+
+use anyhow::Result;
+use async_trait::async_trait;
+
+use crate::executor::LogLine;
+
+/// Types re-exported from the proto-generated agent_client module.
+/// These are the Rust-native versions of proto types used across the transport boundary.
+
+pub struct AgentHealth {
+    pub version: String,
+    pub status: String,
+    pub uptime_seconds: u64,
+    pub podman_version: Option<String>,
+    pub container_ready: bool,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub probation_status: String,
+    pub tunnel_providers: Vec<String>,
+}
+
+pub struct RemoteExecution {
+    pub id: String,
+    pub project_id: String,
+    pub deployment_id: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub exit_code: i32,
+    pub trigger: String,
+    pub status: String,
+}
+
+pub struct RemoteEvent {
+    pub id: i64,
+    pub event_type: String,
+    pub project_id: String,
+    pub execution_id: String,
+    pub data: String,
+    pub created_at: String,
+}
+
+pub struct RemoteSchedule {
+    pub id: String,
+    pub project_id: String,
+    pub cron_expr: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub last_triggered_at: String,
+    pub next_run_at: String,
+}
+
+pub struct DeployResult {
+    pub image_tag: Option<String>,
+    pub version: u32,
+    pub success: bool,
+}
+
+pub struct AgentStatus {
+    pub agent_id: String,
+    pub status: String,
+    pub cpu_usage: f64,
+    pub memory_bytes: u64,
+    pub running_projects: Vec<RunningProject>,
+}
+
+pub struct RunningProject {
+    pub project_id: String,
+    pub status: String,
+    pub started_at: String,
+}
+
+pub struct ExecuteResult {
+    pub logs: Vec<LogLine>,
+    pub exit_code: i32,
+}
+
+pub struct ExecuteParams {
+    pub project_id: String,
+    pub runtime: String,
+    pub entrypoint: String,
+    pub working_dir: String,
+    pub code: Option<Vec<u8>>,
+    pub image_tag: Option<String>,
+    pub env_vars: HashMap<String, String>,
+    pub run_mode: String,
+    pub service_port: u16,
+}
+
+pub struct DeployParams {
+    pub project_id: String,
+    pub runtime: String,
+    pub entrypoint: String,
+    pub source_archive: Vec<u8>,
+    pub containerfile: String,
+    pub version: u32,
+    pub setup_commands: Vec<String>,
+}
+
+/// Streaming execute response line (mirrors gRPC ExecuteResponse).
+pub struct ExecuteResponseLine {
+    pub stream: String,
+    pub text: String,
+    pub timestamp: String,
+    pub exit_code: i32,
+    pub is_final: bool,
+}
+
+/// Streaming deploy response line (mirrors gRPC DeployResponse).
+pub struct DeployResponseLine {
+    pub phase: String,
+    pub text: String,
+    pub timestamp: String,
+    pub image_tag: String,
+    pub version: u32,
+    pub is_final: bool,
+    pub success: bool,
+}
+
+#[async_trait]
+pub trait AgentTransport: Send + Sync {
+    async fn health(&self) -> Result<AgentHealth>;
+    async fn status(&self) -> Result<AgentStatus>;
+    async fn stop(&self, project_id: &str) -> Result<bool>;
+
+    async fn execute_streaming(
+        &self,
+        params: &ExecuteParams,
+    ) -> Result<tokio::sync::mpsc::Receiver<ExecuteResponseLine>>;
+
+    async fn execute(&self, params: &ExecuteParams) -> Result<ExecuteResult> {
+        let mut rx = self.execute_streaming(params).await?;
+        let mut logs = Vec::new();
+        let mut exit_code = 0i32;
+
+        while let Some(line) = rx.recv().await {
+            if line.is_final {
+                exit_code = line.exit_code;
+                continue;
+            }
+            let stream_type = match line.stream.as_str() {
+                "stderr" => crate::executor::LogStream::Stderr,
+                _ => crate::executor::LogStream::Stdout,
+            };
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&line.timestamp)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+            logs.push(LogLine {
+                stream: stream_type,
+                text: line.text,
+                timestamp,
+            });
+        }
+
+        Ok(ExecuteResult { logs, exit_code })
+    }
+
+    async fn deploy_streaming(
+        &self,
+        params: &DeployParams,
+    ) -> Result<tokio::sync::mpsc::Receiver<DeployResponseLine>>;
+
+    async fn deploy(&self, params: &DeployParams) -> Result<DeployResult> {
+        let mut rx = self.deploy_streaming(params).await?;
+        let mut result = DeployResult {
+            image_tag: None,
+            version: params.version,
+            success: false,
+        };
+
+        while let Some(line) = rx.recv().await {
+            if line.is_final {
+                result.success = line.success;
+                if !line.image_tag.is_empty() {
+                    result.image_tag = Some(line.image_tag);
+                }
+                result.version = line.version;
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn get_executions(&self, project_id: &str, limit: u32) -> Result<Vec<RemoteExecution>>;
+    async fn get_execution_logs(&self, execution_id: &str, since_seq: i64) -> Result<Vec<LogLine>>;
+    async fn add_schedule(&self, project_id: &str, cron_expr: &str) -> Result<(String, String)>;
+    async fn remove_schedule(&self, schedule_id: &str) -> Result<bool>;
+    async fn list_schedules(&self, project_id: &str) -> Result<Vec<RemoteSchedule>>;
+    async fn upgrade(&self, version: &str, download_url: &str, github_token: Option<&str>, checksum: &str) -> Result<(bool, String, String)>;
+    async fn rollback(&self) -> Result<(bool, String, String)>;
+
+    /// Start a public URL tunnel for a project. Returns (success, url, provider, message).
+    async fn publish(
+        &self,
+        project_id: &str,
+        port: u16,
+        provider: &str,
+        provider_config: &str,
+    ) -> Result<(bool, String, String, String)>;
+
+    /// Stop a public URL tunnel for a project. Returns (success, message).
+    async fn unpublish(&self, project_id: &str) -> Result<(bool, String)>;
+}

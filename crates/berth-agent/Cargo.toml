@@ -1,0 +1,41 @@
+[package]
+name = "berth-agent"
+version = "0.4.1"
+edition = "2021"
+license-file = "../../LICENSE"
+
+[[bin]]
+name = "berth-agent"
+path = "src/main.rs"
+
+[dependencies]
+berth-proto = { path = "../berth-proto" }
+berth-core = { path = "../berth-core" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+tonic = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio-stream = "0.1"
+dirs-next = "2"
+sysinfo = "0.33"
+async-nats = { workspace = true }
+base64 = "0.22"
+futures = "0.3"
+sha2 = { workspace = true }
+hmac = "0.12"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tar = "0.4"
+flate2 = "1"
+async-trait = "0.1"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
