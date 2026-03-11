@@ -7,7 +7,8 @@ use berth_core::agent_client::AgentClient;
 use berth_core::agent_transport::AgentTransport;
 use berth_core::scheduler::Schedule;
 use berth_core::target::Target;
-use berth_core::store::ProjectStore;
+use berth_core::store::{ProjectStore, ExecutionLog};
+use berth_core::agent_transport::ExecuteParams;
 use serde_json::{json, Value};
 
 use crate::protocol::{CallToolResult, Tool};
@@ -75,7 +76,7 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "berth_run".into(),
-            description: "Run a project and return its output".into(),
+            description: "Run a project. Use run_mode 'service' for long-running processes.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -85,8 +86,12 @@ pub fn list_tools() -> Vec<Tool> {
                     },
                     "timeout_secs": {
                         "type": "integer",
-                        "description": "Max seconds to wait for output (default: 30)",
+                        "description": "Max seconds to wait for output in oneshot mode (default: 30)",
                         "default": 30
+                    },
+                    "run_mode": {
+                        "type": "string",
+                        "description": "Execution mode: 'oneshot' (wait for completion, default) or 'service' (start in background, use berth_logs to check output)"
                     }
                 },
                 "required": ["project_id"]
@@ -681,44 +686,114 @@ async fn handle_run(args: &Value) -> CallToolResult {
         Err(e) => return CallToolResult::error(format!("Failed to start local agent: {e}")),
     };
 
-    let timeout_secs = args
-        .get("timeout_secs")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(30);
-
     let env_vars = store.get_env_vars(project.id).unwrap_or_default();
 
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(timeout_secs),
-        client.execute(
-            &project.id.to_string(),
-            &runtime_str,
-            &entrypoint,
-            &project.path,
-            None,
-            None,
-            env_vars,
-        ),
-    )
-    .await;
+    let run_mode = args
+        .get("run_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("oneshot");
 
-    match result {
-        Ok(Ok(exec_result)) => {
-            let output: String = exec_result.logs.iter().map(|l| format!("{}\n", l.text)).collect();
-            let _ = store.record_run_end(project.id, Some(exec_result.exit_code));
-            CallToolResult::text(format!(
-                "Exit code: {}\n\n{}",
-                exec_result.exit_code, output
-            ))
-        }
-        Ok(Err(e)) => {
-            let _ = store.record_run_end(project.id, Some(-1));
-            CallToolResult::error(format!("Failed to execute: {e}"))
-        }
-        Err(_) => {
-            let _ = client.stop(&project.id.to_string()).await;
-            let _ = store.record_run_end(project.id, Some(-1));
-            CallToolResult::text(format!("[Timed out after {}s]", timeout_secs))
+    if run_mode == "service" {
+        // Service mode: start in background, return immediately
+        let exec_log = ExecutionLog::new(project.id, "manual");
+        let exec_log_id = exec_log.id;
+        let _ = store.insert_execution_log(&exec_log);
+
+        let params = ExecuteParams {
+            project_id: project.id.to_string(),
+            runtime: runtime_str,
+            entrypoint,
+            working_dir: project.path.clone(),
+            code: None,
+            image_tag: None,
+            env_vars,
+            run_mode: "service".to_string(),
+            service_port: project.service_port.unwrap_or(0),
+        };
+
+        let mut rx = match AgentTransport::execute_streaming(&client, &params).await {
+            Ok(rx) => rx,
+            Err(e) => {
+                let _ = store.record_run_end(project.id, Some(-1));
+                return CallToolResult::error(format!("Failed to start service: {e}"));
+            }
+        };
+
+        let pid = project.id;
+        let name = project.name.clone();
+        tokio::spawn(async move {
+            let store = match get_store() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let mut output_len: usize = 0;
+            const MAX_OUTPUT: usize = 256 * 1024; // 256KB cap
+
+            while let Some(line) = rx.recv().await {
+                if line.is_final {
+                    let _ = store.finish_execution_log(exec_log_id, line.exit_code, "");
+                    let _ = store.record_run_end(pid, Some(line.exit_code));
+                    break;
+                }
+                if !line.text.is_empty() && output_len < MAX_OUTPUT {
+                    let text = format!("{}\n", line.text);
+                    output_len += text.len();
+                    let _ = store.append_execution_output(exec_log_id, &text);
+                }
+            }
+        });
+
+        CallToolResult::text(format!(
+            "Service '{}' started in background. Use berth_logs to check output, berth_stop to stop.",
+            name
+        ))
+    } else {
+        // Oneshot mode: block waiting for output (existing behavior)
+        let timeout_secs = args
+            .get("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30);
+
+        let result = tokio::time::timeout(
+            tokio::time::Duration::from_secs(timeout_secs),
+            client.execute(
+                &project.id.to_string(),
+                &runtime_str,
+                &entrypoint,
+                &project.path,
+                None,
+                None,
+                env_vars,
+            ),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(exec_result)) => {
+                let output: String = exec_result.logs.iter().map(|l| format!("{}\n", l.text)).collect();
+                let _ = store.record_run_end(project.id, Some(exec_result.exit_code));
+
+                // Also write to execution_logs for berth_logs access
+                let mut exec_log = ExecutionLog::new(project.id, "manual");
+                exec_log.output = output.clone();
+                exec_log.exit_code = Some(exec_result.exit_code);
+                exec_log.finished_at = Some(chrono::Utc::now());
+                let _ = store.insert_execution_log(&exec_log);
+
+                CallToolResult::text(format!(
+                    "Exit code: {}\n\n{}",
+                    exec_result.exit_code, output
+                ))
+            }
+            Ok(Err(e)) => {
+                let _ = store.record_run_end(project.id, Some(-1));
+                CallToolResult::error(format!("Failed to execute: {e}"))
+            }
+            Err(_) => {
+                let _ = client.stop(&project.id.to_string()).await;
+                let _ = store.record_run_end(project.id, Some(-1));
+                CallToolResult::text(format!("[Timed out after {}s]", timeout_secs))
+            }
         }
     }
 }
@@ -758,14 +833,43 @@ async fn handle_stop(args: &Value) -> CallToolResult {
     }
 }
 
-async fn handle_logs(_args: &Value) -> CallToolResult {
-    // Logs are currently only streamed via Tauri events.
-    // For MCP, we'd need a log store. For now, return a helpful message.
-    CallToolResult::text(
-        "Log storage for MCP access is not yet implemented. \
-         Use berth_run to execute a project and capture output directly."
-            .into(),
-    )
+async fn handle_logs(args: &Value) -> CallToolResult {
+    let project_id = match args.get("project_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return CallToolResult::error("Missing required parameter: project_id".into()),
+    };
+
+    let project = match find_project(project_id) {
+        Ok(p) => p,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let store = match get_store() {
+        Ok(s) => s,
+        Err(e) => return CallToolResult::error(e),
+    };
+
+    let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+
+    let logs = store.list_execution_logs(project.id, 1).unwrap_or_default();
+    match logs.first() {
+        Some(log) => {
+            let status = if log.finished_at.is_some() { "completed" } else { "running" };
+            let exit_info = log.exit_code
+                .map(|c| format!("Exit code: {c}\n"))
+                .unwrap_or_default();
+            let lines: Vec<&str> = log.output.lines().collect();
+            let start = lines.len().saturating_sub(tail);
+            let tail_output = lines[start..].join("\n");
+
+            CallToolResult::text(format!(
+                "Status: {status}\n{exit_info}--- Last {} of {} lines ---\n{tail_output}",
+                lines.len() - start,
+                lines.len(),
+            ))
+        }
+        None => CallToolResult::text(format!("No execution logs found for '{}'", project.name)),
+    }
 }
 
 async fn handle_import_code(args: &Value) -> CallToolResult {
