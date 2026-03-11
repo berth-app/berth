@@ -410,32 +410,6 @@ export default function Settings() {
             </div>
           </section>
 
-          {/* Advanced */}
-          <section>
-            <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
-              Advanced
-            </h2>
-            <div className="glass-card-static divide-y divide-berth-border-subtle">
-              <div className="flex items-center justify-between px-4 py-3">
-                <div>
-                  <div className="text-sm text-berth-text-primary">
-                    GitHub Token
-                  </div>
-                  <div className="text-xs text-berth-text-tertiary mt-0.5">
-                    Required for agent upgrades (private repo access)
-                  </div>
-                </div>
-                <input
-                  type="password"
-                  placeholder="ghp_..."
-                  value={settings.github_token ?? ""}
-                  onChange={(e) => save("github_token", e.target.value)}
-                  className="input !w-48 !py-1 !text-sm"
-                />
-              </div>
-            </div>
-          </section>
-
           {/* About */}
           <section>
             <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
