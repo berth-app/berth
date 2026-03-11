@@ -156,6 +156,9 @@ async fn handle_command(
                     arch: info.arch,
                     probation_status: info.probation_status,
                     tunnel_providers: info.tunnel_providers,
+                    docker_version: info.docker_version,
+                    compose_version: info.compose_version,
+                    container_runtime: info.container_runtime,
                 },
             };
             send_reply(&client, &reply_to, &resp).await;

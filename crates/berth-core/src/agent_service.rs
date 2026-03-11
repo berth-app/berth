@@ -44,7 +44,7 @@ pub struct AgentServiceImpl {
     tunnel_mgr: Arc<TunnelManager>,
     start_time: std::time::Instant,
     deploys_dir: PathBuf,
-    podman_version: Option<String>,
+    container_caps: container::ContainerCapabilities,
 }
 
 impl AgentServiceImpl {
@@ -53,20 +53,14 @@ impl AgentServiceImpl {
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join(".berth/deploys");
 
-        // Check podman availability at startup (sync, one-time)
-        let podman_version = std::process::Command::new("podman")
-            .args(["version", "--format", "{{.Client.Version}}"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        let container_caps = container::detect_capabilities();
 
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
             tunnel_mgr: Arc::new(TunnelManager::new()),
             start_time: std::time::Instant::now(),
             deploys_dir,
-            podman_version,
+            container_caps,
         }
     }
 
@@ -89,7 +83,7 @@ impl AgentService for AgentServiceImpl {
         let version = req.version;
         let project_id = req.project_id.clone();
         let deploy_dir = self.deploy_dir(&project_id, version);
-        let use_container = self.podman_version.is_some() && !req.containerfile.is_empty();
+        let use_container = self.container_caps.is_ready() && !req.containerfile.is_empty();
 
         let (tx, rx) = tokio::sync::mpsc::channel(256);
 
@@ -118,6 +112,7 @@ impl AgentService for AgentServiceImpl {
             let tx_build = tx.clone();
             let deploy_dir_clone = deploy_dir.clone();
             let project_id_clone = project_id.clone();
+            let container_rt = self.container_caps.runtime_cmd().unwrap_or("podman").to_string();
 
             tokio::spawn(async move {
                 let _ = tx_build
@@ -137,8 +132,10 @@ impl AgentService for AgentServiceImpl {
                 let build_task = tokio::spawn({
                     let project_id = project_id_clone.clone();
                     let deploy_dir = deploy_dir_clone.clone();
+                    let rt = container_rt.clone();
                     async move {
                         container::build_image(
+                            &rt,
                             &project_id,
                             version,
                             &containerfile,
@@ -332,8 +329,9 @@ impl AgentService for AgentServiceImpl {
                 req.container_name.clone()
             };
 
+            let container_rt = self.container_caps.runtime_cmd().unwrap_or("podman").to_string();
             let (mut child, mut rx) =
-                container::run_container(&req.image_tag, &container_name, &env_vars)
+                container::run_container(&container_rt, &req.image_tag, &container_name, &env_vars)
                     .await
                     .map_err(|e| Status::internal(format!("Failed to run container: {e}")))?;
 
@@ -545,7 +543,8 @@ impl AgentService for AgentServiceImpl {
                     container_name,
                     abort_handle,
                 } => {
-                    let _ = container::stop_container(&container_name).await;
+                    let rt = self.container_caps.runtime_cmd().unwrap_or("podman");
+                    let _ = container::stop_container(rt, &container_name).await;
                     abort_handle.abort();
                 }
             }
@@ -569,12 +568,15 @@ impl AgentService for AgentServiceImpl {
             agent_version: env!("CARGO_PKG_VERSION").into(),
             status: "healthy".into(),
             uptime_seconds: self.start_time.elapsed().as_secs(),
-            podman_version: self.podman_version.clone().unwrap_or_default(),
-            container_ready: self.podman_version.is_some(),
+            podman_version: self.container_caps.podman_version.clone().unwrap_or_default(),
+            container_ready: self.container_caps.is_ready(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             probation_status: String::new(),
             tunnel_providers: TunnelManager::available_providers(),
+            docker_version: self.container_caps.docker_version.clone().unwrap_or_default(),
+            compose_version: self.container_caps.compose_version.clone().unwrap_or_default(),
+            container_runtime: self.container_caps.preferred.clone(),
         }))
     }
 

@@ -87,7 +87,9 @@ pub async fn tick(store: &Arc<Mutex<AgentStore>>, nats: &Option<Arc<NatsPublishe
             let container_name = format!("berth-sched-{}", sched.project_id);
             let env_vars: HashMap<String, String> = HashMap::new();
 
-            match container::run_container(tag, &container_name, &env_vars).await {
+            let caps = container::detect_capabilities();
+            let rt = caps.runtime_cmd().unwrap_or("podman");
+            match container::run_container(rt, tag, &container_name, &env_vars).await {
                 Ok((mut child, mut rx)) => {
                     let seq = AtomicI64::new(0);
                     while let Some(line) = rx.recv().await {

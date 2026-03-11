@@ -16,6 +16,9 @@ pub struct Target {
     pub nats_agent_id: Option<String>,
     pub nats_enabled: bool,
     pub owner_id: Option<String>,
+    pub docker_version: Option<String>,
+    pub compose_version: Option<String>,
+    pub container_runtime: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +52,9 @@ impl Target {
             nats_agent_id: None,
             nats_enabled: false,
             owner_id: None,
+            docker_version: None,
+            compose_version: None,
+            container_runtime: None,
         }
     }
 
@@ -66,6 +72,9 @@ impl Target {
             nats_agent_id: None,
             nats_enabled: false,
             owner_id: None,
+            docker_version: None,
+            compose_version: None,
+            container_runtime: None,
         }
     }
 

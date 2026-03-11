@@ -254,8 +254,23 @@ impl AgentTransport for AgentClient {
         } else {
             Some(response.podman_version)
         };
+        let docker_version = if response.docker_version.is_empty() {
+            None
+        } else {
+            Some(response.docker_version)
+        };
+        let compose_version = if response.compose_version.is_empty() {
+            None
+        } else {
+            Some(response.compose_version)
+        };
         let os = if response.os.is_empty() { None } else { Some(response.os) };
         let arch = if response.arch.is_empty() { None } else { Some(response.arch) };
+        let container_runtime = if response.container_runtime.is_empty() {
+            "none".into()
+        } else {
+            response.container_runtime
+        };
 
         Ok(AgentHealth {
             version: response.agent_version,
@@ -267,6 +282,9 @@ impl AgentTransport for AgentClient {
             arch,
             probation_status: response.probation_status,
             tunnel_providers: response.tunnel_providers,
+            docker_version,
+            compose_version,
+            container_runtime,
         })
     }
 

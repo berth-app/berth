@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Server, Activity, Trash2, Wifi, ArrowUpCircle, Undo2, Link2 } from "lucide-react";
+import { Server, Activity, Trash2, Wifi, ArrowUpCircle, Undo2, Link2, Box } from "lucide-react";
 import {
   TargetInfo,
   AgentStats,
@@ -80,6 +80,22 @@ function StatsPanel({ stats }: { stats: AgentStats }) {
             <span className="text-xs text-berth-text-secondary">Podman</span>
             <span className="text-xs text-berth-text-primary">
               v{stats.podman_version}
+            </span>
+          </div>
+        )}
+        {stats.docker_version && (
+          <div className="flex justify-between">
+            <span className="text-xs text-berth-text-secondary">Docker</span>
+            <span className="text-xs text-berth-text-primary">
+              v{stats.docker_version}
+            </span>
+          </div>
+        )}
+        {stats.compose_version && (
+          <div className="flex justify-between">
+            <span className="text-xs text-berth-text-secondary">Compose</span>
+            <span className="text-xs text-berth-text-primary">
+              v{stats.compose_version}
             </span>
           </div>
         )}
@@ -629,6 +645,16 @@ export default function Targets() {
                       <span className="badge text-[10px] bg-berth-success/10 text-berth-success">
                         <Link2 size={8} />
                         Paired
+                      </span>
+                    )}
+                    {t.container_runtime && t.container_runtime !== "none" && (
+                      <span className="badge text-[10px] flex items-center gap-0.5" style={{
+                        background: 'rgba(36, 150, 237, 0.12)',
+                        color: '#2496ED'
+                      }}>
+                        <Box size={8} />
+                        {t.container_runtime === "both" ? "Docker+Podman"
+                         : t.container_runtime === "docker" ? "Docker" : "Podman"}
                       </span>
                     )}
                     {upgradingId === t.id ? (

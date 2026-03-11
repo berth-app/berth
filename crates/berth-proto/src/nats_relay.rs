@@ -170,6 +170,12 @@ pub enum NatsResponseBody {
         probation_status: String,
         #[serde(default)]
         tunnel_providers: Vec<String>,
+        #[serde(default)]
+        docker_version: String,
+        #[serde(default)]
+        compose_version: String,
+        #[serde(default)]
+        container_runtime: String,
     },
     Status {
         agent_id: String,
