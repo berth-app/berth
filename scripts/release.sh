@@ -51,14 +51,19 @@ esac
 
 echo "Releasing ${TAG}..."
 
-# Create orphan branch with all files
-git checkout --orphan release
+# Create release branch from public/main
+git fetch public main
+git checkout -b release public/main
+
+# Replace all files with current local state
+git rm -rf . > /dev/null
+git checkout main -- .
+
+# Commit, tag, and push
 git add -A
 git commit -m "v${VERSION}"
 git tag "${TAG}"
-
-# Push to public
-git push public release:main --force
+git push public release:main
 git push public "${TAG}"
 
 # Return to main
