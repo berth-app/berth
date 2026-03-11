@@ -1,0 +1,75 @@
+name: Release Agent
+
+on:
+  push:
+    tags: ["agent-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset: berth-agent-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            asset: berth-agent-linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build berth-agent
+        run: cross build --release --target ${{ matrix.target }} -p berth-agent
+
+      - name: Rename binary and compute checksum
+        run: |
+          cp target/${{ matrix.target }}/release/berth-agent ${{ matrix.asset }}
+          sha256sum ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
+
+  release:
+    name: Publish to Public Repo
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract version from tag
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME#agent-}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release on public repo
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_PAT }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --repo berth-app/berth-agent \
+            --title "Berth Agent ${{ steps.version.outputs.tag }}" \
+            --notes "Berth Agent ${{ steps.version.outputs.tag }}. Install: \`curl -sSL https://agent.getberth.dev/install.sh | sudo bash\`" \
+            artifacts/berth-agent-linux-x86_64/berth-agent-linux-x86_64 \
+            artifacts/berth-agent-linux-x86_64/berth-agent-linux-x86_64.sha256 \
+            artifacts/berth-agent-linux-aarch64/berth-agent-linux-aarch64 \
+            artifacts/berth-agent-linux-aarch64/berth-agent-linux-aarch64.sha256

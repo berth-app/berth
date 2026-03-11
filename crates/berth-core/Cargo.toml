@@ -1,0 +1,59 @@
+[package]
+name = "berth-core"
+version = "0.2.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+berth-proto = { path = "../berth-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tar = "0.4"
+flate2 = "1"
+rcgen = "0.14"
+time = "0.3"
+dirs-next = "2"
+mdns-sd = "0.12"
+hostname = "0.4"
+sysinfo = "0.33"
+tokio-stream = "0.1"
+tower = "0.5"
+hyper-util = "0.1"
+libc = "0.2"
+async-nats = { workspace = true, optional = true }
+futures = { version = "0.3", optional = true }
+base64 = { version = "0.22", optional = true }
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+semver = { workspace = true }
+sha2 = { version = "0.10", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[features]
+default = []
+nats = ["async-nats", "futures", "base64", "sha2", "hmac", "hex"]
+
+[dependencies.hmac]
+version = "0.12"
+optional = true
+
+[dependencies.hex]
+version = "0.4"
+optional = true
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

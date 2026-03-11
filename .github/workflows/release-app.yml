@@ -1,0 +1,170 @@
+name: Release App
+
+on:
+  push:
+    tags: ["app-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build macOS App
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: brew install protobuf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#app-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal macOS app
+        run: cargo tauri build --target universal-apple-darwin
+
+      - name: Build CLI (arm64)
+        run: cargo build --release --target aarch64-apple-darwin -p berth-cli
+
+      - name: Build CLI (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin -p berth-cli
+
+      - name: Create universal CLI binary
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/berth \
+            target/x86_64-apple-darwin/release/berth \
+            -output berth-cli-darwin-universal
+          chmod +x berth-cli-darwin-universal
+
+      - name: Prepare release artifacts
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Find the DMG produced by Tauri (workspace uses root target/ dir)
+          echo "Searching for DMG..."
+          find target -name "*.dmg" 2>/dev/null || true
+          DMG=$(find target -name "*.dmg" | head -1)
+          echo "Found DMG at: $DMG"
+          cp "$DMG" "Berth_${VERSION}_universal.dmg"
+
+          # Package CLI
+          tar czf "berth-cli-darwin-universal.tar.gz" berth-cli-darwin-universal
+
+          # Checksums
+          shasum -a 256 "Berth_${VERSION}_universal.dmg" > "Berth_${VERSION}_universal.dmg.sha256"
+          shasum -a 256 "berth-cli-darwin-universal.tar.gz" > "berth-cli-darwin-universal.tar.gz.sha256"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "${{ github.ref_name }}" \
+            --title "Berth v${VERSION}" \
+            --notes "## Install
+
+          ### GUI App (Homebrew)
+          \`\`\`bash
+          brew tap berth-app/berth
+          brew install --cask berth
+          \`\`\`
+
+          ### GUI App (direct download)
+          Download \`Berth_${VERSION}_universal.dmg\` below.
+          > **Note:** The app is not yet code-signed. On first launch: right-click → Open, or allow in System Settings → Privacy & Security.
+
+          ### CLI (Homebrew)
+          \`\`\`bash
+          brew tap berth-app/berth
+          brew install berth-app/berth/berth-cli
+          \`\`\`
+          " \
+            "Berth_${VERSION}_universal.dmg" \
+            "Berth_${VERSION}_universal.dmg.sha256" \
+            "berth-cli-darwin-universal.tar.gz" \
+            "berth-cli-darwin-universal.tar.gz.sha256"
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_PAT }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG_SHA=$(cat "Berth_${VERSION}_universal.dmg.sha256" | awk '{print $1}')
+          CLI_SHA=$(cat "berth-cli-darwin-universal.tar.gz.sha256" | awk '{print $1}')
+
+          # Clone the tap repo (use token in URL for push auth)
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/berth-app/homebrew-berth.git" /tmp/homebrew-berth
+
+          # Update cask
+          cat > /tmp/homebrew-berth/Casks/berth.rb << 'CASK_EOF'
+          cask "berth" do
+            version "VERSION_PLACEHOLDER"
+            sha256 "DMG_SHA_PLACEHOLDER"
+
+            url "https://github.com/berth-app/berth/releases/download/app-v#{version}/Berth_#{version}_universal.dmg"
+            name "Berth"
+            desc "Mac-native deployment control plane for AI-generated code"
+            homepage "https://getberth.dev"
+
+            depends_on macos: ">= :ventura"
+
+            app "Berth.app"
+
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-cr", "#{appdir}/Berth.app"],
+                             sudo: false
+            end
+
+            zap trash: [
+              "~/Library/Application Support/com.getberth.berth",
+              "~/.berth",
+            ]
+          end
+          CASK_EOF
+          sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/g" /tmp/homebrew-berth/Casks/berth.rb
+          sed -i '' "s/DMG_SHA_PLACEHOLDER/${DMG_SHA}/g" /tmp/homebrew-berth/Casks/berth.rb
+
+          # Update formula
+          cat > /tmp/homebrew-berth/Formula/berth-cli.rb << 'FORMULA_EOF'
+          class BerthCli < Formula
+            desc "CLI for Berth deployment control plane"
+            homepage "https://getberth.dev"
+            url "https://github.com/berth-app/berth/releases/download/app-vVERSION_PLACEHOLDER/berth-cli-darwin-universal.tar.gz"
+            sha256 "CLI_SHA_PLACEHOLDER"
+
+            def install
+              bin.install "berth-cli-darwin-universal" => "berth"
+            end
+
+            test do
+              system "#{bin}/berth", "--version"
+            end
+          end
+          FORMULA_EOF
+          sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/g" /tmp/homebrew-berth/Formula/berth-cli.rb
+          sed -i '' "s/CLI_SHA_PLACEHOLDER/${CLI_SHA}/g" /tmp/homebrew-berth/Formula/berth-cli.rb
+
+          # Commit and push
+          cd /tmp/homebrew-berth
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update to v${VERSION}"
+          git push
