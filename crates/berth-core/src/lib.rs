@@ -28,6 +28,7 @@ pub mod scheduler;
 pub mod setup;
 pub mod store;
 pub mod target;
+pub mod telemetry;
 pub mod template_store;
 pub mod tls;
 pub mod tunnel;

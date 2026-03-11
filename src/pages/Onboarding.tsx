@@ -5,6 +5,7 @@ import FeaturesStep from "../components/onboarding/FeaturesStep";
 import NatsStep from "../components/onboarding/NatsStep";
 import TargetStep from "../components/onboarding/TargetStep";
 import DeployStep from "../components/onboarding/DeployStep";
+import TelemetryStep from "../components/onboarding/TelemetryStep";
 import CompletionStep from "../components/onboarding/CompletionStep";
 import type { PairingResult } from "../lib/invoke";
 
@@ -12,8 +13,8 @@ interface Props {
   onComplete: (deployedProjectId?: string) => void;
 }
 
-const TOTAL_STEPS = 5;
-const COMPLETION_STEP = 5;
+const TOTAL_STEPS = 6;
+const COMPLETION_STEP = 6;
 
 export default function Onboarding({ onComplete }: Props) {
   const [step, setStep] = useState(0);
@@ -50,15 +51,17 @@ export default function Onboarding({ onComplete }: Props) {
     setCompletedItems((prev) => ({ ...prev, target: true }));
   }
 
+  const TELEMETRY_STEP = 5;
+
   function handleDeployed(projectId: string) {
     setCompletedItems((prev) => ({
       ...prev,
       deploy: true,
       deployedProjectId: projectId,
     }));
-    // Auto-advance to completion after deploy
+    // Auto-advance to telemetry opt-in after deploy
     setAnimDirection("forward");
-    setStep(COMPLETION_STEP);
+    setStep(TELEMETRY_STEP);
   }
 
   function handleEnter() {
@@ -101,6 +104,7 @@ export default function Onboarding({ onComplete }: Props) {
       {step === 4 && (
         <DeployStep onNext={goForward} onDeployed={handleDeployed} />
       )}
+      {step === 5 && <TelemetryStep onNext={goForward} />}
     </OnboardingLayout>
   );
 }

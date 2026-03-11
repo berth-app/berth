@@ -1,6 +1,7 @@
 use berth_core::agent_transport::AgentTransport;
 use berth_core::nats_cmd_client::NatsAgentClient;
 use berth_core::path_safety;
+use berth_core::telemetry::{EventType, Telemetry, TelemetryEvent};
 use tauri::Emitter;
 use berth_core::project::{Project, ProjectStatus};
 use berth_core::runtime::{self, RuntimeInfo};
@@ -10,8 +11,28 @@ use berth_core::target::Target;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+// Global telemetry instance
+static TELEMETRY: OnceLock<std::sync::Mutex<Telemetry>> = OnceLock::new();
+
+pub(crate) fn init_telemetry() {
+    if let Ok(store) = get_store() {
+        TELEMETRY.get_or_init(|| std::sync::Mutex::new(Telemetry::new(&store)));
+    }
+}
+
+fn track(event_type: EventType, context: serde_json::Value) {
+    if let Some(tele) = TELEMETRY.get() {
+        if let Ok(guard) = tele.lock() {
+            if let Ok(store) = get_store() {
+                guard.track(&store, event_type, context);
+            }
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 pub struct LogEvent {
@@ -195,6 +216,10 @@ pub fn create_project(name: String, path: String) -> Result<Project, String> {
     let mut project = Project::new(name, path, info.runtime);
     project.entrypoint = info.entrypoint;
     store.insert(&project).map_err(|e| e.to_string())?;
+    track(EventType::ProjectCreate, serde_json::json!({
+        "runtime": format!("{:?}", project.runtime).to_lowercase(),
+        "run_mode": format!("{:?}", project.run_mode).to_lowercase(),
+    }));
     Ok(project)
 }
 
@@ -268,7 +293,9 @@ pub fn update_project(id: String, name: String, entrypoint: Option<String>) -> R
 pub fn delete_project(id: String) -> Result<(), String> {
     let store = get_store()?;
     let uuid: Uuid = id.parse().map_err(|e: uuid::Error| e.to_string())?;
-    store.delete(uuid).map_err(|e| e.to_string())
+    store.delete(uuid).map_err(|e| e.to_string())?;
+    track(EventType::ProjectDelete, serde_json::json!({}));
+    Ok(())
 }
 
 #[tauri::command]
@@ -336,6 +363,13 @@ pub async fn run_project(
     let project_id_str = id.clone();
     let project_name = project.name.clone();
     let notify_on_complete = project.notify_on_complete;
+
+    let target_kind = if is_remote { "remote" } else { "local" };
+    track(EventType::ProjectRun, serde_json::json!({
+        "runtime": &runtime_str,
+        "target_kind": target_kind,
+        "run_mode": format!("{:?}", project.run_mode).to_lowercase(),
+    }));
 
     // Load env vars from store before entering async block
     let env_vars = store.get_env_vars(uuid).unwrap_or_default();
@@ -559,6 +593,10 @@ pub fn add_target(name: String, host: String, port: u16, nats_agent_id: Option<S
         }
     }
     store.insert_target(&target).map_err(|e| e.to_string())?;
+    track(EventType::TargetAdd, serde_json::json!({
+        "kind": "remote",
+        "nats_enabled": target.nats_enabled,
+    }));
     Ok(TargetInfo::from(&target))
 }
 
@@ -874,6 +912,7 @@ pub fn add_schedule(project_id: String, cron_expr: String) -> Result<ScheduleInf
     store
         .insert_schedule(&schedule)
         .map_err(|e| e.to_string())?;
+    track(EventType::ScheduleCreate, serde_json::json!({}));
     Ok(ScheduleInfo::from(&schedule))
 }
 
@@ -1529,6 +1568,9 @@ pub async fn publish_project(
         store
             .set_tunnel_url(uuid, &url, &used_provider)
             .map_err(|e| e.to_string())?;
+        track(EventType::Publish, serde_json::json!({"provider": &used_provider}));
+    } else {
+        track(EventType::PublishFailed, serde_json::json!({"provider": provider}));
     }
 
     Ok(PublishResult {
@@ -1722,6 +1764,112 @@ pub async fn store_install_template(
 
     // Sync store phase (no .await after this)
     let store = get_store()?;
-    berth_core::template_store::finalize_template_install(&store, &template, &project_dir)
+    let project = berth_core::template_store::finalize_template_install(&store, &template, &project_dir)
+        .map_err(|e| e.to_string())?;
+    track(EventType::TemplateInstall, serde_json::json!({
+        "runtime": &template.runtime,
+    }));
+    Ok(project)
+}
+
+// --- Telemetry commands ---
+
+#[derive(Serialize)]
+pub struct TelemetryStatus {
+    pub enabled: bool,
+    pub device_id: String,
+    pub event_count: usize,
+}
+
+#[tauri::command]
+pub fn get_telemetry_status() -> Result<TelemetryStatus, String> {
+    let store = get_store()?;
+    let tele = TELEMETRY.get().ok_or("Telemetry not initialized")?;
+    let guard = tele.lock().map_err(|e| e.to_string())?;
+    let event_count = store.count_telemetry_events().map_err(|e| e.to_string())?;
+    Ok(TelemetryStatus {
+        enabled: guard.enabled(),
+        device_id: guard.device_id().to_string(),
+        event_count,
+    })
+}
+
+#[tauri::command]
+pub fn set_telemetry_enabled(enabled: bool) -> Result<(), String> {
+    let store = get_store()?;
+    let tele = TELEMETRY.get().ok_or("Telemetry not initialized")?;
+    let mut guard = tele.lock().map_err(|e| e.to_string())?;
+    guard.set_enabled(&store, enabled);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_telemetry_events(limit: Option<usize>) -> Result<Vec<TelemetryEvent>, String> {
+    let store = get_store()?;
+    store
+        .get_telemetry_events(limit.unwrap_or(50))
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn purge_telemetry() -> Result<(), String> {
+    let store = get_store()?;
+    let tele = TELEMETRY.get().ok_or("Telemetry not initialized")?;
+    let mut guard = tele.lock().map_err(|e| e.to_string())?;
+    guard.purge(&store).map_err(|e| e.to_string())
+}
+
+/// Flush telemetry events to the server (called periodically and on shutdown).
+pub async fn flush_telemetry() {
+    // Extract what we need from the lock synchronously, then do async HTTP outside the lock.
+    let (enabled, device_id) = match TELEMETRY.get() {
+        Some(tele) => match tele.lock() {
+            Ok(guard) => (guard.enabled(), guard.device_id().to_string()),
+            Err(_) => return,
+        },
+        None => return,
+    };
+
+    if !enabled {
+        return;
+    }
+
+    let events = match get_store().and_then(|s| s.get_unsynced_telemetry_events(50).map_err(|e| e.to_string())) {
+        Ok(events) if !events.is_empty() => events,
+        _ => return,
+    };
+
+    let payload = serde_json::json!({
+        "device_id": device_id,
+        "events": events,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://telemetry.getberth.dev/ingest")
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+
+    if let Ok(resp) = resp {
+        if resp.status().is_success() {
+            if let Ok(store) = get_store() {
+                let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+                let _ = store.mark_telemetry_synced(&ids);
+            }
+        }
+    }
+}
+
+/// Track app launch event.
+pub fn track_app_launch() {
+    if let Ok(store) = get_store() {
+        let project_count = store.list().map(|p| p.len()).unwrap_or(0);
+        let target_count = store.list_targets().map(|t| t.len()).unwrap_or(0);
+        track(EventType::AppLaunch, serde_json::json!({
+            "project_count": project_count,
+            "target_count": target_count,
+        }));
+    }
 }

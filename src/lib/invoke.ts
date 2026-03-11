@@ -468,3 +468,40 @@ export async function installStoreTemplate(
   return tauriInvoke<Project>("store_install_template", { templateId });
 }
 
+// --- Telemetry ---
+
+export interface TelemetryStatus {
+  enabled: boolean;
+  device_id: string;
+  event_count: number;
+}
+
+export interface TelemetryEventInfo {
+  id: string;
+  event_type: string;
+  app_version: string;
+  os_version: string;
+  context: Record<string, unknown>;
+  occurred_at: string;
+}
+
+export async function getTelemetryStatus(): Promise<TelemetryStatus> {
+  return tauriInvoke<TelemetryStatus>("get_telemetry_status");
+}
+
+export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
+  return tauriInvoke("set_telemetry_enabled", { enabled });
+}
+
+export async function getTelemetryEvents(
+  limit?: number
+): Promise<TelemetryEventInfo[]> {
+  return tauriInvoke<TelemetryEventInfo[]>("get_telemetry_events", {
+    limit: limit ?? null,
+  });
+}
+
+export async function purgeTelemetry(): Promise<void> {
+  return tauriInvoke("purge_telemetry");
+}
+

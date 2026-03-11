@@ -6,7 +6,13 @@ import {
   listTargets,
   saveNatsCredentials,
   clearNatsCredentials,
+  getTelemetryStatus,
+  setTelemetryEnabled,
+  getTelemetryEvents,
+  purgeTelemetry,
   type TargetInfo,
+  type TelemetryStatus,
+  type TelemetryEventInfo,
 } from "../lib/invoke";
 import { useToast } from "../components/Toast";
 import {
@@ -23,15 +29,19 @@ export default function Settings() {
   const [natsPaste, setNatsPaste] = useState("");
   const [natsSaving, setNatsSaving] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+  const [teleStatus, setTeleStatus] = useState<TelemetryStatus | null>(null);
+  const [teleEvents, setTeleEvents] = useState<TelemetryEventInfo[] | null>(null);
+  const [showTeleData, setShowTeleData] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
     getVersion().then(setAppVersion);
-    Promise.all([getSettings(), listTargets(), loadThemeManifest()])
-      .then(([s, t, th]) => {
+    Promise.all([getSettings(), listTargets(), loadThemeManifest(), getTelemetryStatus()])
+      .then(([s, t, th, ts]) => {
         setSettings(s);
         setTargets(t);
         setThemes(th);
+        setTeleStatus(ts);
       })
       .catch((e) => toast(`Failed to load settings: ${e}`, "error"))
       .finally(() => setLoading(false));
@@ -407,6 +417,99 @@ export default function Settings() {
                     <span className="text-xs text-berth-text-secondary">
                       Configured — add targets with host:port in Targets page
                     </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* Privacy */}
+          <section>
+            <h2 className="text-[11px] font-semibold text-berth-text-tertiary uppercase tracking-wider mb-3">
+              Privacy
+            </h2>
+            <div className="glass-card-static overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-berth-border-subtle">
+                <div>
+                  <div className="text-sm text-berth-text-primary">
+                    Anonymous Usage Data
+                  </div>
+                  <div className="text-xs text-berth-text-tertiary mt-0.5">
+                    Help improve Berth by sharing anonymous statistics
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    const next = !teleStatus?.enabled;
+                    try {
+                      await setTelemetryEnabled(next);
+                      setTeleStatus((prev) =>
+                        prev ? { ...prev, enabled: next } : prev
+                      );
+                    } catch (e) {
+                      toast(`Failed to update: ${e}`, "error");
+                    }
+                  }}
+                  className="toggle"
+                  data-checked={teleStatus?.enabled === true}
+                />
+              </div>
+              <div className="px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={async () => {
+                      if (showTeleData) {
+                        setShowTeleData(false);
+                        setTeleEvents(null);
+                      } else {
+                        try {
+                          const events = await getTelemetryEvents(50);
+                          setTeleEvents(events);
+                          setShowTeleData(true);
+                        } catch (e) {
+                          toast(`Failed to load events: ${e}`, "error");
+                        }
+                      }
+                    }}
+                    className="text-xs text-berth-accent hover:underline"
+                  >
+                    {showTeleData ? "Hide collected data" : "View collected data"}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await purgeTelemetry();
+                        setTeleStatus((prev) =>
+                          prev ? { ...prev, event_count: 0 } : prev
+                        );
+                        setTeleEvents(null);
+                        setShowTeleData(false);
+                        toast("Telemetry data deleted", "success");
+                      } catch (e) {
+                        toast(`Failed to delete: ${e}`, "error");
+                      }
+                    }}
+                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                  >
+                    Delete all data
+                  </button>
+                  {teleStatus && (
+                    <span className="text-[10px] text-berth-text-tertiary ml-auto">
+                      {teleStatus.event_count} event{teleStatus.event_count !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+                {showTeleData && teleEvents && (
+                  <div className="mt-3 max-h-48 overflow-y-auto rounded-berth-sm bg-berth-surface-0 p-2">
+                    {teleEvents.length === 0 ? (
+                      <div className="text-xs text-berth-text-tertiary text-center py-2">
+                        No events collected
+                      </div>
+                    ) : (
+                      <pre className="text-[10px] text-berth-text-secondary font-mono whitespace-pre-wrap break-all">
+                        {JSON.stringify(teleEvents, null, 2)}
+                      </pre>
+                    )}
                   </div>
                 )}
               </div>

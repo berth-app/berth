@@ -8,6 +8,7 @@ use crate::project::{Project, ProjectStatus, RunMode};
 use crate::runtime::Runtime;
 use crate::scheduler::Schedule;
 use crate::target::{Target, TargetKind, TargetStatus};
+use crate::telemetry::TelemetryEvent;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionLog {
@@ -125,7 +126,8 @@ impl ProjectStore {
             INSERT OR IGNORE INTO settings (key, value) VALUES ('default_target', 'local');
             INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_run_on_create', 'false');
             INSERT OR IGNORE INTO settings (key, value) VALUES ('log_scrollback_lines', '10000');
-            INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', 'system');",
+            INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', 'system');
+            INSERT OR IGNORE INTO settings (key, value) VALUES ('telemetry_enabled', 'false');",
         )?;
 
         self.conn.execute_batch(
@@ -223,6 +225,19 @@ impl ProjectStore {
                  ALTER TABLE projects ADD COLUMN service_port INTEGER;",
             )?;
         }
+
+        // Telemetry events table
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS telemetry_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                app_version TEXT NOT NULL,
+                os_version TEXT NOT NULL,
+                context TEXT NOT NULL DEFAULT '{}',
+                occurred_at TEXT NOT NULL,
+                synced INTEGER DEFAULT 0
+            );",
+        )?;
 
         // Template store installs tracking
         self.conn.execute_batch(
@@ -831,6 +846,96 @@ impl ProjectStore {
             "UPDATE projects SET tunnel_url = NULL, tunnel_provider = NULL, updated_at = ?1 WHERE id = ?2",
             (&now, project_id.to_string()),
         )?;
+        Ok(())
+    }
+
+    // --- Telemetry methods ---
+
+    pub fn insert_telemetry_event(&self, event: &TelemetryEvent) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO telemetry_events (id, event_type, app_version, os_version, context, occurred_at, synced)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            (
+                &event.id,
+                &event.event_type,
+                &event.app_version,
+                &event.os_version,
+                event.context.to_string(),
+                &event.occurred_at,
+            ),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_unsynced_telemetry_events(&self, limit: usize) -> Result<Vec<TelemetryEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, event_type, app_version, os_version, context, occurred_at
+             FROM telemetry_events WHERE synced = 0
+             ORDER BY occurred_at ASC LIMIT ?1",
+        )?;
+
+        let events = stmt
+            .query_map([limit], |row| {
+                let ctx_str: String = row.get(4)?;
+                Ok(TelemetryEvent {
+                    id: row.get(0)?,
+                    event_type: row.get(1)?,
+                    app_version: row.get(2)?,
+                    os_version: row.get(3)?,
+                    context: serde_json::from_str(&ctx_str).unwrap_or_default(),
+                    occurred_at: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(events)
+    }
+
+    pub fn mark_telemetry_synced(&self, ids: &[&str]) -> Result<()> {
+        for id in ids {
+            self.conn.execute(
+                "UPDATE telemetry_events SET synced = 1 WHERE id = ?1",
+                [id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn get_telemetry_events(&self, limit: usize) -> Result<Vec<TelemetryEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, event_type, app_version, os_version, context, occurred_at
+             FROM telemetry_events
+             ORDER BY occurred_at DESC LIMIT ?1",
+        )?;
+
+        let events = stmt
+            .query_map([limit], |row| {
+                let ctx_str: String = row.get(4)?;
+                Ok(TelemetryEvent {
+                    id: row.get(0)?,
+                    event_type: row.get(1)?,
+                    app_version: row.get(2)?,
+                    os_version: row.get(3)?,
+                    context: serde_json::from_str(&ctx_str).unwrap_or_default(),
+                    occurred_at: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(events)
+    }
+
+    pub fn count_telemetry_events(&self) -> Result<usize> {
+        let count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM telemetry_events",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn delete_all_telemetry(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM telemetry_events", [])?;
         Ok(())
     }
 }

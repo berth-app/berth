@@ -384,7 +384,6 @@ pub fn run() {
                             }
                         }
                         "quit" => {
-                            berth_core::local_agent::cleanup_lockfile();
                             app.exit(0);
                         }
                         "new_project" => show_window_and_navigate(app, "paste"),
@@ -422,6 +421,20 @@ pub fn run() {
 
             // Start NATS subscriber (bridges remote agent events to UI)
             start_nats_subscriber(app.handle().clone());
+
+            // Initialize telemetry and track app launch
+            commands::init_telemetry();
+            commands::track_app_launch();
+
+            // Flush telemetry every 4 hours
+            tauri::async_runtime::spawn(async {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(4 * 60 * 60));
+                interval.tick().await; // skip first immediate tick
+                loop {
+                    interval.tick().await;
+                    commands::flush_telemetry().await;
+                }
+            });
 
             Ok(())
         })
@@ -469,7 +482,17 @@ pub fn run() {
             store_list_templates,
             store_search_templates,
             store_install_template,
+            get_telemetry_status,
+            set_telemetry_enabled,
+            get_telemetry_events,
+            purge_telemetry,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Berth");
+        .build(tauri::generate_context!())
+        .expect("error while building Berth")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                tauri::async_runtime::block_on(commands::flush_telemetry());
+                berth_core::local_agent::cleanup_lockfile();
+            }
+        });
 }

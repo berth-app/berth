@@ -1,0 +1,12 @@
+name = "berth-telemetry"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+routes = [
+  { pattern = "telemetry.getberth.dev", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "berth-telemetry"
+database_id = "60f357d2-55b1-4e38-ae31-92aab5b10766"
