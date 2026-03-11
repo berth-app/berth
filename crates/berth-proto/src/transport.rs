@@ -18,6 +18,9 @@ pub struct AgentHealth {
     pub arch: Option<String>,
     pub probation_status: String,
     pub tunnel_providers: Vec<String>,
+    pub docker_version: Option<String>,
+    pub compose_version: Option<String>,
+    pub container_runtime: String,
 }
 
 pub struct RemoteExecution {

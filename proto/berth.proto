@@ -154,11 +154,14 @@ message HealthResponse {
   string status = 2;
   uint64 uptime_seconds = 3;
   string podman_version = 4;      // empty if not installed
-  bool container_ready = 5;       // true if podman is available
+  bool container_ready = 5;       // true if podman or docker is available
   string os = 6;                  // e.g. "linux", "macos"
   string arch = 7;                // e.g. "x86_64", "aarch64"
   string probation_status = 8;    // "", "in_probation", "passed", "rolled_back"
   repeated string tunnel_providers = 9;  // available providers: ["cloudflared", "ngrok"]
+  string docker_version = 10;     // empty if not installed
+  string compose_version = 11;    // docker compose or podman-compose version, empty if unavailable
+  string container_runtime = 12;  // "podman", "docker", "both", "none"
 }
 
 // --- Persistent agent messages ---

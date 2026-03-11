@@ -98,6 +98,9 @@ export interface TargetInfo {
   nats_enabled: boolean;
   tunnel_providers: string[];
   owner_id: string | null;
+  docker_version: string | null;
+  compose_version: string | null;
+  container_runtime: string | null;
 }
 
 export async function listTargets(): Promise<TargetInfo[]> {
@@ -171,6 +174,9 @@ export interface AgentStats {
   os: string | null;
   arch: string | null;
   tunnel_providers: string[];
+  docker_version: string | null;
+  compose_version: string | null;
+  container_runtime: string;
 }
 
 export async function getAgentStats(id: string): Promise<AgentStats> {

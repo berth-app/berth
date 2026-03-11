@@ -474,6 +474,9 @@ pub struct TargetInfo {
     pub nats_enabled: bool,
     pub tunnel_providers: Vec<String>,
     pub owner_id: Option<String>,
+    pub docker_version: Option<String>,
+    pub compose_version: Option<String>,
+    pub container_runtime: Option<String>,
 }
 
 impl From<&Target> for TargetInfo {
@@ -491,6 +494,9 @@ impl From<&Target> for TargetInfo {
             nats_enabled: t.nats_enabled,
             tunnel_providers: vec![],
             owner_id: t.owner_id.clone(),
+            docker_version: t.docker_version.clone(),
+            compose_version: t.compose_version.clone(),
+            container_runtime: t.container_runtime.clone(),
         }
     }
 }
@@ -685,10 +691,19 @@ pub async fn ping_target(id: String) -> Result<TargetInfo, String> {
                     berth_core::target::TargetStatus::Online,
                     Some(&health.version),
                 );
+                let _ = store.update_target_container_caps(
+                    target.id,
+                    health.docker_version.as_deref(),
+                    health.compose_version.as_deref(),
+                    &health.container_runtime,
+                );
                 let mut info = TargetInfo::from(target);
                 info.status = "online".into();
                 info.agent_version = Some(health.version);
                 info.tunnel_providers = health.tunnel_providers;
+                info.docker_version = health.docker_version;
+                info.compose_version = health.compose_version;
+                info.container_runtime = Some(health.container_runtime);
                 Ok(info)
             }
             Err(e) => {
@@ -727,6 +742,9 @@ pub struct AgentStats {
     pub os: Option<String>,
     pub arch: Option<String>,
     pub tunnel_providers: Vec<String>,
+    pub docker_version: Option<String>,
+    pub compose_version: Option<String>,
+    pub container_runtime: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -759,9 +777,17 @@ pub async fn get_agent_stats(id: String) -> Result<AgentStats, String> {
         Some(&health.version),
     );
 
+    // Persist container capabilities on the target
+    let _ = store.update_target_container_caps(
+        target.id,
+        health.docker_version.as_deref(),
+        health.compose_version.as_deref(),
+        &health.container_runtime,
+    );
+
     Ok(AgentStats {
         agent_id: status.agent_id,
-        version: health.version,
+        version: health.version.clone(),
         status: status.status,
         uptime_seconds: health.uptime_seconds,
         cpu_usage: status.cpu_usage,
@@ -780,6 +806,9 @@ pub async fn get_agent_stats(id: String) -> Result<AgentStats, String> {
         os: health.os,
         arch: health.arch,
         tunnel_providers: health.tunnel_providers,
+        docker_version: health.docker_version,
+        compose_version: health.compose_version,
+        container_runtime: health.container_runtime,
     })
 }
 

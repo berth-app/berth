@@ -118,6 +118,9 @@ impl AgentTransport for NatsAgentClient {
                 arch,
                 probation_status,
                 tunnel_providers,
+                docker_version,
+                compose_version,
+                container_runtime,
             } => Ok(AgentHealth {
                 version,
                 status,
@@ -128,6 +131,9 @@ impl AgentTransport for NatsAgentClient {
                 arch: if arch.is_empty() { None } else { Some(arch) },
                 probation_status,
                 tunnel_providers,
+                docker_version: if docker_version.is_empty() { None } else { Some(docker_version) },
+                compose_version: if compose_version.is_empty() { None } else { Some(compose_version) },
+                container_runtime: if container_runtime.is_empty() { "none".into() } else { container_runtime },
             }),
             _ => anyhow::bail!("Unexpected response type for health"),
         }

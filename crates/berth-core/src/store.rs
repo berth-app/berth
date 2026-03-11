@@ -190,6 +190,19 @@ impl ProjectStore {
             )?;
         }
 
+        // Migration: add container capability columns to targets
+        let has_container_runtime = self
+            .conn
+            .prepare("SELECT container_runtime FROM targets LIMIT 0")
+            .is_ok();
+        if !has_container_runtime {
+            self.conn.execute_batch(
+                "ALTER TABLE targets ADD COLUMN docker_version TEXT;
+                 ALTER TABLE targets ADD COLUMN compose_version TEXT;
+                 ALTER TABLE targets ADD COLUMN container_runtime TEXT DEFAULT 'none';",
+            )?;
+        }
+
         // Environment variables table
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS project_env_vars (
@@ -525,8 +538,8 @@ impl ProjectStore {
 
     pub fn insert_target(&self, target: &Target) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO targets (id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled, owner_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO targets (id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled, owner_id, docker_version, compose_version, container_runtime)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             (
                 target.id.to_string(),
                 &target.name,
@@ -540,6 +553,9 @@ impl ProjectStore {
                 &target.nats_agent_id,
                 target.nats_enabled as i32,
                 &target.owner_id,
+                &target.docker_version,
+                &target.compose_version,
+                &target.container_runtime,
             ),
         )?;
         Ok(())
@@ -547,7 +563,7 @@ impl ProjectStore {
 
     pub fn list_targets(&self) -> Result<Vec<Target>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled, owner_id FROM targets ORDER BY name ASC",
+            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled, owner_id, docker_version, compose_version, container_runtime FROM targets ORDER BY name ASC",
         )?;
 
         let targets = stmt
@@ -567,6 +583,9 @@ impl ProjectStore {
                     nats_agent_id: row.get(9)?,
                     nats_enabled: row.get::<_, i32>(10).unwrap_or(0) != 0,
                     owner_id: row.get(11)?,
+                    docker_version: row.get(12)?,
+                    compose_version: row.get(13)?,
+                    container_runtime: row.get(14)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -576,7 +595,7 @@ impl ProjectStore {
 
     pub fn get_target_by_name(&self, name: &str) -> Result<Option<Target>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled, owner_id FROM targets WHERE name = ?1",
+            "SELECT id, name, kind, host, port, status, created_at, last_seen_at, agent_version, nats_agent_id, nats_enabled, owner_id, docker_version, compose_version, container_runtime FROM targets WHERE name = ?1",
         )?;
 
         let mut rows = stmt.query_map([name], |row| {
@@ -595,6 +614,9 @@ impl ProjectStore {
                 nats_agent_id: row.get(9)?,
                 nats_enabled: row.get::<_, i32>(10).unwrap_or(0) != 0,
                 owner_id: row.get(11)?,
+                docker_version: row.get(12)?,
+                compose_version: row.get(13)?,
+                container_runtime: row.get(14)?,
             })
         })?;
 
@@ -616,6 +638,20 @@ impl ProjectStore {
                 agent_version,
                 id.to_string(),
             ),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_target_container_caps(
+        &self,
+        id: Uuid,
+        docker_version: Option<&str>,
+        compose_version: Option<&str>,
+        container_runtime: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE targets SET docker_version = ?1, compose_version = ?2, container_runtime = ?3 WHERE id = ?4",
+            (docker_version, compose_version, container_runtime, id.to_string()),
         )?;
         Ok(())
     }

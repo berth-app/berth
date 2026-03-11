@@ -146,6 +146,50 @@ create_user() {
   # Create directory structure
   mkdir -p "${BERTH_DIR}/bin" "${BERTH_DIR}/deploys"
   chown -R "${AGENT_USER}:${AGENT_USER}" "${BERTH_DIR}"
+
+  # Configure subuid/subgid for rootless container support (podman/docker)
+  setup_container_ids
+}
+
+# ---------------------------------------------------------------------------
+# Configure subuid/subgid for rootless containers (idempotent)
+# ---------------------------------------------------------------------------
+
+setup_container_ids() {
+  local needs_subuid=false
+  local needs_subgid=false
+
+  if ! grep -q "^${AGENT_USER}:" /etc/subuid 2>/dev/null; then
+    needs_subuid=true
+  fi
+  if ! grep -q "^${AGENT_USER}:" /etc/subgid 2>/dev/null; then
+    needs_subgid=true
+  fi
+
+  if [ "${needs_subuid}" = true ] || [ "${needs_subgid}" = true ]; then
+    info "Configuring subuid/subgid for rootless containers..."
+    if command -v usermod &>/dev/null; then
+      usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "${AGENT_USER}" 2>/dev/null || {
+        # Fallback: append directly if usermod doesn't support --add-subuids
+        if [ "${needs_subuid}" = true ]; then
+          echo "${AGENT_USER}:100000:65536" >> /etc/subuid
+        fi
+        if [ "${needs_subgid}" = true ]; then
+          echo "${AGENT_USER}:100000:65536" >> /etc/subgid
+        fi
+      }
+    else
+      if [ "${needs_subuid}" = true ]; then
+        echo "${AGENT_USER}:100000:65536" >> /etc/subuid
+      fi
+      if [ "${needs_subgid}" = true ]; then
+        echo "${AGENT_USER}:100000:65536" >> /etc/subgid
+      fi
+    fi
+    ok "Configured subuid/subgid for '${AGENT_USER}' (rootless container support)."
+  else
+    info "subuid/subgid already configured for '${AGENT_USER}'."
+  fi
 }
 
 # ---------------------------------------------------------------------------
