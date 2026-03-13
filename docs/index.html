@@ -64,7 +64,7 @@
 <div class="container">
 
 <h1>Berth</h1>
-<p class="subtitle">Mac-native deployment control plane for AI-generated code. &mdash; v0.1.0</p>
+<p class="subtitle">Mac-native deployment control plane for AI-generated code. &mdash; v0.4.7</p>
 
 <nav>
   <strong>Contents:</strong>
@@ -671,7 +671,7 @@ service AgentService {
 <!-- ============================================================ -->
 <h2 id="mcp">MCP Server <span class="badge badge-done">Done</span></h2>
 
-<p>17 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05). E2E tested: deploy inline code, run, capture output, delete.</p>
+<p>26 tools implemented via JSON-RPC 2.0 stdio transport (MCP protocol version 2024-11-05). E2E tested: deploy inline code, run, capture output, delete.</p>
 
 <table>
   <tr><th>Tool</th><th>Purpose</th><th>Status</th></tr>
@@ -690,6 +690,17 @@ service AgentService {
   <tr><td><code>berth_schedule_remove</code></td><td>Remove a schedule by UUID</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td><code>berth_publish</code></td><td>Publish a running project to a public URL via tunnel (cloudflared)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td><code>berth_unpublish</code></td><td>Stop the public URL tunnel for a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_list_targets</code></td><td>List deploy targets</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_add_target</code></td><td>Add a deploy target</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_remove_target</code></td><td>Remove a deploy target</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_list_agents</code></td><td>List connected agents</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_env_set</code></td><td>Set environment variable for a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_env_get</code></td><td>Get all environment variables for a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_env_delete</code></td><td>Delete environment variable from a project</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_env_import</code></td><td>Import environment variables from .env format</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_store_list</code></td><td>List templates from Berth Template Store</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_store_search</code></td><td>Search Berth Template Store by keyword</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td><code>berth_store_install</code></td><td>Install template from Berth Template Store</td><td><span class="badge badge-done">Done</span></td></tr>
 </table>
 
 <p>Transport: stdio (primary, for Claude Code). HTTP via axum planned for Phase 3.</p>
@@ -809,7 +820,7 @@ berth unpublish &lt;project&gt;                     # Stop the public URL tunnel
 <h2 id="file-map">File Map</h2>
 
 <div class="diagram">
-mac-berth/
+berth/
 +-- Cargo.toml                  <span class="muted">Workspace manifest</span>
 +-- Cargo.lock
 +-- package.json                <span class="muted">React frontend deps</span>
@@ -818,20 +829,28 @@ mac-berth/
 +-- tailwind.config.ts
 +-- postcss.config.js
 +-- index.html                  <span class="muted">Vite entry</span>
-+-- CLAUDE.md                   <span class="muted">Project instructions</span>
-+-- PRODUCT_VISION.md           <span class="muted">Business & market</span>
 |
 +-- <span class="highlight">src/</span>                        <span class="muted">React frontend</span>
 |   +-- main.tsx                <span class="muted">React entry</span>
 |   +-- App.tsx                 <span class="muted">Root component, view router</span>
 |   +-- lib/
 |   |   +-- invoke.ts           <span class="muted">Typed Tauri invoke functions (targets, schedules, settings, etc.)</span>
+|   |   +-- theme.ts            <span class="muted">Theme utilities</span>
 |   +-- pages/
 |   |   +-- ProjectList.tsx     <span class="muted">Project list with status</span>
 |   |   +-- ProjectDetail.tsx   <span class="muted">Run/Stop, log viewer, code editor, schedules, history</span>
 |   |   +-- PasteAndDeploy.tsx  <span class="muted">Code import wizard with target selector</span>
 |   |   +-- Targets.tsx         <span class="muted">Remote target management (add/remove/ping/stats)</span>
 |   |   +-- Settings.tsx        <span class="muted">App settings (theme, default target, auto-run)</span>
+|   |   +-- Onboarding.tsx      <span class="muted">First-run onboarding flow</span>
+|   |   +-- TemplateStore.tsx   <span class="muted">Browse and install project templates</span>
+|   +-- components/
+|   |   +-- Sidebar.tsx         <span class="muted">Navigation sidebar</span>
+|   |   +-- Terminal.tsx        <span class="muted">xterm.js terminal wrapper</span>
+|   |   +-- Toast.tsx           <span class="muted">Toast notifications</span>
+|   |   +-- EnvVarsPanel.tsx    <span class="muted">Environment variable editor</span>
+|   |   +-- ui/                 <span class="muted">shadcn/ui components</span>
+|   |   +-- onboarding/         <span class="muted">Onboarding step components</span>
 |   +-- styles/
 |       +-- globals.css         <span class="muted">macOS design tokens</span>
 |
@@ -853,7 +872,9 @@ mac-berth/
 |   |   +-- src/
 |   |       +-- lib.rs          <span class="muted">Re-exports</span>
 |   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
-|   |       +-- runtime.rs      <span class="muted">Runtime detection + dep parsing (req.txt, package.json, go.mod, Cargo.toml)</span>
+|   |       +-- runtime/        <span class="muted">Runtime detection + dep parsing</span>
+|   |       |   +-- mod.rs      <span class="muted">Runtime types and re-exports</span>
+|   |       |   +-- detect.rs   <span class="muted">Auto-detect language, entrypoint, deps</span>
 |   |       +-- executor.rs     <span class="muted">Process spawn + log stream (mpsc channel)</span>
 |   |       +-- store.rs        <span class="muted">SQLite CRUD (projects + schedules + targets) + migrations</span>
 |   |       +-- scheduler.rs    <span class="muted">Cron-like scheduler (parse, tick, execute due jobs)</span>
@@ -864,9 +885,28 @@ mac-berth/
 |   |       +-- tls.rs          <span class="muted">mTLS certificate generation (rcgen)</span>
 |   |       +-- credentials.rs  <span class="muted">Keychain credential storage (security-framework)</span>
 |   |       +-- tunnel.rs       <span class="muted">Pluggable tunnel manager (cloudflared, TunnelProvider trait)</span>
-|   |       +-- nats_relay.rs   <span class="muted">NATS message types (commands, responses, events)</span>
 |   |       +-- nats_cmd_client.rs <span class="muted">Desktop-side NATS command client</span>
-|   |       +-- agent_transport.rs <span class="muted">AgentTransport trait (gRPC + NATS unified)</span>
+|   |       +-- nats_subscriber.rs <span class="muted">NATS event subscriber</span>
+|   |       +-- target.rs       <span class="muted">Deploy target model and helpers</span>
+|   |       +-- telemetry.rs    <span class="muted">Opt-in anonymous telemetry</span>
+|   |       +-- template_store.rs <span class="muted">Berth Template Store client</span>
+|   |       +-- discovery.rs    <span class="muted">mDNS LAN agent discovery</span>
+|   |       +-- archive.rs      <span class="muted">Project archive/packaging</span>
+|   |       +-- container.rs    <span class="muted">Container runtime support</span>
+|   |       +-- containerfile.rs <span class="muted">Containerfile generation</span>
+|   |       +-- setup.rs        <span class="muted">First-run setup and initialization</span>
+|   |       +-- path_safety.rs  <span class="muted">Path validation and sanitization</span>
+|   |
+|   +-- berth-proto/           <span class="badge badge-done">Done</span>
+|   |   +-- src/
+|   |       +-- lib.rs          <span class="muted">Re-exports</span>
+|   |       +-- nats_relay.rs   <span class="muted">NATS message types (commands, responses, events)</span>
+|   |       +-- transport.rs    <span class="muted">AgentTransport trait (gRPC + NATS unified)</span>
+|   |       +-- message_auth.rs <span class="muted">Message authentication (HMAC signing)</span>
+|   |       +-- env.rs          <span class="muted">Environment variable proto types</span>
+|   |       +-- executor.rs     <span class="muted">Execution proto types</span>
+|   |       +-- runtime.rs      <span class="muted">Runtime proto types</span>
+|   |       +-- schedule.rs     <span class="muted">Schedule proto types</span>
 |   |
 |   +-- berth-mcp/             <span class="badge badge-done">Done</span>
 |   |   +-- src/
@@ -874,7 +914,7 @@ mac-berth/
 |   |       +-- lib.rs          <span class="muted">Module exports</span>
 |   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
 |   |       +-- server.rs       <span class="muted">Stdio server loop</span>
-|   |       +-- tools.rs        <span class="muted">19 tool definitions + handlers (incl. publish/unpublish)</span>
+|   |       +-- tools.rs        <span class="muted">26 tool definitions + handlers</span>
 |   |
 |   +-- berth-agent/           <span class="badge badge-done">Done</span>
 |   |   +-- src/
@@ -886,20 +926,10 @@ mac-berth/
 |   |   +-- build.rs                 <span class="muted">tonic-build proto compilation</span>
 |   |
 |   +-- berth-cli/             <span class="badge badge-done">Done</span>
-|       +-- src/main.rs         <span class="muted">12 commands + schedule subcommands</span>
+|       +-- src/main.rs         <span class="muted">15 commands + schedule/target/env/store subcommands</span>
 |
 +-- proto/
 |   +-- berth.proto            <span class="muted">gRPC service (Phase 3)</span>
-|
-+-- reasoning/                  <span class="muted">Decision records (DRF/CRF)</span>
-|   +-- crf/berth-project.yaml
-|   +-- drf/001-framework-selection.yaml
-|   +-- drf/002-agent-language.yaml
-|   +-- drf/003-product-positioning.yaml
-|   +-- drf/004-business-model.yaml
-|   +-- drf/005-mcp-as-core.yaml
-|   +-- drf/006-backend-storage.yaml
-|   +-- drf/007-agent-only-execution.yaml
 |
 +-- docs/                       <span class="muted">This documentation</span>
     +-- index.html
@@ -926,8 +956,8 @@ mac-berth/
 <h3>Phase 2: MCP + CLI <span class="badge badge-done">Complete</span></h3>
 <table>
   <tr><th>Item</th><th>Status</th></tr>
-  <tr><td>MCP server (stdio, 13 tools, JSON-RPC 2.0)</td><td><span class="badge badge-done">Done</span></td></tr>
-  <tr><td>CLI tool (12 commands + schedule subcommands)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>MCP server (stdio, 26 tools, JSON-RPC 2.0)</td><td><span class="badge badge-done">Done</span></td></tr>
+  <tr><td>CLI tool (15 commands + schedule/target/env/store subcommands)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>.mcp.json config for Claude Code integration</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>E2E MCP test (deploy inline code, run, capture output, delete)</td><td><span class="badge badge-done">Done</span></td></tr>
   <tr><td>Scheduling (@every, @hourly, @daily, @weekly, M H * * *)</td><td><span class="badge badge-done">Done</span></td></tr>
@@ -935,7 +965,7 @@ mac-berth/
 </table>
 
 <h3>Phase 3: Remote Agents <span class="badge badge-done">Complete</span></h3>
-<p>Persistent remote agent with SQLite store, 14 gRPC RPCs, agent-side scheduler, store-and-forward events, remote upgrade, dependency install during deployment. Agent install script, gRPC communication, remote deploy, agent health monitoring, mDNS LAN discovery, agent-only execution architecture (UDS for local, TCP gRPC for remote). Deployed and verified on remote Linux server.</p>
+<p>Persistent remote agent with SQLite store, 14 gRPC RPCs, agent-side scheduler, store-and-forward events, remote upgrade, dependency install during deployment. Agent install script, gRPC communication, remote deploy, agent health monitoring, mDNS LAN discovery, agent-only execution architecture (UDS for local, TCP gRPC for remote). NATS relay for NAT traversal, mTLS, berth-proto shared contract crate, message authentication, environment variable management, template store, opt-in telemetry, onboarding flow. Deployed and verified on remote Linux server.</p>
 
 <h3>Phase 4: Cloud Targets <span class="badge badge-stub">Not Started</span></h3>
 <p>AWS Lambda, Cloudflare Workers, deployment history, code signing, Homebrew cask.</p>
@@ -961,7 +991,7 @@ mac-berth/
 
 <hr style="border-color: var(--border); margin: 3rem 0 1rem;">
 <p style="text-align: center; font-size: 0.85rem;">
-  Berth v0.1.0 &mdash; Documentation generated March 2026<br>
+  Berth v0.4.7 &mdash; Documentation generated March 2026<br>
   <a href="https://github.com/berth-app/berth">github.com/berth-app/berth</a>
 </p>
 
