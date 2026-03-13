@@ -17,6 +17,7 @@
     --orange: #d29922;
     --purple: #bc8cff;
     --pink: #f778ba;
+    --cyan: #39d2c0;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -31,6 +32,9 @@
   h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--text); }
   h4 { font-size: 0.95rem; margin: 1rem 0 0.3rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
   p, li { color: var(--muted); }
+  p { margin: 0.5rem 0; }
+  ul, ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+  li { margin: 0.3rem 0; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   code { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; color: var(--text); }
@@ -55,9 +59,24 @@
   .diagram .orange { color: var(--orange); }
   .diagram .pink { color: var(--pink); }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
-  .card h3 { margin-top: 0; }
-  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .card h3 { margin-top: 0; font-size: 1.05rem; }
+  .card p { font-size: 0.9rem; }
+  .callout { background: var(--surface); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 1rem 1.25rem; margin: 1rem 0; }
+  .callout p { margin: 0.25rem 0; }
+  .arch-diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin: 1.5rem 0; overflow-x: auto; }
+  .arch-diagram svg { display: block; margin: 0 auto; }
+  .arch-legend { display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1rem 0; justify-content: center; }
+  .arch-legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+  .arch-legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+  .file-tree { list-style: none; margin: 0; padding: 0; font-family: 'SF Mono', monospace; font-size: 0.85rem; }
+  .file-tree ul { list-style: none; margin: 0; padding-left: 1.5rem; border-left: 1px solid var(--border); }
+  .file-tree li { margin: 0.2rem 0; color: var(--muted); }
+  .file-tree li > span { color: var(--text); }
+  .file-tree .dir { color: var(--accent); font-weight: 600; }
+  .file-tree .badge { margin-left: 0.5rem; }
+  @media (max-width: 700px) { .grid, .grid-3 { grid-template-columns: 1fr; } .arch-diagram { padding: 1rem; } .arch-diagram svg { width: 100%; height: auto; } }
 </style>
 </head>
 <body>
@@ -87,34 +106,161 @@
 <!-- ============================================================ -->
 <h2 id="architecture">System Architecture</h2>
 
-<div class="diagram">
-<span class="highlight">+----------------------------------------------------------+</span>
-<span class="highlight">|                    Tauri Desktop App                      |</span>
-<span class="highlight">|                                                          |</span>
-<span class="highlight">|  <span class="green">React 19 Frontend</span>          <span class="purple">Rust Backend</span>               |</span>
-<span class="highlight">|  +--------------------+    +-------------------------+  |</span>
-<span class="highlight">|  | ProjectList.tsx    |    | commands.rs             |  |</span>
-<span class="highlight">|  | ProjectDetail.tsx  |&lt;--&gt;| (18 Tauri commands)     |  |</span>
-<span class="highlight">|  | PasteAndDeploy.tsx |    |   + Embedded Agent (UDS)|  |</span>
-<span class="highlight">|  | Targets.tsx        |    |                         |  |</span>
-<span class="highlight">|  | Settings.tsx       |    |                         |  |</span>
-<span class="highlight">|  +--------------------+    +------------+------------+  |</span>
-<span class="highlight">|       invoke() / listen()               |                |</span>
-<span class="highlight">+------------------------------------------+----------------+</span>
-                                           |
-                                    <span class="purple">berth-core</span>
-                              +------------+------------+
-                              |                         |
-                     +--------+--------+    +-----------+---------+
-                     | <span class="green">executor.rs</span>     |    | <span class="green">store.rs</span>             |
-                     | spawn_and_stream|    | SQLite (rusqlite)   |
-                     | LogLine channel |    | projects table      |
-                     +-----------------+    +---------------------+
-                              |
-              +---------------+---------------+
-              |               |               |
-         <span class="orange">Local Mac</span>      <span class="orange">Linux VPS</span>       <span class="orange">Serverless</span>
-         (Phase 1)     (Phase 3)       (Phase 4)
+<div class="arch-diagram">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" width="960" height="720">
+  <defs>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#58a6ff"/></marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#3fb950"/></marker>
+    <marker id="arrow-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#bc8cff"/></marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#d29922"/></marker>
+    <marker id="arrow-cyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#39d2c0"/></marker>
+    <marker id="arrow-muted" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#8b949e"/></marker>
+  </defs>
+
+  <rect x="20" y="20" width="410" height="580" rx="16" fill="none" stroke="#30363d" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="225" y="50" text-anchor="middle" fill="#8b949e" font-family="-apple-system, sans-serif" font-size="13" font-weight="600" letter-spacing="0.08em">YOUR MAC</text>
+
+  <rect x="50" y="75" width="350" height="200" rx="12" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="225" y="100" text-anchor="middle" fill="#58a6ff" font-family="-apple-system, sans-serif" font-size="14" font-weight="700">Desktop App</text>
+  <text x="225" y="118" text-anchor="middle" fill="#8b949e" font-family="-apple-system, sans-serif" font-size="11">Tauri 2.0 — React 19 + Rust</text>
+
+  <rect x="70" y="132" width="95" height="32" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="117" y="153" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="10">Projects</text>
+  <rect x="178" y="132" width="95" height="32" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="225" y="153" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="10">Log Viewer</text>
+  <rect x="286" y="132" width="95" height="32" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="333" y="153" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="10">Code Editor</text>
+  <rect x="70" y="172" width="95" height="32" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="117" y="193" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="10">Targets</text>
+  <rect x="178" y="172" width="95" height="32" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="225" y="193" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="10">Env Vars</text>
+  <rect x="286" y="172" width="95" height="32" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="333" y="193" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="10">Settings</text>
+
+  <rect x="70" y="214" width="311" height="28" rx="6" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="0.75"/>
+  <text x="225" y="233" text-anchor="middle" fill="#bc8cff" font-family="SF Mono, monospace" font-size="10">Rust Backend: commands.rs + berth-core + SQLite</text>
+
+  <rect x="70" y="252" width="311" height="28" rx="6" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="0.75"/>
+  <text x="225" y="271" text-anchor="middle" fill="#3fb950" font-family="SF Mono, monospace" font-size="10">Embedded Local Agent (UDS)</text>
+
+  <rect x="50" y="310" width="150" height="55" rx="10" fill="#161b22" stroke="#d29922" stroke-width="1.5"/>
+  <text x="125" y="335" text-anchor="middle" fill="#d29922" font-family="-apple-system, sans-serif" font-size="13" font-weight="700">CLI</text>
+  <text x="125" y="352" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="10">berth &lt;cmd&gt;</text>
+
+  <rect x="250" y="310" width="150" height="55" rx="10" fill="#161b22" stroke="#39d2c0" stroke-width="1.5"/>
+  <text x="325" y="335" text-anchor="middle" fill="#39d2c0" font-family="-apple-system, sans-serif" font-size="13" font-weight="700">MCP Server</text>
+  <text x="325" y="352" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="10">26 tools · stdio</text>
+
+  <rect x="250" y="395" width="150" height="45" rx="10" fill="#0d1117" stroke="#39d2c0" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="325" y="422" text-anchor="middle" fill="#8b949e" font-family="-apple-system, sans-serif" font-size="11">Claude Code / AI Agent</text>
+
+  <line x1="325" y1="395" x2="325" y2="370" stroke="#39d2c0" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+  <rect x="50" y="470" width="350" height="32" rx="8" fill="rgba(88,166,255,0.06)" stroke="#30363d" stroke-width="0.75"/>
+  <text x="225" y="491" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="10">berth-core · berth-proto · SQLite (berth.db)</text>
+
+  <line x1="125" y1="365" x2="125" y2="465" stroke="#d29922" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-orange)"/>
+  <line x1="325" y1="365" x2="325" y2="465" stroke="#39d2c0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-cyan)"/>
+  <path d="M225,280 L225,465" stroke="#58a6ff" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-blue)"/>
+
+  <rect x="75" y="525" width="120" height="36" rx="8" fill="rgba(247,120,186,0.08)" stroke="#f778ba" stroke-width="0.75"/>
+  <text x="135" y="548" text-anchor="middle" fill="#f778ba" font-family="SF Mono, monospace" font-size="10">macOS Keychain</text>
+  <rect x="255" y="525" width="120" height="36" rx="8" fill="rgba(247,120,186,0.08)" stroke="#f778ba" stroke-width="0.75"/>
+  <text x="315" y="548" text-anchor="middle" fill="#f778ba" font-family="SF Mono, monospace" font-size="10">Menu Bar Tray</text>
+
+  <rect x="460" y="100" width="140" height="100" rx="12" fill="#161b22" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="530" y="130" text-anchor="middle" fill="#bc8cff" font-family="-apple-system, sans-serif" font-size="12" font-weight="700">Synadia Cloud</text>
+  <text x="530" y="148" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="9">NATS Messaging</text>
+  <text x="530" y="163" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="9">JetStream</text>
+  <text x="530" y="186" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="8.5">tls://connect.ngs.global</text>
+
+  <path d="M400,170 L455,150" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="418" y="145" fill="#bc8cff" font-family="SF Mono, monospace" font-size="8">outbound TLS</text>
+  <path d="M600,150 L630,130" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="606" y="125" fill="#bc8cff" font-family="SF Mono, monospace" font-size="8">outbound TLS</text>
+
+  <rect x="620" y="20" width="320" height="580" rx="16" fill="none" stroke="#30363d" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="780" y="50" text-anchor="middle" fill="#8b949e" font-family="-apple-system, sans-serif" font-size="13" font-weight="600" letter-spacing="0.08em">LINUX SERVERS</text>
+
+  <rect x="650" y="75" width="260" height="220" rx="12" fill="#161b22" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="780" y="100" text-anchor="middle" fill="#3fb950" font-family="-apple-system, sans-serif" font-size="14" font-weight="700">Remote Agent</text>
+  <text x="780" y="118" text-anchor="middle" fill="#8b949e" font-family="-apple-system, sans-serif" font-size="11">berth-agent · systemd service</text>
+
+  <rect x="670" y="132" width="108" height="28" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="724" y="150" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="9">NATS Handler</text>
+  <rect x="788" y="132" width="102" height="28" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="839" y="150" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="9">gRPC Server</text>
+  <rect x="670" y="168" width="108" height="28" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="724" y="186" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="9">Executor</text>
+  <rect x="788" y="168" width="102" height="28" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="839" y="186" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="9">Scheduler</text>
+  <rect x="670" y="204" width="108" height="28" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="724" y="222" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="9">Deploy Mgr</text>
+  <rect x="788" y="204" width="102" height="28" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="839" y="222" text-anchor="middle" fill="#e6edf3" font-family="SF Mono, monospace" font-size="9">Tunnel Mgr</text>
+
+  <rect x="670" y="244" width="220" height="24" rx="6" fill="rgba(88,166,255,0.06)" stroke="#30363d" stroke-width="0.75"/>
+  <text x="780" y="260" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="9">SQLite: agent.db · ~/.berth/deploys/</text>
+
+  <rect x="650" y="320" width="260" height="55" rx="12" fill="#161b22" stroke="#3fb950" stroke-width="1" opacity="0.5"/>
+  <text x="780" y="347" text-anchor="middle" fill="#3fb950" font-family="-apple-system, sans-serif" font-size="12" font-weight="600" opacity="0.5">Agent 2</text>
+  <text x="780" y="363" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="10" opacity="0.5">staging.example.com</text>
+
+  <rect x="650" y="390" width="260" height="55" rx="12" fill="#161b22" stroke="#3fb950" stroke-width="1" opacity="0.3"/>
+  <text x="780" y="417" text-anchor="middle" fill="#3fb950" font-family="-apple-system, sans-serif" font-size="12" font-weight="600" opacity="0.3">Agent N</text>
+  <text x="780" y="433" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="10" opacity="0.3">prod.example.com</text>
+
+  <path d="M530,200 L530,340 L645,340" stroke="#bc8cff" stroke-width="1" opacity="0.4" stroke-dasharray="4,3" marker-end="url(#arrow-purple)"/>
+  <path d="M530,200 L530,415 L645,415" stroke="#bc8cff" stroke-width="1" opacity="0.25" stroke-dasharray="4,3" marker-end="url(#arrow-purple)"/>
+
+  <rect x="650" y="470" width="130" height="42" rx="8" fill="rgba(57,210,192,0.06)" stroke="#39d2c0" stroke-width="0.75"/>
+  <text x="715" y="490" text-anchor="middle" fill="#39d2c0" font-family="SF Mono, monospace" font-size="9">cloudflared</text>
+  <text x="715" y="504" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="8">*.trycloudflare.com</text>
+
+  <rect x="800" y="470" width="110" height="42" rx="8" fill="rgba(88,166,255,0.06)" stroke="#30363d" stroke-width="0.75"/>
+  <text x="855" y="496" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="9">Public Internet</text>
+
+  <line x1="780" y1="491" x2="795" y2="491" stroke="#39d2c0" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+
+  <rect x="460" y="260" width="140" height="65" rx="10" fill="#161b22" stroke="#f85149" stroke-width="1"/>
+  <text x="530" y="282" text-anchor="middle" fill="#f85149" font-family="-apple-system, sans-serif" font-size="11" font-weight="600">Security</text>
+  <text x="530" y="298" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="8.5">HMAC-SHA256 signing</text>
+  <text x="530" y="312" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="8.5">Challenge-response pairing</text>
+
+  <rect x="460" y="360" width="140" height="50" rx="10" fill="#161b22" stroke="#8b949e" stroke-width="0.75" stroke-dasharray="4,3"/>
+  <text x="530" y="382" text-anchor="middle" fill="#8b949e" font-family="-apple-system, sans-serif" font-size="11">Direct gRPC</text>
+  <text x="530" y="397" text-anchor="middle" fill="#8b949e" font-family="SF Mono, monospace" font-size="8.5">mTLS fallback</text>
+
+  <path d="M400,270 L455,375" stroke="#8b949e" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-muted)"/>
+  <path d="M600,385 L645,300" stroke="#8b949e" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-muted)"/>
+
+  <rect x="20" y="630" width="920" height="70" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="480" y="655" text-anchor="middle" fill="#e6edf3" font-family="-apple-system, sans-serif" font-size="12" font-weight="600">Data Flow</text>
+
+  <text x="120" y="680" fill="#58a6ff" font-family="SF Mono, monospace" font-size="10">Code Input</text>
+  <line x1="190" y1="676" x2="215" y2="676" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <text x="225" y="680" fill="#3fb950" font-family="SF Mono, monospace" font-size="10">Detect</text>
+  <line x1="272" y1="676" x2="297" y2="676" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="307" y="680" fill="#d29922" font-family="SF Mono, monospace" font-size="10">Target</text>
+  <line x1="356" y1="676" x2="381" y2="676" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrow-orange)"/>
+  <text x="391" y="680" fill="#bc8cff" font-family="SF Mono, monospace" font-size="10">Deploy</text>
+  <line x1="440" y1="676" x2="465" y2="676" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
+  <text x="475" y="680" fill="#3fb950" font-family="SF Mono, monospace" font-size="10">Run</text>
+  <line x1="502" y1="676" x2="527" y2="676" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="537" y="680" fill="#39d2c0" font-family="SF Mono, monospace" font-size="10">Monitor</text>
+  <line x1="598" y1="676" x2="623" y2="676" stroke="#39d2c0" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <text x="633" y="680" fill="#f778ba" font-family="SF Mono, monospace" font-size="10">Publish</text>
+</svg>
+</div>
+
+<div class="arch-legend">
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #58a6ff;"></div> Desktop App</div>
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #d29922;"></div> CLI</div>
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #39d2c0;"></div> MCP / AI</div>
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #3fb950;"></div> Agent</div>
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #bc8cff;"></div> NATS</div>
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #f85149;"></div> Security</div>
+  <div class="arch-legend-item"><div class="arch-legend-swatch" style="background: #8b949e;"></div> gRPC fallback</div>
 </div>
 
 <h3>Workspace Crates</h3>
@@ -819,121 +965,117 @@ berth unpublish &lt;project&gt;                     # Stop the public URL tunnel
 <!-- ============================================================ -->
 <h2 id="file-map">File Map</h2>
 
-<div class="diagram">
-berth/
-+-- Cargo.toml                  <span class="muted">Workspace manifest</span>
-+-- Cargo.lock
-+-- package.json                <span class="muted">React frontend deps</span>
-+-- tsconfig.json
-+-- vite.config.ts
-+-- tailwind.config.ts
-+-- postcss.config.js
-+-- index.html                  <span class="muted">Vite entry</span>
-|
-+-- <span class="highlight">src/</span>                        <span class="muted">React frontend</span>
-|   +-- main.tsx                <span class="muted">React entry</span>
-|   +-- App.tsx                 <span class="muted">Root component, view router</span>
-|   +-- lib/
-|   |   +-- invoke.ts           <span class="muted">Typed Tauri invoke functions (targets, schedules, settings, etc.)</span>
-|   |   +-- theme.ts            <span class="muted">Theme utilities</span>
-|   +-- pages/
-|   |   +-- ProjectList.tsx     <span class="muted">Project list with status</span>
-|   |   +-- ProjectDetail.tsx   <span class="muted">Run/Stop, log viewer, code editor, schedules, history</span>
-|   |   +-- PasteAndDeploy.tsx  <span class="muted">Code import wizard with target selector</span>
-|   |   +-- Targets.tsx         <span class="muted">Remote target management (add/remove/ping/stats)</span>
-|   |   +-- Settings.tsx        <span class="muted">App settings (theme, default target, auto-run)</span>
-|   |   +-- Onboarding.tsx      <span class="muted">First-run onboarding flow</span>
-|   |   +-- TemplateStore.tsx   <span class="muted">Browse and install project templates</span>
-|   +-- components/
-|   |   +-- Sidebar.tsx         <span class="muted">Navigation sidebar</span>
-|   |   +-- Terminal.tsx        <span class="muted">xterm.js terminal wrapper</span>
-|   |   +-- Toast.tsx           <span class="muted">Toast notifications</span>
-|   |   +-- EnvVarsPanel.tsx    <span class="muted">Environment variable editor</span>
-|   |   +-- ui/                 <span class="muted">shadcn/ui components</span>
-|   |   +-- onboarding/         <span class="muted">Onboarding step components</span>
-|   +-- styles/
-|       +-- globals.css         <span class="muted">macOS design tokens</span>
-|
-+-- <span class="purple">src-tauri/</span>                  <span class="muted">Tauri Rust backend</span>
-|   +-- Cargo.toml
-|   +-- tauri.conf.json         <span class="muted">Window, tray, plugins</span>
-|   +-- build.rs
-|   +-- capabilities/
-|   |   +-- default.json        <span class="muted">Permissions</span>
-|   +-- icons/
-|   |   +-- icon.png            <span class="muted">32x32 tray icon</span>
-|   +-- src/
-|       +-- main.rs             <span class="muted">Desktop entry</span>
-|       +-- lib.rs              <span class="muted">Tauri builder, state, plugins</span>
-|       +-- commands.rs         <span class="muted">18 commands + agent-based execution + monitoring</span>
-|
-+-- <span class="green">crates/</span>
-|   +-- berth-core/            <span class="badge badge-done">Done</span>
-|   |   +-- src/
-|   |       +-- lib.rs          <span class="muted">Re-exports</span>
-|   |       +-- project.rs      <span class="muted">Project, ProjectStatus + monitoring fields</span>
-|   |       +-- runtime/        <span class="muted">Runtime detection + dep parsing</span>
-|   |       |   +-- mod.rs      <span class="muted">Runtime types and re-exports</span>
-|   |       |   +-- detect.rs   <span class="muted">Auto-detect language, entrypoint, deps</span>
-|   |       +-- executor.rs     <span class="muted">Process spawn + log stream (mpsc channel)</span>
-|   |       +-- store.rs        <span class="muted">SQLite CRUD (projects + schedules + targets) + migrations</span>
-|   |       +-- scheduler.rs    <span class="muted">Cron-like scheduler (parse, tick, execute due jobs)</span>
-|   |       +-- agent_service.rs <span class="muted">AgentServiceImpl (shared across all crates)</span>
-|   |       +-- agent_client.rs <span class="muted">gRPC client (TCP + UDS connect, streaming execute)</span>
-|   |       +-- uds.rs          <span class="muted">Unix Domain Socket transport helpers (serve + connect)</span>
-|   |       +-- local_agent.rs  <span class="muted">Embedded agent bootstrap + lockfile coordination</span>
-|   |       +-- tls.rs          <span class="muted">mTLS certificate generation (rcgen)</span>
-|   |       +-- credentials.rs  <span class="muted">Keychain credential storage (security-framework)</span>
-|   |       +-- tunnel.rs       <span class="muted">Pluggable tunnel manager (cloudflared, TunnelProvider trait)</span>
-|   |       +-- nats_cmd_client.rs <span class="muted">Desktop-side NATS command client</span>
-|   |       +-- nats_subscriber.rs <span class="muted">NATS event subscriber</span>
-|   |       +-- target.rs       <span class="muted">Deploy target model and helpers</span>
-|   |       +-- telemetry.rs    <span class="muted">Opt-in anonymous telemetry</span>
-|   |       +-- template_store.rs <span class="muted">Berth Template Store client</span>
-|   |       +-- discovery.rs    <span class="muted">mDNS LAN agent discovery</span>
-|   |       +-- archive.rs      <span class="muted">Project archive/packaging</span>
-|   |       +-- container.rs    <span class="muted">Container runtime support</span>
-|   |       +-- containerfile.rs <span class="muted">Containerfile generation</span>
-|   |       +-- setup.rs        <span class="muted">First-run setup and initialization</span>
-|   |       +-- path_safety.rs  <span class="muted">Path validation and sanitization</span>
-|   |
-|   +-- berth-proto/           <span class="badge badge-done">Done</span>
-|   |   +-- src/
-|   |       +-- lib.rs          <span class="muted">Re-exports</span>
-|   |       +-- nats_relay.rs   <span class="muted">NATS message types (commands, responses, events)</span>
-|   |       +-- transport.rs    <span class="muted">AgentTransport trait (gRPC + NATS unified)</span>
-|   |       +-- message_auth.rs <span class="muted">Message authentication (HMAC signing)</span>
-|   |       +-- env.rs          <span class="muted">Environment variable proto types</span>
-|   |       +-- executor.rs     <span class="muted">Execution proto types</span>
-|   |       +-- runtime.rs      <span class="muted">Runtime proto types</span>
-|   |       +-- schedule.rs     <span class="muted">Schedule proto types</span>
-|   |
-|   +-- berth-mcp/             <span class="badge badge-done">Done</span>
-|   |   +-- src/
-|   |       +-- main.rs         <span class="muted">Entry point (stdio)</span>
-|   |       +-- lib.rs          <span class="muted">Module exports</span>
-|   |       +-- protocol.rs     <span class="muted">JSON-RPC 2.0 + MCP types</span>
-|   |       +-- server.rs       <span class="muted">Stdio server loop</span>
-|   |       +-- tools.rs        <span class="muted">26 tool definitions + handlers</span>
-|   |
-|   +-- berth-agent/           <span class="badge badge-done">Done</span>
-|   |   +-- src/
-|   |   |   +-- main.rs              <span class="muted">Agent startup: SQLite init, gRPC server, scheduler loop</span>
-|   |   |   +-- service.rs           <span class="muted">Legacy re-export (AgentServiceImpl from berth-core)</span>
-|   |   |   +-- persistent_service.rs <span class="muted">PersistentAgentService (14 RPCs, SQLite persistence)</span>
-|   |   |   +-- agent_store.rs       <span class="muted">Agent SQLite store (~/.berth/agent.db, 5 tables)</span>
-|   |   |   +-- agent_scheduler.rs   <span class="muted">Agent-side cron scheduler (tick every 30s)</span>
-|   |   +-- build.rs                 <span class="muted">tonic-build proto compilation</span>
-|   |
-|   +-- berth-cli/             <span class="badge badge-done">Done</span>
-|       +-- src/main.rs         <span class="muted">15 commands + schedule/target/env/store subcommands</span>
-|
-+-- proto/
-|   +-- berth.proto            <span class="muted">gRPC service (Phase 3)</span>
-|
-+-- docs/                       <span class="muted">This documentation</span>
-    +-- index.html
-    +-- remote-agent.html
+<div class="grid">
+  <div class="card">
+    <h3 style="color: var(--accent);">src/ <span style="font-weight: 400; font-size: 0.85rem; color: var(--muted);">React frontend</span></h3>
+    <ul class="file-tree">
+      <li><span>main.tsx</span> &mdash; React entry</li>
+      <li><span>App.tsx</span> &mdash; Root component, view router</li>
+      <li><span class="dir">lib/</span>
+        <ul>
+          <li><span>invoke.ts</span> &mdash; Typed Tauri invoke functions</li>
+          <li><span>theme.ts</span> &mdash; Theme utilities</li>
+        </ul>
+      </li>
+      <li><span class="dir">pages/</span>
+        <ul>
+          <li><span>ProjectList.tsx</span> &mdash; Project list with status</li>
+          <li><span>ProjectDetail.tsx</span> &mdash; Run/Stop, log viewer, code editor</li>
+          <li><span>PasteAndDeploy.tsx</span> &mdash; Code import wizard</li>
+          <li><span>Targets.tsx</span> &mdash; Remote target management</li>
+          <li><span>Settings.tsx</span> &mdash; App settings</li>
+          <li><span>Onboarding.tsx</span> &mdash; First-run onboarding flow</li>
+          <li><span>TemplateStore.tsx</span> &mdash; Browse and install templates</li>
+        </ul>
+      </li>
+      <li><span class="dir">components/</span>
+        <ul>
+          <li><span>Sidebar.tsx</span>, <span>Terminal.tsx</span>, <span>Toast.tsx</span>, <span>EnvVarsPanel.tsx</span></li>
+          <li><span class="dir">ui/</span> &mdash; shadcn/ui components</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3 style="color: var(--purple);">src-tauri/ <span style="font-weight: 400; font-size: 0.85rem; color: var(--muted);">Tauri Rust backend</span></h3>
+    <ul class="file-tree">
+      <li><span>tauri.conf.json</span> &mdash; Window, tray, plugins</li>
+      <li><span class="dir">src/</span>
+        <ul>
+          <li><span>main.rs</span> &mdash; Desktop entry</li>
+          <li><span>lib.rs</span> &mdash; Tauri builder, state, plugins</li>
+          <li><span>commands.rs</span> &mdash; 18 commands + agent execution</li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3 style="color: var(--green);">crates/berth-core/ <span class="badge badge-done">Done</span></h3>
+    <ul class="file-tree">
+      <li><span>project.rs</span> &mdash; Project model + monitoring</li>
+      <li><span class="dir">runtime/</span> &mdash; Detection + dep parsing</li>
+      <li><span>executor.rs</span> &mdash; Process spawn + log stream</li>
+      <li><span>store.rs</span> &mdash; SQLite CRUD + migrations</li>
+      <li><span>scheduler.rs</span> &mdash; Cron-like scheduler</li>
+      <li><span>agent_service.rs</span> &mdash; Shared AgentServiceImpl</li>
+      <li><span>agent_client.rs</span> &mdash; gRPC client (TCP + UDS)</li>
+      <li><span>tunnel.rs</span> &mdash; Pluggable tunnel manager</li>
+      <li><span>nats_cmd_client.rs</span> &mdash; NATS command client</li>
+      <li><span>target.rs</span> &mdash; Deploy target model</li>
+      <li><span>telemetry.rs</span> &mdash; Opt-in anonymous telemetry</li>
+      <li><span>template_store.rs</span> &mdash; Template Store client</li>
+      <li><span>containerfile.rs</span> &mdash; Containerfile generation</li>
+      <li>+ 8 more modules (tls, uds, credentials, discovery, ...)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3 style="color: var(--green);">crates/berth-proto/ <span class="badge badge-done">Done</span></h3>
+    <ul class="file-tree">
+      <li><span>nats_relay.rs</span> &mdash; NATS message types</li>
+      <li><span>transport.rs</span> &mdash; AgentTransport trait</li>
+      <li><span>message_auth.rs</span> &mdash; HMAC signing</li>
+      <li><span>env.rs</span> &mdash; Environment variable types</li>
+      <li><span>executor.rs</span> &mdash; Execution proto types</li>
+      <li><span>runtime.rs</span> &mdash; Runtime proto types</li>
+      <li><span>schedule.rs</span> &mdash; Schedule proto types</li>
+    </ul>
+
+    <h3 style="color: var(--cyan); margin-top: 1rem;">crates/berth-mcp/ <span class="badge badge-done">Done</span></h3>
+    <ul class="file-tree">
+      <li><span>protocol.rs</span> &mdash; JSON-RPC 2.0 + MCP types</li>
+      <li><span>server.rs</span> &mdash; Stdio server loop</li>
+      <li><span>tools.rs</span> &mdash; 26 tool definitions + handlers</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3 style="color: var(--green);">crates/berth-agent/ <span class="badge badge-done">Done</span></h3>
+    <ul class="file-tree">
+      <li><span>main.rs</span> &mdash; Agent startup, gRPC, scheduler</li>
+      <li><span>persistent_service.rs</span> &mdash; 14 RPCs, SQLite persistence</li>
+      <li><span>agent_store.rs</span> &mdash; Agent SQLite (~/.berth/agent.db)</li>
+      <li><span>agent_scheduler.rs</span> &mdash; Agent-side cron (tick 30s)</li>
+    </ul>
+
+    <h3 style="color: var(--orange); margin-top: 1rem;">crates/berth-cli/ <span class="badge badge-done">Done</span></h3>
+    <ul class="file-tree">
+      <li><span>main.rs</span> &mdash; 15 commands + subcommands</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Other</h3>
+    <ul class="file-tree">
+      <li><span class="dir">proto/</span> <span>berth.proto</span> &mdash; gRPC service definition</li>
+      <li><span class="dir">docs/</span> <span>index.html</span>, <span>remote-agent.html</span></li>
+      <li><span>Cargo.toml</span> &mdash; Workspace manifest</li>
+      <li><span>package.json</span> &mdash; React frontend deps</li>
+      <li><span>vite.config.ts</span>, <span>tailwind.config.ts</span>, <span>tsconfig.json</span></li>
+    </ul>
+  </div>
 </div>
 
 <!-- ============================================================ -->

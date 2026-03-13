@@ -49,31 +49,47 @@
   .badge-planned { background: rgba(210,153,34,0.15); color: var(--orange); }
   .badge-security { background: rgba(248,81,73,0.15); color: var(--red); }
   .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }
-  nav { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 2rem; }
-  nav a { display: inline-block; margin: 0.2rem 0.5rem; font-size: 0.9rem; }
-  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; font-family: 'SF Mono', monospace; font-size: 0.8rem; line-height: 1.5; white-space: pre; overflow-x: auto; color: var(--muted); }
+  .nav-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 2rem; display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .nav-bar a { display: inline-block; padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.9rem; color: var(--muted); }
+  .nav-bar a:hover { background: var(--border); color: var(--text); text-decoration: none; }
+  .nav-bar a.nav-current { background: rgba(88,166,255,0.15); color: var(--accent); font-weight: 600; }
+  .arch-diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin: 1.5rem 0; overflow-x: auto; }
+  .arch-diagram svg { display: block; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .card h3 { margin-top: 0; font-size: 1.05rem; }
   .callout { background: var(--surface); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 1rem 1.25rem; margin: 1rem 0; }
   .callout-warn { border-left-color: var(--orange); }
   .callout-danger { border-left-color: var(--red); }
   .callout-success { border-left-color: var(--green); }
-  .callout p { margin: 0; }
+  .callout p { margin: 0.25rem 0; }
   .flow-step { display: flex; align-items: flex-start; gap: 1rem; margin: 0.75rem 0; }
   .flow-num { background: var(--accent); color: var(--bg); width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; flex-shrink: 0; margin-top: 2px; }
   .flow-body { flex: 1; }
   .flow-body strong { color: var(--text); }
   .back-link { display: inline-block; margin-bottom: 1.5rem; color: var(--accent); font-size: 0.9rem; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } .arch-diagram { padding: 1rem; } .arch-diagram svg { width: 100%; height: auto; } }
 </style>
 </head>
 <body>
 <div class="container">
 
-<a href="index.html" class="back-link">&larr; Back to main docs</a>
+<div class="nav-bar">
+  <a href="index.html">Home</a>
+  <a href="install.html">Install</a>
+  <a href="quickstart.html">Quick Start</a>
+  <a href="features.html">Features</a>
+  <a href="remote-agent.html" class="nav-current">Remote Agent</a>
+  <a href="cli.html">CLI</a>
+  <a href="mcp.html">MCP</a>
+  <a href="targets.html">Targets</a>
+</div>
 
 <h1>Berth Remote Agent</h1>
 <p class="subtitle">Architecture, protocol, deployment, and security reference for the Berth agent system.</p>
 
-<nav>
-  <strong>Contents:</strong>
+<nav class="nav-bar" style="margin-bottom: 2rem;">
+  <strong style="padding: 0.25rem 0.6rem;">Contents:</strong>
   <a href="#overview">Overview</a>
   <a href="#architecture">Architecture</a>
   <a href="#protocol">gRPC Protocol</a>
@@ -119,90 +135,180 @@
 <!-- ============================================================ -->
 <h2 id="architecture">Architecture</h2>
 
+<h3>Agent Internal Architecture</h3>
+
+<div class="arch-diagram">
+<svg viewBox="0 0 860 520" width="860" height="520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- Main agent box -->
+  <rect x="30" y="10" width="800" height="460" rx="12" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <text x="430" y="38" text-anchor="middle" fill="#3fb950" font-size="16" font-weight="700">berth-agent (PersistentAgentService)</text>
+
+  <!-- NATS Handler -->
+  <rect x="60" y="60" width="170" height="70" rx="8" fill="rgba(188,140,255,0.1)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="145" y="88" text-anchor="middle" fill="#bc8cff" font-size="13" font-weight="600">NATS Handler</text>
+  <text x="145" y="108" text-anchor="middle" fill="#8b949e" font-size="11">cmd subscriber</text>
+  <text x="145" y="122" text-anchor="middle" fill="#8b949e" font-size="11">event publisher</text>
+
+  <!-- gRPC Server -->
+  <rect x="250" y="60" width="170" height="70" rx="8" fill="rgba(88,166,255,0.1)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="335" y="88" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">gRPC Server</text>
+  <text x="335" y="108" text-anchor="middle" fill="#8b949e" font-size="11">16 RPCs (tonic)</text>
+  <text x="335" y="122" text-anchor="middle" fill="#8b949e" font-size="11">port 50051</text>
+
+  <!-- Executor -->
+  <rect x="440" y="60" width="170" height="70" rx="8" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="525" y="88" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="600">Executor</text>
+  <text x="525" y="108" text-anchor="middle" fill="#8b949e" font-size="11">process spawn</text>
+  <text x="525" y="122" text-anchor="middle" fill="#8b949e" font-size="11">log capture</text>
+
+  <!-- Deploy Manager -->
+  <rect x="630" y="60" width="170" height="70" rx="8" fill="rgba(88,166,255,0.1)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="715" y="88" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">Deploy Manager</text>
+  <text x="715" y="108" text-anchor="middle" fill="#8b949e" font-size="11">tarball extract</text>
+  <text x="715" y="122" text-anchor="middle" fill="#8b949e" font-size="11">dep install</text>
+
+  <!-- Scheduler -->
+  <rect x="60" y="160" width="170" height="70" rx="8" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1.5"/>
+  <text x="145" y="188" text-anchor="middle" fill="#d29922" font-size="13" font-weight="600">Scheduler</text>
+  <text x="145" y="208" text-anchor="middle" fill="#8b949e" font-size="11">tick every 30s</text>
+  <text x="145" y="222" text-anchor="middle" fill="#8b949e" font-size="11">cron expressions</text>
+
+  <!-- Tunnel Manager -->
+  <rect x="250" y="160" width="170" height="70" rx="8" fill="rgba(57,210,192,0.1)" stroke="#39d2c0" stroke-width="1.5"/>
+  <text x="335" y="188" text-anchor="middle" fill="#39d2c0" font-size="13" font-weight="600">Tunnel Manager</text>
+  <text x="335" y="208" text-anchor="middle" fill="#8b949e" font-size="11">cloudflared</text>
+  <text x="335" y="222" text-anchor="middle" fill="#8b949e" font-size="11">public URLs</text>
+
+  <!-- Self-Upgrade -->
+  <rect x="440" y="160" width="170" height="70" rx="8" fill="rgba(247,120,186,0.1)" stroke="#f778ba" stroke-width="1.5"/>
+  <text x="525" y="188" text-anchor="middle" fill="#f778ba" font-size="13" font-weight="600">Self-Upgrade</text>
+  <text x="525" y="208" text-anchor="middle" fill="#8b949e" font-size="11">download + verify</text>
+  <text x="525" y="222" text-anchor="middle" fill="#8b949e" font-size="11">exit(42) restart</text>
+
+  <!-- Running Processes -->
+  <rect x="630" y="160" width="170" height="70" rx="8" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="715" y="188" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="600">Process Monitor</text>
+  <text x="715" y="208" text-anchor="middle" fill="#8b949e" font-size="11">HashMap&lt;id, Handle&gt;</text>
+  <text x="715" y="222" text-anchor="middle" fill="#8b949e" font-size="11">service supervisor</text>
+
+  <!-- Arrows: NATS Handler → Executor -->
+  <line x1="230" y1="95" x2="440" y2="95" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <!-- Arrows: gRPC → Executor -->
+  <line x1="420" y1="95" x2="440" y2="95" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <!-- Arrows: Executor → Deploy Manager -->
+  <line x1="610" y1="95" x2="630" y2="95" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <!-- Arrows: Scheduler → Executor -->
+  <line x1="230" y1="195" x2="250" y2="195" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- SQLite Store -->
+  <rect x="120" y="280" width="620" height="80" rx="8" fill="rgba(88,166,255,0.08)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="430" y="305" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="600">AgentStore (SQLite ~/.berth/agent.db)</text>
+  <!-- Table boxes -->
+  <rect x="140" y="318" width="100" height="28" rx="4" fill="rgba(88,166,255,0.12)" stroke="#30363d"/>
+  <text x="190" y="337" text-anchor="middle" fill="#8b949e" font-size="11">deployments</text>
+  <rect x="254" y="318" width="100" height="28" rx="4" fill="rgba(88,166,255,0.12)" stroke="#30363d"/>
+  <text x="304" y="337" text-anchor="middle" fill="#8b949e" font-size="11">executions</text>
+  <rect x="368" y="318" width="100" height="28" rx="4" fill="rgba(88,166,255,0.12)" stroke="#30363d"/>
+  <text x="418" y="337" text-anchor="middle" fill="#8b949e" font-size="11">logs</text>
+  <rect x="482" y="318" width="100" height="28" rx="4" fill="rgba(88,166,255,0.12)" stroke="#30363d"/>
+  <text x="532" y="337" text-anchor="middle" fill="#8b949e" font-size="11">events</text>
+  <rect x="596" y="318" width="100" height="28" rx="4" fill="rgba(88,166,255,0.12)" stroke="#30363d"/>
+  <text x="646" y="337" text-anchor="middle" fill="#8b949e" font-size="11">schedules</text>
+
+  <!-- Arrows from modules to store -->
+  <line x1="145" y1="230" x2="250" y2="280" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="335" y1="230" x2="350" y2="280" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="525" y1="230" x2="480" y2="280" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="715" y1="230" x2="600" y2="280" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Deploy dir -->
+  <rect x="120" y="390" width="620" height="60" rx="8" fill="rgba(63,185,80,0.06)" stroke="#3fb950" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="430" y="416" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="600">~/.berth/deploys/{project_id}/v{n}/</text>
+  <text x="430" y="436" text-anchor="middle" fill="#8b949e" font-size="11">main.py | requirements.txt | index.js | package.json | ...</text>
+</svg>
+</div>
+
 <h3>System Topology</h3>
 
-<div class="diagram">
-┌──────────────────────────────────────────────────────────────────────────┐
-│  macOS (Berth App)                                                       │
-│                                                                          │
-│  ┌─────────────┐    ┌──────────────┐    ┌──────────────────────────────┐ │
-│  │  React UI   │───▸│ Tauri Commands│───▸│  berth-core                 │ │
-│  │  (WebKit)   │    │ (Rust)       │    │  ├─ AgentTransport (trait)   │ │
-│  │             │◂───│              │◂───│  │   ├─ AgentClient (gRPC)   │ │
-│  │  Terminal   │    │  Events:     │    │  │   └─ NatsAgentClient      │ │
-│  │  Component  │    │  project-log │    │  ├─ ProjectStore (SQL)       │ │
-│  │             │    │              │    │  ├─ TLS (rcgen)              │ │
-│  │  EnvVars    │    │              │    │  └─ Credentials (KC)         │ │
-│  │  Panel      │    │              │    │                              │ │
-│  └─────────────┘    └──────────────┘    └─────────────┬────────────────┘ │
-│                                                       │                  │
-└───────────────────────────────────────────────────────┼──────────────────┘
-                                                        │
-                          ┌─────────────────────────────┼──────────────┐
-                          │                             │              │
-                  gRPC / HTTP/2                  NATS (primary)        │
-                  (fallback, port 50051)         outbound TLS          │
-                          │                             │              │
-                          │              ┌──────────────┴────────────┐ │
-                          │              │  Your NATS Server (BYON)  │ │
-                          │              │  e.g. Synadia Cloud       │ │
-                          │              └──────────────┬────────────┘ │
-                          │                             │              │
-                          │                      NATS (outbound TLS)   │
-                          │                             │              │
-┌─────────────────────────┼─────────────────────────────┼──────────────┘
-│  Linux Server           │                             │
-│                         ▼                             ▼
-│  ┌──────────────────────────────────────────────────────────────────┐
-│  │  berth-agent (PersistentAgentService)                           │
-│  │  ├─ gRPC Server (16 RPCs)                                       │
-│  │  │   ├─ Health/Status   → version, uptime, os, arch, CPU       │
-│  │  │   ├─ Deploy()        → extract tarball, install deps         │
-│  │  │   ├─ Execute()       → run code, persist logs + events      │
-│  │  │   ├─ Stop()          → kill process, emit event              │
-│  │  │   ├─ GetExecutions() → query execution history               │
-│  │  │   ├─ GetEvents()     → poll store-and-forward events        │
-│  │  │   ├─ *Schedule()     → agent-side cron management           │
-│  │  │   ├─ Upgrade()       → receive binary, swap, restart        │
-│  │  │   ├─ Publish()       → start cloudflared tunnel             │
-│  │  │   └─ Unpublish()     → stop cloudflared tunnel              │
-│  │  ├─ NatsCommandHandler (subscribes berth.&lt;agent_id&gt;.cmd.&gt;)     │
-│  │  ├─ NatsPublisher (events, logs, heartbeat via JetStream)       │
-│  │  ├─ TunnelManager (cloudflared process lifecycle)               │
-│  │  ├─ AgentStore (SQLite ~/.berth/agent.db)                      │
-│  │  │   deployments | executions | logs | events | schedules       │
-│  │  ├─ Agent Scheduler (tick every 30s)                            │
-│  │  ├─ RunningProcesses (HashMap&lt;project_id, AbortHandle&gt;)         │
-│  │  └─ sysinfo (real CPU/memory metrics)                           │
-│  └──────────────────────────────────────────────────────────────────┘
-│                                                                      │
-│  ~/.berth/deploys/{project_id}/v{n}/  ← persistent deploy dirs     │
-│  └── main.py | requirements.txt | ...                                │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘</div>
+<div class="arch-diagram">
+<svg viewBox="0 0 860 380" width="860" height="380" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- macOS box -->
+  <rect x="20" y="20" width="340" height="160" rx="10" fill="rgba(88,166,255,0.06)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="190" y="46" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="700">macOS (Berth App)</text>
 
-<h3>Component Interaction</h3>
+  <rect x="40" y="60" width="90" height="50" rx="6" fill="rgba(88,166,255,0.1)" stroke="#30363d"/>
+  <text x="85" y="82" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="600">React UI</text>
+  <text x="85" y="98" text-anchor="middle" fill="#8b949e" font-size="10">WebKit</text>
 
-<div class="diagram">
-┌──────────┐         ┌───────────┐         ┌──────────────────┐
-│  React   │  invoke │   Tauri   │  gRPC   │  berth-agent     │
-│  UI      │────────▸│  Command  │────────▸│                  │
-│          │         │           │  or     │  Writes code     │
-│  Target: │         │  Reads    │  NATS   │  to deploy dir   │
-│  [linux] │         │  code     │────────▸│  Spawns process  │
-│          │         │  from     │         │                  │
-│  [Run]   │         │  disk     │         │  TunnelManager   │
-│          │◂────────│◂──────────│◂────────│  (cloudflared)   │
-│ Terminal │  events │  Emits    │ stream  │                  │
-│ (logs)   │         │  log evt  │         │  Streams         │
-│          │         │           │         │  stdout/err      │
-│ EnvVars  │         │  Loads    │         │                  │
-│ Panel    │         │  env vars │         │  Env vars passed │
-│          │         │  from DB  │         │  at runtime      │
-└──────────┘         └───────────┘         └──────────────────┘
+  <rect x="145" y="60" width="90" height="50" rx="6" fill="rgba(88,166,255,0.1)" stroke="#30363d"/>
+  <text x="190" y="82" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="600">Tauri</text>
+  <text x="190" y="98" text-anchor="middle" fill="#8b949e" font-size="10">Commands</text>
 
-Transport selection: target.nats_enabled → NatsAgentClient
-                     otherwise           → AgentClient (gRPC)</div>
+  <rect x="250" y="60" width="90" height="50" rx="6" fill="rgba(88,166,255,0.1)" stroke="#30363d"/>
+  <text x="295" y="82" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="600">berth-core</text>
+  <text x="295" y="98" text-anchor="middle" fill="#8b949e" font-size="10">Transport</text>
+
+  <!-- Arrows inside macOS -->
+  <line x1="130" y1="85" x2="145" y2="85" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+  <line x1="235" y1="85" x2="250" y2="85" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#arrowBlue)"/>
+
+  <!-- Transport labels -->
+  <text x="190" y="145" text-anchor="middle" fill="#8b949e" font-size="11">AgentTransport trait</text>
+  <text x="120" y="165" text-anchor="middle" fill="#58a6ff" font-size="10">gRPC (fallback)</text>
+  <text x="270" y="165" text-anchor="middle" fill="#bc8cff" font-size="10">NATS (primary)</text>
+
+  <!-- NATS Cloud -->
+  <rect x="340" y="220" width="180" height="70" rx="10" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="430" y="250" text-anchor="middle" fill="#bc8cff" font-size="13" font-weight="600">NATS Server</text>
+  <text x="430" y="270" text-anchor="middle" fill="#8b949e" font-size="11">Synadia Cloud (BYON)</text>
+
+  <!-- Linux box -->
+  <rect x="500" y="20" width="340" height="160" rx="10" fill="rgba(63,185,80,0.06)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="670" y="46" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="700">Linux Server (berth-agent)</text>
+
+  <rect x="520" y="60" width="130" height="50" rx="6" fill="rgba(63,185,80,0.1)" stroke="#30363d"/>
+  <text x="585" y="82" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="600">gRPC Server</text>
+  <text x="585" y="98" text-anchor="middle" fill="#8b949e" font-size="10">16 RPCs</text>
+
+  <rect x="670" y="60" width="150" height="50" rx="6" fill="rgba(188,140,255,0.1)" stroke="#30363d"/>
+  <text x="745" y="82" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="600">NATS Handler</text>
+  <text x="745" y="98" text-anchor="middle" fill="#8b949e" font-size="10">cmd + events</text>
+
+  <rect x="520" y="120" width="300" height="40" rx="6" fill="rgba(88,166,255,0.06)" stroke="#30363d"/>
+  <text x="670" y="145" text-anchor="middle" fill="#8b949e" font-size="11">SQLite | Executor | Scheduler | Tunnel | Upgrade</text>
+
+  <!-- Arrows: macOS to NATS -->
+  <path d="M 300 165 Q 300 255 340 255" fill="none" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <!-- Arrows: NATS to Agent -->
+  <path d="M 520 255 Q 560 255 745 180" fill="none" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+
+  <!-- Arrow: macOS gRPC to Agent -->
+  <path d="M 360 140 L 520 85" fill="none" stroke="#58a6ff" stroke-width="1.2" stroke-dasharray="6,3" marker-end="url(#arrowBlue)"/>
+  <text x="440" y="100" text-anchor="middle" fill="#58a6ff" font-size="10">gRPC / HTTP/2</text>
+
+  <!-- Tunnel to internet -->
+  <rect x="580" y="300" width="180" height="50" rx="8" fill="rgba(57,210,192,0.08)" stroke="#39d2c0" stroke-width="1.5"/>
+  <text x="670" y="322" text-anchor="middle" fill="#39d2c0" font-size="12" font-weight="600">cloudflared tunnel</text>
+  <text x="670" y="340" text-anchor="middle" fill="#8b949e" font-size="10">public URLs</text>
+  <line x1="670" y1="180" x2="670" y2="300" stroke="#39d2c0" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#bc8cff"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/>
+    </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+</svg>
+</div>
 
 <!-- ============================================================ -->
 <h2 id="protocol">gRPC Protocol</h2>
@@ -273,8 +379,15 @@ Transport selection: target.nats_enabled → NatsAgentClient
 
 <p>The primary transport for remote agent communication. Both the desktop app and the agent connect outbound to Synadia Cloud &mdash; zero inbound ports required on either side. Works behind NAT, firewalls, and across different networks.</p>
 
-<div class="callout callout-success">
-  <p><strong>Zero inbound ports:</strong> Both desktop and agent connect outbound to your Synadia Cloud NATS account. No port forwarding, no firewall rules, no direct network connectivity between desktop and agent.</p>
+<div class="grid">
+  <div class="card">
+    <h3>Zero Inbound Ports</h3>
+    <p>Both desktop and agent connect outbound to your Synadia Cloud NATS account. No port forwarding, no firewall rules, no direct network connectivity needed.</p>
+  </div>
+  <div class="card">
+    <h3>Transport Selection</h3>
+    <p><code>get_agent_client()</code> returns <code>Box&lt;dyn AgentTransport&gt;</code>. If target has <code>nats_enabled=true</code> + <code>nats_agent_id</code>, routes through NATS. Otherwise falls back to gRPC.</p>
+  </div>
 </div>
 
 <h3>AgentTransport Trait</h3>
@@ -326,10 +439,6 @@ berth.&lt;agent_id&gt;.heartbeat          # Periodic heartbeat (JetStream)</code
 
 <p>Defined in <code>crates/berth-core/src/nats_cmd_client.rs</code>. Implements the <code>AgentTransport</code> trait over NATS. Uses request-reply for unary RPCs and publish+subscribe for streaming responses.</p>
 
-<h3>Transport Selection</h3>
-
-<p>The <code>get_agent_client()</code> function in <code>agent_transport.rs</code> returns a <code>Box&lt;dyn AgentTransport&gt;</code>. If the target has <code>nats_enabled=true</code> and a <code>nats_agent_id</code>, communication routes through NATS. Otherwise, it falls back to direct gRPC.</p>
-
 <div class="callout">
   <p><strong>Target UI:</strong> The Add Target form includes an optional "NATS Agent ID" field. Targets with NATS enabled show a green "NATS" badge. The <code>update_target_nats</code> Tauri command toggles NATS on/off per target.</p>
 </div>
@@ -380,7 +489,7 @@ berth.&lt;agent_id&gt;.heartbeat          # Periodic heartbeat (JetStream)</code
 <!-- ============================================================ -->
 <h2 id="self-upgrade">Self-Upgrade</h2>
 
-<p>The agent supports remote self-upgrade using a cloudflared-inspired model: download binary, verify, atomic swap, exit with code 42, systemd restarts with the new binary. Tested end-to-end (v0.1.7 → v0.1.8).</p>
+<p>The agent supports remote self-upgrade using a cloudflared-inspired model: download binary, verify, atomic swap, exit with code 42, systemd restarts with the new binary. Tested end-to-end (v0.1.7 &rarr; v0.1.8).</p>
 
 <h3>Upgrade Flow</h3>
 
@@ -406,7 +515,7 @@ berth.&lt;agent_id&gt;.heartbeat          # Periodic heartbeat (JetStream)</code
 
 <div class="flow-step">
   <div class="flow-num">5</div>
-  <div class="flow-body"><strong>Probation</strong> &mdash; 30-second window after startup. Agent performs 3 TCP self-connect checks. Pass → <code>.probation-passed</code> marker file created. Fail → exit(1) → rollback.</div>
+  <div class="flow-body"><strong>Probation</strong> &mdash; 30-second window after startup. Agent performs 3 TCP self-connect checks. Pass &rarr; <code>.probation-passed</code> marker file created. Fail &rarr; exit(1) &rarr; rollback.</div>
 </div>
 
 <h3>systemd Configuration for Upgrade</h3>
@@ -537,43 +646,155 @@ NatsCommandKind::UpgradeDownload { url, checksum }</code></pre>
 
 <h3>Sequence Diagram</h3>
 
-<div class="diagram">
-  Mac UI          Tauri Command       AgentTransport     berth-agent (Linux)
-    │                  │                   │                     │
-    │  click Run       │                   │                     │
-    ├─────────────────▸│                   │                     │
-    │                  │  read code        │                     │
-    │                  │  load env vars    │                     │
-    │                  │                   │                     │
-    │                  │  emit "running"   │                     │
-    │◂─ ─ ─ ─ ─ ─ ─ ─ │                   │                     │
-    │                  │                   │                     │
-    │                  │  get_client()     │                     │
-    │                  ├──────────────────▸│                     │
-    │                  │                   │  ExecuteRequest      │
-    │                  │                   │  (+ env vars)        │
-    │                  │                   ├────────────────────▸│
-    │                  │                   │  (gRPC or NATS)     │ write deploy dir
-    │                  │                   │                     │ inject env vars
-    │                  │                   │                     │ spawn process
-    │                  │                   │                     │
-    │                  │                   │  ExecuteResponse[0]  │
-    │                  │                   │◂────────────────────│ stdout (masked)
-    │                  │  emit project-log │                     │
-    │◂─ ─ ─ ─ ─ ─ ─ ─ │◂──────────────────│                     │
-    │  render in       │                   │  ExecuteResponse[1]  │
-    │  Terminal        │                   │◂────────────────────│ stdout (masked)
-    │◂─ ─ ─ ─ ─ ─ ─ ─ │◂──────────────────│                     │
-    │                  │                   │                     │
-    │                  │                   │  (stream ends)       │
-    │                  │                   │◂────────────────────│ process exits
-    │                  │  emit "idle"      │                     │
-    │◂─ ─ ─ ─ ─ ─ ─ ─ │                   │                     │
-    │                  │  record in DB     │                     │
-    │                  │                   │                     │</div>
+<div class="arch-diagram">
+<svg viewBox="0 0 860 560" width="860" height="560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- Lane headers -->
+  <rect x="60" y="10" width="160" height="36" rx="6" fill="rgba(88,166,255,0.12)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="140" y="34" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">Desktop App</text>
+
+  <rect x="340" y="10" width="180" height="36" rx="6" fill="rgba(188,140,255,0.12)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="430" y="34" text-anchor="middle" fill="#bc8cff" font-size="13" font-weight="600">NATS (Synadia Cloud)</text>
+
+  <rect x="640" y="10" width="160" height="36" rx="6" fill="rgba(63,185,80,0.12)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="720" y="34" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="600">Agent (Linux)</text>
+
+  <!-- Vertical lifelines -->
+  <line x1="140" y1="52" x2="140" y2="540" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="430" y1="52" x2="430" y2="540" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="720" y1="52" x2="720" y2="540" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Section label: Pairing -->
+  <rect x="20" y="65" width="8" height="140" rx="4" fill="#58a6ff"/>
+  <text x="42" y="75" fill="#58a6ff" font-size="10" font-weight="600">PAIRING</text>
+
+  <!-- Pairing flow -->
+  <line x1="140" y1="90" x2="420" y2="90" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="280" y="84" text-anchor="middle" fill="#8b949e" font-size="11">pairing request (agent_id)</text>
+
+  <line x1="430" y1="115" x2="725" y2="115" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="578" y="109" text-anchor="middle" fill="#8b949e" font-size="11">challenge token</text>
+
+  <line x1="720" y1="140" x2="440" y2="140" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <text x="578" y="134" text-anchor="middle" fill="#8b949e" font-size="11">challenge response</text>
+
+  <line x1="420" y1="165" x2="145" y2="165" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="280" y="159" text-anchor="middle" fill="#8b949e" font-size="11">paired (shared_secret)</text>
+
+  <!-- Divider -->
+  <line x1="40" y1="200" x2="820" y2="200" stroke="#30363d" stroke-width="1" stroke-dasharray="8,4"/>
+
+  <!-- Section label: Command -->
+  <rect x="20" y="215" width="8" height="310" rx="4" fill="#3fb950"/>
+  <text x="42" y="225" fill="#3fb950" font-size="10" font-weight="600">COMMAND FLOW</text>
+
+  <!-- Command flow -->
+  <line x1="140" y1="240" x2="420" y2="240" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="280" y="234" text-anchor="middle" fill="#8b949e" font-size="11">ExecuteRequest + HMAC</text>
+
+  <rect x="100" y="245" width="80" height="20" rx="4" fill="rgba(88,166,255,0.1)" stroke="none"/>
+  <text x="140" y="260" text-anchor="middle" fill="#58a6ff" font-size="10">HMAC sign</text>
+
+  <line x1="430" y1="280" x2="725" y2="280" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="578" y="274" text-anchor="middle" fill="#8b949e" font-size="11">relay via NATS subject</text>
+
+  <rect x="680" y="290" width="80" height="20" rx="4" fill="rgba(63,185,80,0.1)" stroke="none"/>
+  <text x="720" y="305" text-anchor="middle" fill="#3fb950" font-size="10">HMAC verify</text>
+
+  <rect x="680" y="315" width="80" height="20" rx="4" fill="rgba(63,185,80,0.1)" stroke="none"/>
+  <text x="720" y="330" text-anchor="middle" fill="#3fb950" font-size="10">execute code</text>
+
+  <!-- Streaming responses -->
+  <line x1="720" y1="350" x2="440" y2="350" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <text x="578" y="344" text-anchor="middle" fill="#8b949e" font-size="11">ExecuteResponse[0] (stdout)</text>
+
+  <line x1="420" y1="375" x2="145" y2="375" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="280" y="369" text-anchor="middle" fill="#8b949e" font-size="11">stream to UI</text>
+
+  <line x1="720" y1="400" x2="440" y2="400" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <text x="578" y="394" text-anchor="middle" fill="#8b949e" font-size="11">ExecuteResponse[1] (stdout)</text>
+
+  <line x1="420" y1="425" x2="145" y2="425" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="280" y="419" text-anchor="middle" fill="#8b949e" font-size="11">stream to UI</text>
+
+  <!-- Dots for continuation -->
+  <text x="578" y="450" text-anchor="middle" fill="#30363d" font-size="16">. . .</text>
+
+  <!-- Stream end -->
+  <line x1="720" y1="475" x2="440" y2="475" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <text x="578" y="469" text-anchor="middle" fill="#8b949e" font-size="11">stream end (exit code)</text>
+
+  <line x1="420" y1="500" x2="145" y2="500" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="280" y="494" text-anchor="middle" fill="#8b949e" font-size="11">emit "idle" / "failed"</text>
+
+  <rect x="100" y="510" width="80" height="20" rx="4" fill="rgba(88,166,255,0.1)" stroke="none"/>
+  <text x="140" y="525" text-anchor="middle" fill="#58a6ff" font-size="10">record in DB</text>
+
+  <rect x="680" y="510" width="80" height="20" rx="4" fill="rgba(63,185,80,0.1)" stroke="none"/>
+  <text x="720" y="525" text-anchor="middle" fill="#3fb950" font-size="10">persist logs</text>
+</svg>
+</div>
 
 <!-- ============================================================ -->
 <h2 id="deployment">Deployment</h2>
+
+<h3>Deploy Lifecycle</h3>
+
+<div class="arch-diagram">
+<svg viewBox="0 0 860 120" width="860" height="120" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- Step 1: Receive Code -->
+  <rect x="10" y="30" width="120" height="55" rx="8" fill="rgba(88,166,255,0.1)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="70" y="54" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="600">Receive Code</text>
+  <text x="70" y="72" text-anchor="middle" fill="#8b949e" font-size="10">tarball / inline</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="130" y1="57" x2="150" y2="57" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+
+  <!-- Step 2: Detect Runtime -->
+  <rect x="150" y="30" width="120" height="55" rx="8" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="210" y="54" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">Detect Runtime</text>
+  <text x="210" y="72" text-anchor="middle" fill="#8b949e" font-size="10">py / node / go / rs</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="270" y1="57" x2="290" y2="57" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+
+  <!-- Step 3: Install Deps -->
+  <rect x="290" y="30" width="120" height="55" rx="8" fill="rgba(210,153,34,0.1)" stroke="#d29922" stroke-width="1.5"/>
+  <text x="350" y="54" text-anchor="middle" fill="#d29922" font-size="12" font-weight="600">Install Deps</text>
+  <text x="350" y="72" text-anchor="middle" fill="#8b949e" font-size="10">pip / npm / go mod</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="410" y1="57" x2="430" y2="57" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+
+  <!-- Step 4: Write Files -->
+  <rect x="430" y="30" width="120" height="55" rx="8" fill="rgba(188,140,255,0.1)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="490" y="54" text-anchor="middle" fill="#bc8cff" font-size="12" font-weight="600">Write Files</text>
+  <text x="490" y="72" text-anchor="middle" fill="#8b949e" font-size="10">deploys/v{n}/</text>
+
+  <!-- Arrow 4→5 -->
+  <line x1="550" y1="57" x2="570" y2="57" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+
+  <!-- Step 5: Start Process -->
+  <rect x="570" y="30" width="120" height="55" rx="8" fill="rgba(57,210,192,0.1)" stroke="#39d2c0" stroke-width="1.5"/>
+  <text x="630" y="54" text-anchor="middle" fill="#39d2c0" font-size="12" font-weight="600">Start Process</text>
+  <text x="630" y="72" text-anchor="middle" fill="#8b949e" font-size="10">spawn + env vars</text>
+
+  <!-- Arrow 5→6 -->
+  <line x1="690" y1="57" x2="710" y2="57" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+
+  <!-- Step 6: Stream Logs -->
+  <rect x="710" y="30" width="130" height="55" rx="8" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="775" y="54" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">Stream Logs</text>
+  <text x="775" y="72" text-anchor="middle" fill="#8b949e" font-size="10">stdout + persist</text>
+
+  <!-- Step numbers -->
+  <text x="70" y="105" text-anchor="middle" fill="#30363d" font-size="10">1</text>
+  <text x="210" y="105" text-anchor="middle" fill="#30363d" font-size="10">2</text>
+  <text x="350" y="105" text-anchor="middle" fill="#30363d" font-size="10">3</text>
+  <text x="490" y="105" text-anchor="middle" fill="#30363d" font-size="10">4</text>
+  <text x="630" y="105" text-anchor="middle" fill="#30363d" font-size="10">5</text>
+  <text x="775" y="105" text-anchor="middle" fill="#30363d" font-size="10">6</text>
+</svg>
+</div>
 
 <h3>Method 1: Build from Source</h3>
 
@@ -677,6 +898,25 @@ berth targets ping my-server
   <p><strong>Warning:</strong> The gRPC transport uses <strong>plaintext</strong> (no TLS). This is acceptable for trusted LANs and development, but <strong>must not be used over the internet</strong> without additional protection (VPN, SSH tunnel, or enabling mTLS). The NATS transport uses TLS to Synadia Cloud and is safe for use over the internet.</p>
 </div>
 
+<div class="grid">
+  <div class="card">
+    <h3>NATS Transport (Recommended)</h3>
+    <p>TLS encrypted via Synadia Cloud. Zero inbound ports. HMAC message authentication. Safe for internet use.</p>
+  </div>
+  <div class="card">
+    <h3>gRPC Transport (Fallback)</h3>
+    <p>Currently plaintext. Use on trusted LANs only, or wrap with SSH tunnel / VPN. mTLS infrastructure built but not yet wired.</p>
+  </div>
+  <div class="card">
+    <h3>Credential Storage</h3>
+    <p>macOS Keychain via <code>security-framework</code> crate. Encrypted at rest, protected by login password.</p>
+  </div>
+  <div class="card">
+    <h3>Log Masking</h3>
+    <p>All env var values (3+ chars) replaced with <code>***</code> in logs. Longest-first matching prevents partial leaks.</p>
+  </div>
+</div>
+
 <table>
   <tr><th>Layer</th><th>Current</th><th>Planned</th></tr>
   <tr><td>Transport encryption</td><td><span class="badge badge-planned">gRPC: Plaintext</span> / <span class="badge badge-done">NATS: TLS</span></td><td>mTLS for gRPC</td></tr>
@@ -692,25 +932,32 @@ berth targets ping my-server
 
 <h4>Certificate Chain</h4>
 
-<div class="diagram">
-┌─────────────────────────────────────────────────────┐
-│  Berth CA (self-signed, 10-year validity)           │
-│  Generated by: tls::generate_ca()                    │
-│  Stored at: ~/Library/Application Support/           │
-│             com.berth.app/certs/ca.crt + ca.key     │
-│                                                      │
-│     ┌────────────────┐     ┌────────────────────┐   │
-│     │  Server Cert    │     │  Client Cert        │   │
-│     │  (per agent)    │     │  (Berth app)       │   │
-│     │                 │     │                      │   │
-│     │  CN: hostname   │     │  CN: berth-app     │   │
-│     │  SAN: hostname  │     │  EKU: clientAuth    │   │
-│     │  EKU: serverAuth│     │  1-year validity     │   │
-│     │  1-year validity│     │                      │   │
-│     └────────────────┘     └────────────────────┘   │
-│                                                      │
-│  Both signed by Berth CA                            │
-└─────────────────────────────────────────────────────┘</div>
+<div class="arch-diagram">
+<svg viewBox="0 0 700 200" width="700" height="200" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- CA box -->
+  <rect x="180" y="10" width="340" height="55" rx="8" fill="rgba(88,166,255,0.1)" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="350" y="34" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">Berth CA (self-signed, 10-year validity)</text>
+  <text x="350" y="52" text-anchor="middle" fill="#8b949e" font-size="10">tls::generate_ca() &rarr; ca.crt + ca.key</text>
+
+  <!-- Server cert -->
+  <rect x="60" y="110" width="260" height="75" rx="8" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="190" y="134" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600">Server Cert (per agent)</text>
+  <text x="190" y="152" text-anchor="middle" fill="#8b949e" font-size="10">CN: hostname | SAN: hostname</text>
+  <text x="190" y="168" text-anchor="middle" fill="#8b949e" font-size="10">EKU: serverAuth | 1-year validity</text>
+
+  <!-- Client cert -->
+  <rect x="380" y="110" width="260" height="75" rx="8" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="510" y="134" text-anchor="middle" fill="#bc8cff" font-size="12" font-weight="600">Client Cert (Berth app)</text>
+  <text x="510" y="152" text-anchor="middle" fill="#8b949e" font-size="10">CN: berth-app</text>
+  <text x="510" y="168" text-anchor="middle" fill="#8b949e" font-size="10">EKU: clientAuth | 1-year validity</text>
+
+  <!-- Arrows from CA to certs -->
+  <line x1="280" y1="65" x2="190" y2="110" stroke="#58a6ff" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="420" y1="65" x2="510" y2="110" stroke="#58a6ff" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="210" y="92" fill="#8b949e" font-size="9">signed by CA</text>
+  <text x="470" y="92" fill="#8b949e" font-size="9">signed by CA</text>
+</svg>
+</div>
 
 <h4>TLS Functions</h4>
 
@@ -756,10 +1003,6 @@ Channel::from_shared(endpoint)?
   <tr><td><code>store_credential(key, value)</code></td><td>Custom key</td><td>Generic secret storage</td></tr>
 </table>
 
-<div class="callout callout-success">
-  <p>All credentials use the macOS <code>security-framework</code> crate, which stores secrets in the system Keychain — encrypted at rest, protected by the user's login password.</p>
-</div>
-
 <h3>Security Recommendations</h3>
 
 <ul>
@@ -767,7 +1010,7 @@ Channel::from_shared(endpoint)?
   <li><strong>LAN only for gRPC:</strong> Without mTLS, only use direct gRPC on trusted networks.</li>
   <li><strong>SSH tunnel:</strong> For internet-facing gRPC agents, use <code>ssh -L 50051:localhost:50051 user@server</code> and connect to <code>localhost:50051</code>.</li>
   <li><strong>Firewall:</strong> Restrict port 50051 to known IPs via <code>ufw</code> or security groups.</li>
-  <li><strong>Agent user:</strong> The install script creates a <code>berth</code> system user with no shell — processes run without root privileges.</li>
+  <li><strong>Agent user:</strong> The install script creates a <code>berth</code> system user with no shell &mdash; processes run without root privileges.</li>
   <li><strong>Env var masking:</strong> All environment variable values are masked in logs automatically. Values are never persisted on the remote agent.</li>
 </ul>
 
@@ -867,26 +1110,62 @@ println!("CPU: {:.1}%, Memory: {}MB", status.cpu_usage, status.memory_bytes / 10
 
 <p>The project detail view shows pill-style target buttons when remote targets are configured:</p>
 
-<div class="diagram">
-┌─────────────────────────────────────────────────────────┐
-│  ← Back    my-crawler                          Delete   │
-├─────────────────────────────────────────────────────────┤
-│  ● Running   0:15          python   main.py             │
-├─────────────────────────────────────────────────────────┤
-│  Target: [● local] [● linux-server NATS] [○ staging]    │
-├─────────────────────────────────────────────────────────┤
-│  [▶ Run]  [■ Stop]  [🔑 Env]  [🌐 Publish]              │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────┐    │
-│  │ $ Hello from my-server!                          │    │
-│  │ $ OS: Linux 6.8.0-100-generic                   │    │
-│  │ $ Python: 3.12.3                                │    │
-│  │ $ Done!                                         │    │
-│  └─────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
+<div class="arch-diagram">
+<svg viewBox="0 0 700 300" width="700" height="300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- Window frame -->
+  <rect x="10" y="10" width="680" height="280" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
 
-● = green (online)    ○ = gray (unknown)    ● = red (offline)
-NATS = green badge on NATS-enabled targets</div>
+  <!-- Title bar -->
+  <rect x="10" y="10" width="680" height="35" rx="10" fill="#0d1117" stroke="none"/>
+  <rect x="10" y="35" width="680" height="10" fill="#0d1117" stroke="none"/>
+  <circle cx="30" cy="27" r="5" fill="#f85149"/>
+  <circle cx="48" cy="27" r="5" fill="#d29922"/>
+  <circle cx="66" cy="27" r="5" fill="#3fb950"/>
+  <text x="110" y="32" fill="#8b949e" font-size="12">my-crawler</text>
+  <text x="620" y="32" fill="#f85149" font-size="11">Delete</text>
+
+  <!-- Status bar -->
+  <rect x="25" y="52" width="650" height="28" rx="4" fill="#0d1117" stroke="none"/>
+  <circle cx="40" cy="66" r="4" fill="#3fb950"/>
+  <text x="50" y="70" fill="#3fb950" font-size="11">Running 0:15</text>
+  <text x="520" y="70" fill="#8b949e" font-size="11">python</text>
+  <text x="590" y="70" fill="#8b949e" font-size="11">main.py</text>
+
+  <!-- Target pills -->
+  <text x="35" y="105" fill="#8b949e" font-size="12">Target:</text>
+  <rect x="85" y="90" width="70" height="24" rx="12" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1"/>
+  <circle cx="99" cy="102" r="3" fill="#3fb950"/>
+  <text x="122" y="106" text-anchor="middle" fill="#3fb950" font-size="11">local</text>
+
+  <rect x="165" y="90" width="140" height="24" rx="12" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1"/>
+  <circle cx="179" cy="102" r="3" fill="#3fb950"/>
+  <text x="215" y="106" fill="#3fb950" font-size="11">linux-server</text>
+  <rect x="275" y="94" width="24" height="16" rx="4" fill="rgba(63,185,80,0.25)"/>
+  <text x="287" y="106" text-anchor="middle" fill="#3fb950" font-size="8" font-weight="600">NATS</text>
+
+  <rect x="315" y="90" width="80" height="24" rx="12" fill="rgba(139,148,158,0.1)" stroke="#30363d" stroke-width="1"/>
+  <circle cx="329" cy="102" r="3" fill="#8b949e"/>
+  <text x="363" y="106" text-anchor="middle" fill="#8b949e" font-size="11">staging</text>
+
+  <!-- Action buttons -->
+  <rect x="35" y="125" width="60" height="28" rx="6" fill="rgba(63,185,80,0.15)" stroke="#3fb950" stroke-width="1"/>
+  <text x="65" y="143" text-anchor="middle" fill="#3fb950" font-size="11">Run</text>
+  <rect x="105" y="125" width="60" height="28" rx="6" fill="rgba(248,81,73,0.1)" stroke="#30363d" stroke-width="1"/>
+  <text x="135" y="143" text-anchor="middle" fill="#8b949e" font-size="11">Stop</text>
+  <rect x="175" y="125" width="60" height="28" rx="6" fill="rgba(88,166,255,0.1)" stroke="#30363d" stroke-width="1"/>
+  <text x="205" y="143" text-anchor="middle" fill="#8b949e" font-size="11">Env</text>
+  <rect x="245" y="125" width="75" height="28" rx="6" fill="rgba(57,210,192,0.1)" stroke="#30363d" stroke-width="1"/>
+  <text x="282" y="143" text-anchor="middle" fill="#8b949e" font-size="11">Publish</text>
+
+  <!-- Terminal -->
+  <rect x="25" y="165" width="650" height="110" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+  <text x="35" y="185" fill="#3fb950" font-size="11" font-family="'SF Mono', monospace">$ Hello from my-server!</text>
+  <text x="35" y="205" fill="#3fb950" font-size="11" font-family="'SF Mono', monospace">$ OS: Linux 6.8.0-100-generic</text>
+  <text x="35" y="225" fill="#3fb950" font-size="11" font-family="'SF Mono', monospace">$ Python: 3.12.3</text>
+  <text x="35" y="245" fill="#3fb950" font-size="11" font-family="'SF Mono', monospace">$ Done!</text>
+  <rect x="35" y="252" width="8" height="14" rx="1" fill="#3fb950" opacity="0.7"/>
+</svg>
+</div>
 
 <h3>Tauri Commands</h3>
 
@@ -975,11 +1254,11 @@ NATS = green badge on NATS-enabled targets</div>
   <tr><td>mDNS LAN discovery</td><td><span class="badge badge-done">Done</span></td><td><code>_berth._tcp.local.</code> via mdns-sd</td></tr>
   <tr><td>TLS cert generation</td><td><span class="badge badge-done">Done</span></td><td>CA + server/client certs via rcgen</td></tr>
   <tr><td>NATS command channel</td><td><span class="badge badge-done">Done</span></td><td>Zero inbound ports, works behind NAT. AgentTransport trait abstracts gRPC vs NATS</td></tr>
-  <tr><td>Self-upgrade (cloudflared model)</td><td><span class="badge badge-done">Done</span></td><td>exit(42), 30s probation, auto-rollback. Tested v0.1.7 → v0.1.8</td></tr>
+  <tr><td>Self-upgrade (cloudflared model)</td><td><span class="badge badge-done">Done</span></td><td>exit(42), 30s probation, auto-rollback. Tested v0.1.7 &rarr; v0.1.8</td></tr>
   <tr><td>Public URL publishing</td><td><span class="badge badge-done">Done</span></td><td>cloudflared tunnels, pluggable TunnelProvider enum. Tested end-to-end</td></tr>
   <tr><td>Tunnel capability detection</td><td><span class="badge badge-done">Done</span></td><td>Health response reports available tunnel providers (installed binaries)</td></tr>
-  <tr><td>Environment variables</td><td><span class="badge badge-done">Done</span></td><td>Desktop-side storage, passed at runtime, log masking (values ≥ 3 chars → ***)</td></tr>
-  <tr><td>Service mode</td><td><span class="badge badge-done">Done</span></td><td>Auto-restart with exponential backoff (1s → 60s cap), uptime tracking, restart count</td></tr>
+  <tr><td>Environment variables</td><td><span class="badge badge-done">Done</span></td><td>Desktop-side storage, passed at runtime, log masking (values &ge; 3 chars &rarr; ***)</td></tr>
+  <tr><td>Service mode</td><td><span class="badge badge-done">Done</span></td><td>Auto-restart with exponential backoff (1s &rarr; 60s cap), uptime tracking, restart count</td></tr>
   <tr><td>Activate mTLS</td><td><span class="badge badge-planned">Planned</span></td><td>Wire tls.rs into agent + client</td></tr>
   <tr><td>Container sandboxing</td><td><span class="badge badge-planned">Planned</span></td><td>OCI/Docker isolation per project</td></tr>
 </table>
